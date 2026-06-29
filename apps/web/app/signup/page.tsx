@@ -1,0 +1,18 @@
+import Link from "next/link";
+
+import { AuthForm } from "@/components/AuthForm";
+
+export default function SignupPage() {
+  return (
+    <section className="mx-auto grid max-w-md gap-5 px-5 py-12">
+      <div>
+        <h1 className="text-2xl font-semibold text-ink">Create account</h1>
+        <p className="mt-2 text-sm text-muted">Phase 1 supports email/password auth and settings.</p>
+      </div>
+      <AuthForm mode="signup" />
+      <Link className="text-sm text-accent" href="/login">
+        Already have an account?
+      </Link>
+    </section>
+  );
+}

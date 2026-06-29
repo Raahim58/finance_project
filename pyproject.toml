@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+testpaths = ["apps/api/app/tests"]
+pythonpath = ["apps/api"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
