@@ -22,3 +22,5 @@ Project rules for `psx-ai-portfolio-agent`.
 - Store user LLM API keys encrypted at rest.
 - Decrypt LLM keys only server-side immediately before an LLM call.
 - Never log full API keys.
+- Phase 2 market data is mock/demo data unless a source field states otherwise.
+- Market prices, rankings, snapshots, and sector stats must come from database queries.

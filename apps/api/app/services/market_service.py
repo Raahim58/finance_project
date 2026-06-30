@@ -1,0 +1,215 @@
+from datetime import date
+
+from fastapi import HTTPException, status
+from sqlalchemy import Select, func, select
+from sqlalchemy.orm import Session, joinedload
+
+from app.models.market import Company, Exchange, MarketPrice, MarketSnapshot, SectorDailyStats
+from app.schemas.market import (
+    CompanyDetailResponse,
+    CompanyResponse,
+    ExchangeResponse,
+    MarketPriceResponse,
+    MarketSnapshotResponse,
+    SectorDailyStatsResponse,
+)
+
+
+def serialize_exchange(exchange: Exchange) -> ExchangeResponse:
+    return ExchangeResponse(code=exchange.code, name=exchange.name, timezone=exchange.timezone)
+
+
+def serialize_company(company: Company) -> CompanyResponse:
+    return CompanyResponse(
+        id=company.id,
+        symbol=company.symbol,
+        name=company.name,
+        sector=company.sector,
+        exchange=serialize_exchange(company.exchange),
+        official_website=company.official_website,
+        psx_url=company.psx_url,
+        description=company.description,
+        is_active=company.is_active,
+    )
+
+
+def serialize_price(price: MarketPrice) -> MarketPriceResponse:
+    return MarketPriceResponse(
+        symbol=price.symbol,
+        trade_date=price.trade_date,
+        open=price.open,
+        high=price.high,
+        low=price.low,
+        close=price.close,
+        previous_close=price.previous_close,
+        change=price.change,
+        change_percent=price.change_percent,
+        volume=price.volume,
+        value=price.value,
+        market_cap=price.market_cap,
+        source=price.source,
+        source_url=price.source_url,
+        ingested_at=price.ingested_at,
+    )
+
+
+def serialize_snapshot(snapshot: MarketSnapshot) -> MarketSnapshotResponse:
+    return MarketSnapshotResponse(
+        snapshot_date=snapshot.snapshot_date,
+        index_name=snapshot.index_name,
+        index_value=snapshot.index_value,
+        index_change=snapshot.index_change,
+        index_change_percent=snapshot.index_change_percent,
+        total_volume=snapshot.total_volume,
+        total_value=snapshot.total_value,
+        source=snapshot.source,
+        ingested_at=snapshot.ingested_at,
+    )
+
+
+def serialize_sector_stats(stats: SectorDailyStats) -> SectorDailyStatsResponse:
+    return SectorDailyStatsResponse(
+        sector=stats.sector,
+        trade_date=stats.trade_date,
+        total_volume=stats.total_volume,
+        total_value=stats.total_value,
+        average_change_percent=stats.average_change_percent,
+        advancers=stats.advancers,
+        decliners=stats.decliners,
+        unchanged=stats.unchanged,
+        source=stats.source,
+    )
+
+
+def get_latest_market_date(db: Session) -> date | None:
+    return db.scalar(select(func.max(MarketPrice.trade_date)))
+
+
+def resolve_market_date(db: Session, requested_date: date | None) -> date:
+    if requested_date:
+        exists = db.scalar(select(MarketPrice.id).where(MarketPrice.trade_date == requested_date).limit(1))
+        if exists:
+            return requested_date
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No market prices found for {requested_date.isoformat()}",
+        )
+
+    latest = get_latest_market_date(db)
+    if latest is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No market data is available")
+    return latest
+
+
+def get_market_snapshot(db: Session, requested_date: date | None = None) -> MarketSnapshotResponse | None:
+    trade_date = resolve_market_date(db, requested_date)
+    snapshot = db.scalar(
+        select(MarketSnapshot)
+        .where(MarketSnapshot.snapshot_date == trade_date)
+        .order_by(MarketSnapshot.index_name)
+        .limit(1)
+    )
+    return serialize_snapshot(snapshot) if snapshot else None
+
+
+def _price_query(trade_date: date) -> Select[tuple[MarketPrice]]:
+    return select(MarketPrice).where(MarketPrice.trade_date == trade_date)
+
+
+def get_top_gainers(db: Session, requested_date: date | None = None, limit: int = 10) -> list[MarketPriceResponse]:
+    trade_date = resolve_market_date(db, requested_date)
+    rows = db.scalars(
+        _price_query(trade_date).order_by(MarketPrice.change_percent.desc(), MarketPrice.volume.desc()).limit(limit)
+    ).all()
+    return [serialize_price(row) for row in rows]
+
+
+def get_top_losers(db: Session, requested_date: date | None = None, limit: int = 10) -> list[MarketPriceResponse]:
+    trade_date = resolve_market_date(db, requested_date)
+    rows = db.scalars(
+        _price_query(trade_date).order_by(MarketPrice.change_percent.asc(), MarketPrice.volume.desc()).limit(limit)
+    ).all()
+    return [serialize_price(row) for row in rows]
+
+
+def get_top_volume(db: Session, requested_date: date | None = None, limit: int = 10) -> list[MarketPriceResponse]:
+    trade_date = resolve_market_date(db, requested_date)
+    rows = db.scalars(_price_query(trade_date).order_by(MarketPrice.volume.desc()).limit(limit)).all()
+    return [serialize_price(row) for row in rows]
+
+
+def get_sectors(db: Session, requested_date: date | None = None) -> list[SectorDailyStatsResponse]:
+    trade_date = resolve_market_date(db, requested_date)
+    rows = db.scalars(
+        select(SectorDailyStats)
+        .where(SectorDailyStats.trade_date == trade_date)
+        .order_by(SectorDailyStats.average_change_percent.desc())
+    ).all()
+    return [serialize_sector_stats(row) for row in rows]
+
+
+def get_sector_performance(
+    db: Session,
+    sector: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> list[SectorDailyStatsResponse]:
+    query = select(SectorDailyStats).where(func.lower(SectorDailyStats.sector) == sector.lower())
+    if start_date:
+        query = query.where(SectorDailyStats.trade_date >= start_date)
+    if end_date:
+        query = query.where(SectorDailyStats.trade_date <= end_date)
+    rows = db.scalars(query.order_by(SectorDailyStats.trade_date.asc())).all()
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sector performance not found")
+    return [serialize_sector_stats(row) for row in rows]
+
+
+def search_companies(db: Session, query_text: str | None = None, limit: int = 20) -> list[CompanyResponse]:
+    query = select(Company).options(joinedload(Company.exchange)).where(Company.is_active.is_(True))
+    if query_text:
+        like = f"%{query_text.upper()}%"
+        query = query.where((func.upper(Company.symbol).like(like)) | (func.upper(Company.name).like(like)))
+    rows = db.scalars(query.order_by(Company.symbol.asc()).limit(limit)).all()
+    return [serialize_company(row) for row in rows]
+
+
+def get_company_detail(db: Session, symbol: str) -> CompanyDetailResponse:
+    company = db.scalar(
+        select(Company)
+        .options(joinedload(Company.exchange))
+        .where(func.upper(Company.symbol) == symbol.upper(), Company.is_active.is_(True))
+    )
+    if not company:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+
+    latest_price = db.scalar(
+        select(MarketPrice)
+        .where(func.upper(MarketPrice.symbol) == company.symbol.upper())
+        .order_by(MarketPrice.trade_date.desc())
+        .limit(1)
+    )
+    return CompanyDetailResponse(
+        company=serialize_company(company),
+        latest_price=serialize_price(latest_price) if latest_price else None,
+    )
+
+
+def get_company_history(
+    db: Session,
+    symbol: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    limit: int = 365,
+) -> list[MarketPriceResponse]:
+    company_exists = db.scalar(select(Company.id).where(func.upper(Company.symbol) == symbol.upper()))
+    if not company_exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+
+    query = select(MarketPrice).where(func.upper(MarketPrice.symbol) == symbol.upper())
+    if start_date:
+        query = query.where(MarketPrice.trade_date >= start_date)
+    if end_date:
+        query = query.where(MarketPrice.trade_date <= end_date)
+    rows = db.scalars(query.order_by(MarketPrice.trade_date.desc()).limit(limit)).all()
+    return [serialize_price(row) for row in reversed(rows)]

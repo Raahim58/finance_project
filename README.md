@@ -2,7 +2,7 @@
 
 AI-powered Pakistan Stock Exchange portfolio intelligence assistant.
 
-This repository is a production-style side-project MVP scaffold. Phase 0 and Phase 1 are implemented first:
+This repository is a production-style side-project MVP scaffold. Phases 0 through 2 are implemented:
 
 - Monorepo layout with `apps/api` and `apps/web`
 - FastAPI backend skeleton
@@ -13,8 +13,9 @@ This repository is a production-style side-project MVP scaffold. Phase 0 and Pha
 - Encrypted LLM API key storage
 - Provider-agnostic LLM gateway with mock provider and adapter placeholders
 - Project docs, skills, agents, and MCP-style design notes
+- Mock PSX market data tables, ingestion job, APIs, dashboard, and company history pages
 
-Later phases for market data, portfolio analytics, RAG, policy intelligence, digests, and order intents are intentionally not implemented yet.
+Later phases for portfolio analytics, RAG, policy intelligence, digests, alerts, and order intents are intentionally not implemented yet.
 
 ## Quick Start
 
@@ -27,6 +28,8 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 cp ../../.env.example .env
 python -m app.core.keys
+alembic upgrade head
+python -m app.jobs.ingest_psx_mock --days 365
 pytest
 uvicorn app.main:app --reload
 ```

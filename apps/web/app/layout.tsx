@@ -19,6 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </Link>
             <nav className="flex gap-4 text-sm text-muted">
               <Link href="/dashboard">Dashboard</Link>
+              <Link href="/market">Market</Link>
               <Link href="/settings">Settings</Link>
               <Link href="/login">Login</Link>
             </nav>

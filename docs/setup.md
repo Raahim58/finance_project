@@ -28,6 +28,14 @@ source .venv/bin/activate
 uvicorn app.main:app --reload
 ```
 
+Seed Phase 2 mock market data:
+
+```bash
+cd apps/api
+source .venv/bin/activate
+python -m app.jobs.ingest_psx_mock --days 365
+```
+
 ## Database
 
 Start PostgreSQL and Redis:
@@ -46,6 +54,14 @@ alembic upgrade head
 
 The backend defaults to SQLite for local skeleton runs if `DATABASE_URL` is not set.
 
+Recompute Phase 2 derived stats if needed:
+
+```bash
+cd apps/api
+source .venv/bin/activate
+python -m app.jobs.compute_market_stats
+```
+
 ## Frontend
 
 ```bash
@@ -55,3 +71,8 @@ npm run dev
 ```
 
 Open `http://localhost:3000`.
+
+Phase 2 pages:
+
+- `http://localhost:3000/market`
+- `http://localhost:3000/companies/MEBL`
