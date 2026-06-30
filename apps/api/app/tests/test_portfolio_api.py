@@ -30,6 +30,8 @@ def test_portfolio_crud_summary_exposure_and_risk_flags(client):
     )
     assert created.status_code == 201
     portfolio_id = created.json()["id"]
+    assert created.json()["source_mode"] == "manual"
+    assert created.json()["provider_name"] == "ManualPortfolioProvider"
 
     holding = client.post(
         f"/portfolios/{portfolio_id}/holdings",

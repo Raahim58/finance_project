@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 
 from app.db.session import SessionLocal
 from app.models.market import Company, MarketPrice, MarketSnapshot, SectorDailyStats
-from app.services.market_ingestion import generate_mock_market_data
+from app.services.market_ingestion import generate_mock_market_data, run_market_data_cycle
 
 
 def test_generate_mock_market_data_creates_companies_prices_and_stats():
@@ -24,3 +24,15 @@ def test_generate_mock_market_data_creates_companies_prices_and_stats():
     assert snapshot_count == 5
     assert sector_count > 5
     assert latest_date == date(2026, 6, 30)
+
+
+def test_scheduler_cycle_records_successful_ingestion_run():
+    with SessionLocal() as db:
+        run = run_market_data_cycle(db, mode="mock")
+        snapshot_count = db.scalar(select(func.count()).select_from(MarketSnapshot))
+
+    assert run.status == "success"
+    assert run.mode == "mock"
+    assert run.source == "mock"
+    assert run.latest_trade_date is not None
+    assert snapshot_count > 0

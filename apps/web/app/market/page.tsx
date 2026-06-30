@@ -2,7 +2,15 @@
 
 import { useEffect, useState } from "react";
 
-import { Company, MarketOverview, MarketPrice, getCompanies, getMarketOverview } from "@/lib/api";
+import {
+  Company,
+  MarketFreshness,
+  MarketOverview,
+  MarketPrice,
+  getCompanies,
+  getMarketFreshness,
+  getMarketOverview
+} from "@/lib/api";
 
 function formatNumber(value: number | string, maximumFractionDigits = 2) {
   const numeric = typeof value === "string" ? Number(value) : value;
@@ -62,15 +70,17 @@ function PriceTable({ title, rows }: { title: string; rows: MarketPrice[] }) {
 
 export default function MarketPage() {
   const [overview, setOverview] = useState<MarketOverview | null>(null);
+  const [freshness, setFreshness] = useState<MarketFreshness | null>(null);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    void Promise.all([getMarketOverview(), getCompanies()])
-      .then(([marketOverview, companyRows]) => {
+    void Promise.all([getMarketOverview(), getMarketFreshness(), getCompanies()])
+      .then(([marketOverview, marketFreshness, companyRows]) => {
         setOverview(marketOverview);
+        setFreshness(marketFreshness);
         setCompanies(companyRows);
       })
       .catch((err: Error) => setError(err.message))
@@ -95,7 +105,7 @@ export default function MarketPage() {
       <section className="mx-auto grid max-w-6xl gap-4 px-5 py-8">
         <h1 className="text-2xl font-semibold text-ink">Market</h1>
         <p className="rounded-md border border-line bg-white px-4 py-3 text-sm text-warn">{error}</p>
-        <p className="text-sm text-muted">Run `python -m app.jobs.ingest_psx_mock --days 365` in `apps/api`.</p>
+        <p className="text-sm text-muted">Run `python -m app.jobs.scheduler --once` in `apps/api` after setting `MARKET_DATA_MODE`.</p>
       </section>
     );
   }
@@ -106,8 +116,9 @@ export default function MarketPage() {
         <div>
           <h1 className="text-2xl font-semibold text-ink">Market</h1>
           <p className="mt-2 text-sm text-muted">
-            Mock PSX market data from database tables. Freshness:{" "}
-            {overview?.snapshot?.snapshot_date ?? "not available"} via {overview?.snapshot?.source ?? "unknown"}.
+            Data mode: {freshness?.market_data_mode ?? "unknown"}.
+            {" "}Latest trade date: {freshness?.latest_trade_date ?? "not available"}.
+            {" "}Last updated: {freshness?.last_successful_ingestion_at ?? "not available"}.
           </p>
         </div>
         <input
@@ -117,6 +128,12 @@ export default function MarketPage() {
           onChange={(event) => setQuery(event.target.value)}
         />
       </div>
+
+      {freshness?.stale_warning ? (
+        <p className="rounded-md border border-line bg-white px-4 py-3 text-sm text-warn">
+          {freshness.stale_warning}
+        </p>
+      ) : null}
 
       {overview?.snapshot ? (
         <div className="grid gap-4 md:grid-cols-4">

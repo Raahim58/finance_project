@@ -7,6 +7,7 @@ from app.db.session import get_db
 from app.schemas.market import (
     CompanyDetailResponse,
     CompanyResponse,
+    MarketFreshnessResponse,
     MarketOverviewResponse,
     MarketPriceResponse,
     MarketSnapshotResponse,
@@ -15,6 +16,7 @@ from app.schemas.market import (
 from app.services.market_service import (
     get_company_detail,
     get_company_history,
+    get_market_freshness,
     get_market_snapshot,
     get_sectors,
     get_sector_performance,
@@ -25,6 +27,11 @@ from app.services.market_service import (
 )
 
 router = APIRouter()
+
+
+@router.get("/freshness", response_model=MarketFreshnessResponse)
+def freshness(db: Session = Depends(get_db)):
+    return get_market_freshness(db)
 
 
 @router.get("/snapshot", response_model=MarketSnapshotResponse | None)

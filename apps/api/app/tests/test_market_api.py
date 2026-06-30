@@ -29,6 +29,13 @@ def test_market_overview_and_rankings(client):
     assert sectors.status_code == 200
     assert any(row["sector"] == "Banking" for row in sectors.json())
 
+    freshness = client.get("/market/freshness")
+    assert freshness.status_code == 200
+    freshness_body = freshness.json()
+    assert freshness_body["latest_source"] == "mock"
+    assert freshness_body["market_data_mode"] == "mock"
+    assert freshness_body["stale_warning"]
+
 
 def test_company_detail_history_and_search(client):
     _seed_market_data()

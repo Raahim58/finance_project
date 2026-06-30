@@ -19,6 +19,11 @@ class Portfolio(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     base_currency: Mapped[str] = mapped_column(String(10), default="PKR", nullable=False)
+    source_mode: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)
+    provider_name: Mapped[str] = mapped_column(
+        String(80), default="ManualPortfolioProvider", nullable=False
+    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )

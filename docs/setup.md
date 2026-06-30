@@ -13,6 +13,13 @@ python -m app.core.keys
 
 Copy the generated Fernet key into `ENCRYPTION_KEY`.
 
+Set market ingestion mode in `.env`:
+
+```bash
+MARKET_DATA_MODE=mock
+MARKET_DATA_REFRESH_SECONDS=300
+```
+
 Run tests:
 
 ```bash
@@ -34,6 +41,22 @@ Seed Phase 2 mock market data:
 cd apps/api
 source .venv/bin/activate
 python -m app.jobs.ingest_psx_mock --days 365
+```
+
+Run the market scheduler once:
+
+```bash
+cd apps/api
+source .venv/bin/activate
+python -m app.jobs.scheduler --once
+```
+
+Run the market scheduler continuously:
+
+```bash
+cd apps/api
+source .venv/bin/activate
+python -m app.jobs.scheduler
 ```
 
 ## Database
@@ -61,6 +84,8 @@ cd apps/api
 source .venv/bin/activate
 python -m app.jobs.compute_market_stats
 ```
+
+`MARKET_DATA_MODE=mock` is only for local development. Use `dps` or `vendor` when a current-data adapter is configured.
 
 Ingest a Phase 4 local text/Markdown document:
 
@@ -100,6 +125,7 @@ Phase 3 page:
 - `http://localhost:3000/portfolio`
 
 Create an account first, then add a portfolio and holdings. Symbols must exist in the market company table, so seed Phase 2 mock market data before using the portfolio page.
+Manual portfolio entry is the MVP fallback. Future real portfolio sync should go through official broker APIs or approved partnerships.
 
 Phase 4 page:
 

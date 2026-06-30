@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
     encryption_key: str = "dev-only-invalid-key"
+    market_data_mode: str = "mock"
+    market_data_refresh_seconds: int = 300
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:3000"]
     )
@@ -27,6 +29,14 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("market_data_mode")
+    @classmethod
+    def validate_market_data_mode(cls, value: str) -> str:
+        normalized = value.lower().strip()
+        if normalized not in {"mock", "dps", "vendor"}:
+            raise ValueError("MARKET_DATA_MODE must be one of: mock, dps, vendor")
+        return normalized
 
 
 @lru_cache

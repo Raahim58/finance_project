@@ -116,3 +116,19 @@ class SectorDailyStats(Base):
     decliners: Mapped[int] = mapped_column(default=0, nullable=False)
     unchanged: Mapped[int] = mapped_column(default=0, nullable=False)
     source: Mapped[str] = mapped_column(String(80), default="mock", nullable=False)
+
+
+class MarketIngestionRun(Base):
+    __tablename__ = "market_ingestion_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    latest_trade_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    records_written: Mapped[int] = mapped_column(default=0, nullable=False)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)

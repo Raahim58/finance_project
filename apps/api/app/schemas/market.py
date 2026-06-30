@@ -75,3 +75,13 @@ class MarketOverviewResponse(BaseModel):
     top_losers: list[MarketPriceResponse]
     top_volume: list[MarketPriceResponse]
     sectors: list[SectorDailyStatsResponse]
+
+
+class MarketFreshnessResponse(BaseModel):
+    market_data_mode: str
+    refresh_seconds: int
+    last_successful_ingestion_at: datetime | None
+    latest_trade_date: date | None
+    latest_source: str | None
+    is_stale: bool
+    stale_warning: str | None

@@ -123,6 +123,11 @@ export default function PortfolioPage() {
           <p className="mt-2 text-sm text-muted">
             Phase 3 portfolio valuation uses stored holdings and the latest market prices in the database.
           </p>
+          {summary ? (
+            <p className="mt-1 text-sm text-muted">
+              Portfolio source: {summary.portfolio.source_mode} via {summary.portfolio.provider_name}.
+            </p>
+          ) : null}
         </div>
         {portfolios.length ? (
           <select

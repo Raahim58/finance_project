@@ -28,3 +28,5 @@ Project rules for `psx-ai-portfolio-agent`.
 - Enforce user ownership checks on every portfolio, holding, and transaction operation.
 - Phase 4 RAG is for unstructured document text only; exact numerical values still come from database queries.
 - RAG search results must return citation metadata and must not fabricate source titles, URLs, snippets, or page numbers.
+- Market data architecture must assume automatic current-data ingestion; mock mode is development-only.
+- Agent decisions must consider market freshness and portfolio source metadata before presenting analysis.

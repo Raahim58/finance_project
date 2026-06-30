@@ -1,14 +1,23 @@
-from datetime import date
+from datetime import UTC, date, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.market import Company, Exchange, MarketPrice, MarketSnapshot, SectorDailyStats
+from app.core.config import settings
+from app.models.market import (
+    Company,
+    Exchange,
+    MarketIngestionRun,
+    MarketPrice,
+    MarketSnapshot,
+    SectorDailyStats,
+)
 from app.schemas.market import (
     CompanyDetailResponse,
     CompanyResponse,
     ExchangeResponse,
+    MarketFreshnessResponse,
     MarketPriceResponse,
     MarketSnapshotResponse,
     SectorDailyStatsResponse,
@@ -213,3 +222,46 @@ def get_company_history(
         query = query.where(MarketPrice.trade_date <= end_date)
     rows = db.scalars(query.order_by(MarketPrice.trade_date.desc()).limit(limit)).all()
     return [serialize_price(row) for row in reversed(rows)]
+
+
+def get_market_freshness(db: Session) -> MarketFreshnessResponse:
+    latest_run = db.scalar(
+        select(MarketIngestionRun)
+        .where(MarketIngestionRun.status == "success")
+        .order_by(MarketIngestionRun.finished_at.desc())
+        .limit(1)
+    )
+    latest_snapshot = db.scalar(select(MarketSnapshot).order_by(MarketSnapshot.ingested_at.desc()).limit(1))
+
+    last_successful = latest_run.finished_at if latest_run else (latest_snapshot.ingested_at if latest_snapshot else None)
+    latest_trade_date = latest_run.latest_trade_date if latest_run else (latest_snapshot.snapshot_date if latest_snapshot else None)
+    latest_source = latest_run.source if latest_run else (latest_snapshot.source if latest_snapshot else None)
+    if last_successful is None:
+        return MarketFreshnessResponse(
+            market_data_mode=settings.market_data_mode,
+            refresh_seconds=settings.market_data_refresh_seconds,
+            last_successful_ingestion_at=None,
+            latest_trade_date=None,
+            latest_source=None,
+            is_stale=True,
+            stale_warning="No successful market ingestion has completed yet.",
+        )
+
+    last_successful_utc = last_successful.astimezone(UTC) if last_successful.tzinfo else last_successful.replace(tzinfo=UTC)
+    age_seconds = (datetime.now(UTC) - last_successful_utc).total_seconds()
+    is_stale = age_seconds > settings.market_data_refresh_seconds
+    warning: str | None = None
+    if latest_source == "mock":
+        warning = "Current market data mode is mock. Use DPS or vendor mode for live/current ingestion."
+    elif is_stale:
+        warning = "Market data is older than MARKET_DATA_REFRESH_SECONDS. Refresh ingestion before relying on the latest view."
+
+    return MarketFreshnessResponse(
+        market_data_mode=settings.market_data_mode,
+        refresh_seconds=settings.market_data_refresh_seconds,
+        last_successful_ingestion_at=last_successful,
+        latest_trade_date=latest_trade_date,
+        latest_source=latest_source,
+        is_stale=is_stale,
+        stale_warning=warning,
+    )

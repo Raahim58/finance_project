@@ -7,17 +7,24 @@ from pydantic import BaseModel, Field
 class PortfolioCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     base_currency: str = Field(default="PKR", min_length=3, max_length=10)
+    source_mode: str = Field(default="manual", pattern="^(manual|synced)$")
+    provider_name: str = Field(default="ManualPortfolioProvider", min_length=1, max_length=80)
 
 
 class PortfolioUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     base_currency: str | None = Field(default=None, min_length=3, max_length=10)
+    source_mode: str | None = Field(default=None, pattern="^(manual|synced)$")
+    provider_name: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class PortfolioResponse(BaseModel):
     id: str
     name: str
     base_currency: str
+    source_mode: str
+    provider_name: str
+    last_synced_at: datetime | None
     created_at: datetime
     updated_at: datetime
 

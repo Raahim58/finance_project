@@ -96,10 +96,23 @@ export type MarketOverview = {
   sectors: SectorDailyStats[];
 };
 
+export type MarketFreshness = {
+  market_data_mode: string;
+  refresh_seconds: number;
+  last_successful_ingestion_at?: string | null;
+  latest_trade_date?: string | null;
+  latest_source?: string | null;
+  is_stale: boolean;
+  stale_warning?: string | null;
+};
+
 export type Portfolio = {
   id: string;
   name: string;
   base_currency: string;
+  source_mode: string;
+  provider_name: string;
+  last_synced_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -298,6 +311,10 @@ export function createLLMKey(provider: string, apiKey: string, defaultModel?: st
 
 export function getMarketOverview() {
   return request<MarketOverview>("/market/overview");
+}
+
+export function getMarketFreshness() {
+  return request<MarketFreshness>("/market/freshness");
 }
 
 export function getCompanies(query?: string) {

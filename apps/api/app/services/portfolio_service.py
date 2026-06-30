@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.models.market import Company, MarketPrice
 from app.models.portfolio import Portfolio, PortfolioHolding, PortfolioTransaction
 from app.models.user import User
+from app.services.portfolio_providers import describe_portfolio_source, get_portfolio_provider
 from app.schemas.portfolio import (
     CompanyExposureResponse,
     HoldingCreate,
@@ -39,10 +40,14 @@ def percent(value: Decimal) -> Decimal:
 
 
 def serialize_portfolio(portfolio: Portfolio) -> PortfolioResponse:
+    source_mode, provider_name = describe_portfolio_source(portfolio)
     return PortfolioResponse(
         id=portfolio.id,
         name=portfolio.name,
         base_currency=portfolio.base_currency,
+        source_mode=source_mode,
+        provider_name=provider_name,
+        last_synced_at=portfolio.last_synced_at,
         created_at=portfolio.created_at,
         updated_at=portfolio.updated_at,
     )
@@ -144,10 +149,13 @@ def list_portfolios(db: Session, user: User) -> list[PortfolioResponse]:
 
 
 def create_portfolio(db: Session, user: User, payload: PortfolioCreate) -> PortfolioResponse:
+    provider = get_portfolio_provider(payload.source_mode, payload.provider_name)
     portfolio = Portfolio(
         user_id=user.id,
         name=payload.name,
         base_currency=payload.base_currency.upper(),
+        source_mode=provider.source_mode,
+        provider_name=provider.name,
     )
     db.add(portfolio)
     db.commit()
@@ -164,6 +172,13 @@ def update_portfolio(
         portfolio.name = data["name"]
     if "base_currency" in data and data["base_currency"] is not None:
         portfolio.base_currency = data["base_currency"].upper()
+    if "source_mode" in data and data["source_mode"] is not None:
+        provider = get_portfolio_provider(data["source_mode"], data.get("provider_name") or portfolio.provider_name)
+        portfolio.source_mode = provider.source_mode
+        portfolio.provider_name = provider.name
+    elif "provider_name" in data and data["provider_name"] is not None:
+        provider = get_portfolio_provider(portfolio.source_mode, data["provider_name"])
+        portfolio.provider_name = provider.name
     db.add(portfolio)
     db.commit()
     db.refresh(portfolio)

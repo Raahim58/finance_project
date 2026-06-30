@@ -1,11 +1,18 @@
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from random import Random
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.models.market import Company, Exchange, MarketPrice, MarketSnapshot, SectorDailyStats
+from app.models.market import (
+    Company,
+    Exchange,
+    MarketIngestionRun,
+    MarketPrice,
+    MarketSnapshot,
+    SectorDailyStats,
+)
 
 MOCK_COMPANIES = [
     ("MEBL", "Meezan Bank Limited", "Banking"),
@@ -245,3 +252,62 @@ def compute_market_stats(
 
     db.commit()
     return derived_count
+
+
+def record_market_ingestion_run(
+    db: Session,
+    *,
+    mode: str,
+    source: str,
+    status: str,
+    started_at: datetime,
+    latest_trade_date: date | None = None,
+    records_written: int = 0,
+    message: str | None = None,
+) -> MarketIngestionRun:
+    run = MarketIngestionRun(
+        mode=mode,
+        source=source,
+        status=status,
+        started_at=started_at,
+        finished_at=datetime.now(UTC),
+        latest_trade_date=latest_trade_date,
+        records_written=records_written,
+        message=message,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def run_market_data_cycle(db: Session, mode: str) -> MarketIngestionRun:
+    from app.services.market_providers import get_market_data_provider
+
+    started_at = datetime.now(UTC)
+    provider = get_market_data_provider(mode)
+    try:
+        result = provider.refresh_latest(db)
+        latest_trade_date = db.scalar(
+            select(func.max(MarketPrice.trade_date)).where(MarketPrice.source == provider.source)
+        )
+        return record_market_ingestion_run(
+            db,
+            mode=provider.mode,
+            source=provider.source,
+            status="success",
+            started_at=started_at,
+            latest_trade_date=latest_trade_date,
+            records_written=int(result.get("prices", 0)),
+            message=f"Refreshed market data via {provider.source}.",
+        )
+    except Exception as exc:
+        return record_market_ingestion_run(
+            db,
+            mode=provider.mode,
+            source=provider.source,
+            status="failed",
+            started_at=started_at,
+            records_written=0,
+            message=str(exc),
+        )
