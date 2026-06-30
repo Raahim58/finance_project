@@ -24,3 +24,5 @@ Project rules for `psx-ai-portfolio-agent`.
 - Never log full API keys.
 - Phase 2 market data is mock/demo data unless a source field states otherwise.
 - Market prices, rankings, snapshots, and sector stats must come from database queries.
+- Phase 3 portfolio values and PnL must be calculated from stored holdings and database market prices.
+- Enforce user ownership checks on every portfolio, holding, and transaction operation.

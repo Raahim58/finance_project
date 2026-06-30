@@ -76,3 +76,9 @@ Phase 2 pages:
 
 - `http://localhost:3000/market`
 - `http://localhost:3000/companies/MEBL`
+
+Phase 3 page:
+
+- `http://localhost:3000/portfolio`
+
+Create an account first, then add a portfolio and holdings. Symbols must exist in the market company table, so seed Phase 2 mock market data before using the portfolio page.

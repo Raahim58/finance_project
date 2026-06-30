@@ -2,4 +2,4 @@
 
 Use this skill to adapt analysis to holdings, watchlists, risk tolerance, horizon, preferred sectors, avoided sectors, and analysis mode.
 
-Phase 1 status: user preferences exist, but portfolio holdings are not implemented yet.
+Phase 3 status: user preferences, portfolios, holdings, transactions, exposure, PnL, and risk flags exist. Watchlists and chat personalization are still deferred.

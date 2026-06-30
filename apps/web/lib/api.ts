@@ -96,6 +96,87 @@ export type MarketOverview = {
   sectors: SectorDailyStats[];
 };
 
+export type Portfolio = {
+  id: string;
+  name: string;
+  base_currency: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Holding = {
+  id: string;
+  portfolio_id: string;
+  company_id: string;
+  symbol: string;
+  quantity: string;
+  average_cost: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type HoldingSummary = {
+  holding_id: string;
+  symbol: string;
+  name: string;
+  sector: string;
+  quantity: string;
+  average_cost: string;
+  latest_price?: string | null;
+  latest_price_date?: string | null;
+  cost_basis: string;
+  market_value: string;
+  unrealized_gain_loss: string;
+  unrealized_gain_loss_percent?: string | null;
+  day_change?: string | null;
+  day_change_percent?: string | null;
+  data_source?: string | null;
+};
+
+export type PortfolioSummary = {
+  portfolio: Portfolio;
+  total_value: string;
+  cost_basis: string;
+  unrealized_gain_loss: string;
+  unrealized_gain_loss_percent?: string | null;
+  day_change: string;
+  day_change_percent?: string | null;
+  cash_balance: string;
+  holdings: HoldingSummary[];
+  data_freshness_date?: string | null;
+  data_source?: string | null;
+};
+
+export type SectorExposure = {
+  sector: string;
+  market_value: string;
+  weight_percent: string;
+};
+
+export type CompanyExposure = {
+  symbol: string;
+  name: string;
+  market_value: string;
+  weight_percent: string;
+};
+
+export type PortfolioExposure = {
+  total_value: string;
+  by_sector: SectorExposure[];
+  by_company: CompanyExposure[];
+};
+
+export type PortfolioRiskFlag = {
+  severity: string;
+  code: string;
+  message: string;
+  value?: string | null;
+};
+
+export type PortfolioRiskFlags = {
+  flags: PortfolioRiskFlag[];
+};
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const TOKEN_KEY = "psx_ai_token";
 
@@ -180,4 +261,38 @@ export function getCompanyHistory(symbol: string, limit = 180) {
   return request<MarketPrice[]>(
     `/market/company/${encodeURIComponent(symbol)}/history?limit=${encodeURIComponent(String(limit))}`
   );
+}
+
+export function getPortfolios() {
+  return request<Portfolio[]>("/portfolios");
+}
+
+export function createPortfolio(name: string, baseCurrency = "PKR") {
+  return request<Portfolio>("/portfolios", {
+    method: "POST",
+    body: JSON.stringify({ name, base_currency: baseCurrency })
+  });
+}
+
+export function getPortfolioSummary(portfolioId: string) {
+  return request<PortfolioSummary>(`/portfolios/${encodeURIComponent(portfolioId)}/summary`);
+}
+
+export function getPortfolioExposure(portfolioId: string) {
+  return request<PortfolioExposure>(`/portfolios/${encodeURIComponent(portfolioId)}/exposure`);
+}
+
+export function getPortfolioRiskFlags(portfolioId: string) {
+  return request<PortfolioRiskFlags>(`/portfolios/${encodeURIComponent(portfolioId)}/risk-flags`);
+}
+
+export function addHolding(portfolioId: string, symbol: string, quantity: string, averageCost: string) {
+  return request<Holding>(`/portfolios/${encodeURIComponent(portfolioId)}/holdings`, {
+    method: "POST",
+    body: JSON.stringify({
+      symbol,
+      quantity,
+      average_cost: averageCost
+    })
+  });
 }

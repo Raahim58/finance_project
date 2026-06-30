@@ -2,7 +2,7 @@
 
 AI-powered Pakistan Stock Exchange portfolio intelligence assistant.
 
-This repository is a production-style side-project MVP scaffold. Phases 0 through 2 are implemented:
+This repository is a production-style side-project MVP scaffold. Phases 0 through 3 are implemented:
 
 - Monorepo layout with `apps/api` and `apps/web`
 - FastAPI backend skeleton
@@ -14,8 +14,9 @@ This repository is a production-style side-project MVP scaffold. Phases 0 throug
 - Provider-agnostic LLM gateway with mock provider and adapter placeholders
 - Project docs, skills, agents, and MCP-style design notes
 - Mock PSX market data tables, ingestion job, APIs, dashboard, and company history pages
+- Portfolio tables, holdings and transactions APIs, valuation/exposure/PnL services, risk flags, and portfolio dashboard
 
-Later phases for portfolio analytics, RAG, policy intelligence, digests, alerts, and order intents are intentionally not implemented yet.
+Later phases for RAG, policy intelligence, chat, digests, alerts, watchlists, and order intents are intentionally not implemented yet.
 
 ## Quick Start
 
