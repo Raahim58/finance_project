@@ -26,3 +26,5 @@ Project rules for `psx-ai-portfolio-agent`.
 - Market prices, rankings, snapshots, and sector stats must come from database queries.
 - Phase 3 portfolio values and PnL must be calculated from stored holdings and database market prices.
 - Enforce user ownership checks on every portfolio, holding, and transaction operation.
+- Phase 4 RAG is for unstructured document text only; exact numerical values still come from database queries.
+- RAG search results must return citation metadata and must not fabricate source titles, URLs, snippets, or page numbers.

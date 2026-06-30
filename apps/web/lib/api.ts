@@ -177,6 +177,58 @@ export type PortfolioRiskFlags = {
   flags: PortfolioRiskFlag[];
 };
 
+export type ApiDocument = {
+  id: string;
+  symbol?: string | null;
+  sector?: string | null;
+  document_type: string;
+  title: string;
+  fiscal_year?: number | null;
+  quarter?: string | null;
+  source_name: string;
+  source_url?: string | null;
+  local_file_path?: string | null;
+  content_hash: string;
+  published_date?: string | null;
+  parsed_at?: string | null;
+  status: string;
+  error_message?: string | null;
+  created_at: string;
+};
+
+export type RagCitation = {
+  id: string;
+  document_id: string;
+  chunk_id?: string | null;
+  source_name: string;
+  source_url?: string | null;
+  title: string;
+  page_number?: number | null;
+  quote_snippet?: string | null;
+  created_at: string;
+};
+
+export type RagChunk = {
+  id: string;
+  document_id: string;
+  symbol?: string | null;
+  chunk_index: number;
+  chunk_text: string;
+  token_count: number;
+  score: number;
+  source_url?: string | null;
+  page_number?: number | null;
+  section_title?: string | null;
+  metadata: Record<string, unknown>;
+  citation: RagCitation;
+};
+
+export type RagSearchResponse = {
+  chunks: RagChunk[];
+  citations: RagCitation[];
+  scores: number[];
+};
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const TOKEN_KEY = "psx_ai_token";
 
@@ -294,5 +346,40 @@ export function addHolding(portfolioId: string, symbol: string, quantity: string
       quantity,
       average_cost: averageCost
     })
+  });
+}
+
+export function getDocuments(symbol?: string) {
+  const params = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+  return request<ApiDocument[]>(`/documents${params}`);
+}
+
+export function uploadDocument(formData: FormData) {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(`${API_BASE_URL}/documents/upload`, {
+    method: "POST",
+    headers,
+    body: formData
+  }).then(async (response) => {
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail ?? `Request failed: ${response.status}`);
+    }
+    return response.json() as Promise<ApiDocument>;
+  });
+}
+
+export function searchRag(payload: {
+  query: string;
+  symbols?: string[];
+  sectors?: string[];
+  document_types?: string[];
+  limit?: number;
+}) {
+  return request<RagSearchResponse>("/rag/search", {
+    method: "POST",
+    body: JSON.stringify(payload)
   });
 }

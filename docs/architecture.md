@@ -32,6 +32,15 @@ Phase 3 implements:
 - Valuation and PnL calculated from stored holdings and latest market prices
 - Frontend portfolio dashboard
 
+Phase 4 implements:
+
+- Document metadata, pages, chunks, and citation tables
+- Text/Markdown upload and ingestion
+- Optional PDF parsing when `pypdf` is installed
+- Deterministic chunking and local hash embeddings stored as JSON
+- RAG search with structured filters, lexical evidence overlap, scores, chunks, and citations
+- Frontend document upload/search page
+
 ## System Shape
 
 ```text
@@ -41,13 +50,14 @@ apps/web  ->  apps/api  ->  database
                  -> encrypted user provider keys
                  -> market data services
                  -> portfolio services
+                 -> document/RAG services
 ```
 
-Structured numerical market data now lives in database tables. RAG will be used only for unstructured company, policy, and report documents in later phases.
+Structured numerical market and portfolio data lives in database tables. RAG is used only for unstructured company/report text.
 
 ## Phase Boundaries
 
-RAG, policy intelligence, chat, daily digest, alerts, watchlists, and order intents are intentionally deferred. Phase 2 market data is deterministic mock data unless another source is explicitly added later.
+Policy intelligence, chat, daily digest, alerts, watchlists, and order intents are intentionally deferred. Phase 2 market data is deterministic mock data unless another source is explicitly added later.
 
 ## Market Data Flow
 
@@ -73,3 +83,16 @@ user auth
 ```
 
 Portfolio calculations are server-side and user-scoped. The current Phase 3 portfolio dashboard is a manual-entry MVP; broker integration, order intents, watchlists, alerts, and chat-based interpretation are later phases.
+
+## RAG Data Flow
+
+```text
+upload or ingest local file
+  -> documents + document_pages
+  -> deterministic chunks + local embeddings
+  -> citations per chunk
+  -> /rag/search
+  -> /documents
+```
+
+Phase 4 uses a SQLite/PostgreSQL-friendly local embedding placeholder. Retrieval first applies structured filters, then ranks chunks that have lexical overlap with the query, and returns citations separately. pgvector and external embedding providers are deferred.
