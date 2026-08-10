@@ -7,11 +7,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.document import Citation, Document, DocumentChunk, DocumentPage
 from app.models.market import Company
+from app.models.user import User
 from app.schemas.rag import (
     CitationResponse,
     DocumentIngestRequest,
@@ -94,6 +95,8 @@ def first_snippet(text: str, max_chars: int = 260) -> str:
 def serialize_document(document: Document) -> DocumentResponse:
     return DocumentResponse(
         id=document.id,
+        visibility=document.visibility,
+        portfolio_id=document.portfolio_id,
         symbol=document.symbol,
         sector=document.sector,
         document_type=document.document_type,
@@ -176,6 +179,9 @@ def create_document_from_pages(
     source_url: str | None = None,
     local_file_path: str | None = None,
     published_date=None,
+    owner_user_id: str | None = None,
+    visibility: str = "public",
+    portfolio_id: str | None = None,
 ) -> Document:
     full_text = "\n\n".join(page.text for page in pages)
     if not full_text.strip():
@@ -186,6 +192,9 @@ def create_document_from_pages(
     resolved_sector = sector or (company.sector if company else None)
     document = Document(
         company_id=company.id if company else None,
+        owner_user_id=owner_user_id,
+        portfolio_id=portfolio_id,
+        visibility=visibility,
         symbol=normalized_symbol,
         sector=resolved_sector,
         document_type=document_type,
@@ -260,7 +269,10 @@ def create_document_from_pages(
     return document
 
 
-def ingest_text_document(db: Session, payload: DocumentIngestRequest) -> DocumentResponse:
+def ingest_text_document(db: Session, user: User, payload: DocumentIngestRequest) -> DocumentResponse:
+    if payload.portfolio_id:
+        from app.services.portfolio_service import get_portfolio_or_404
+        get_portfolio_or_404(db, user, payload.portfolio_id)
     document = create_document_from_pages(
         db,
         [ParsedPage(page_number=1, text=payload.text)],
@@ -273,6 +285,9 @@ def ingest_text_document(db: Session, payload: DocumentIngestRequest) -> Documen
         source_name=payload.source_name,
         source_url=payload.source_url,
         published_date=payload.published_date,
+        owner_user_id=user.id if payload.visibility == "private" else None,
+        visibility=payload.visibility,
+        portfolio_id=payload.portfolio_id,
     )
     return serialize_document(document)
 
@@ -290,7 +305,13 @@ async def ingest_upload(
     source_name: str,
     source_url: str | None,
     published_date,
+    user: User,
+    visibility: str = "private",
+    portfolio_id: str | None = None,
 ) -> DocumentResponse:
+    if portfolio_id:
+        from app.services.portfolio_service import get_portfolio_or_404
+        get_portfolio_or_404(db, user, portfolio_id)
     content = await file.read()
     pages = parse_document_content(file.filename or title, content)
     storage_dir = Path("storage/documents")
@@ -312,17 +333,21 @@ async def ingest_upload(
         source_url=source_url,
         local_file_path=str(path),
         published_date=published_date,
+        owner_user_id=user.id if visibility == "private" else None,
+        visibility=visibility,
+        portfolio_id=portfolio_id,
     )
     return serialize_document(document)
 
 
 def list_documents(
     db: Session,
+    user: User,
     symbol: str | None = None,
     document_type: str | None = None,
     limit: int = 50,
 ) -> list[DocumentResponse]:
-    query = select(Document)
+    query = select(Document).where(or_(Document.visibility == "public", Document.owner_user_id == user.id))
     if symbol:
         query = query.where(func.upper(Document.symbol) == symbol.upper())
     if document_type:
@@ -331,19 +356,20 @@ def list_documents(
     return [serialize_document(row) for row in rows]
 
 
-def get_document(db: Session, document_id: str) -> DocumentResponse:
-    document = db.get(Document, document_id)
+def get_document(db: Session, user: User, document_id: str) -> DocumentResponse:
+    document = db.scalar(select(Document).where(Document.id == document_id, or_(Document.visibility == "public", Document.owner_user_id == user.id)))
     if not document:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
     return serialize_document(document)
 
 
-def search_rag(db: Session, payload: RagSearchRequest) -> RagSearchResponse:
+def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> RagSearchResponse:
     query = (
         select(DocumentChunk, Document, Citation)
         .join(Document, Document.id == DocumentChunk.document_id)
         .join(Citation, Citation.chunk_id == DocumentChunk.id)
     )
+    query = query.where(Document.visibility == "public" if user is None else or_(Document.visibility == "public", Document.owner_user_id == user.id))
     if payload.symbols:
         symbols = [symbol.upper() for symbol in payload.symbols]
         query = query.where(func.upper(DocumentChunk.symbol).in_(symbols))

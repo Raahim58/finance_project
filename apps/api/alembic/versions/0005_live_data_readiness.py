@@ -28,7 +28,8 @@ def upgrade() -> None:
         "market_ingestion_runs",
         sa.Column("id", sa.String(length=36), nullable=False),
         sa.Column("mode", sa.String(length=20), nullable=False),
-        sa.Column("source", sa.String(length=80), nullable=False),
+        sa.Column("attempted_provider", sa.String(length=80), nullable=False),
+        sa.Column("used_provider", sa.String(length=80), nullable=True),
         sa.Column("status", sa.String(length=20), nullable=False),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
@@ -38,13 +39,25 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(op.f("ix_market_ingestion_runs_mode"), "market_ingestion_runs", ["mode"], unique=False)
-    op.create_index(op.f("ix_market_ingestion_runs_source"), "market_ingestion_runs", ["source"], unique=False)
+    op.create_index(
+        op.f("ix_market_ingestion_runs_attempted_provider"),
+        "market_ingestion_runs",
+        ["attempted_provider"],
+        unique=False,
+    )
+    op.create_index(
+        op.f("ix_market_ingestion_runs_used_provider"),
+        "market_ingestion_runs",
+        ["used_provider"],
+        unique=False,
+    )
     op.create_index(op.f("ix_market_ingestion_runs_status"), "market_ingestion_runs", ["status"], unique=False)
 
 
 def downgrade() -> None:
     op.drop_index(op.f("ix_market_ingestion_runs_status"), table_name="market_ingestion_runs")
-    op.drop_index(op.f("ix_market_ingestion_runs_source"), table_name="market_ingestion_runs")
+    op.drop_index(op.f("ix_market_ingestion_runs_used_provider"), table_name="market_ingestion_runs")
+    op.drop_index(op.f("ix_market_ingestion_runs_attempted_provider"), table_name="market_ingestion_runs")
     op.drop_index(op.f("ix_market_ingestion_runs_mode"), table_name="market_ingestion_runs")
     op.drop_table("market_ingestion_runs")
     op.drop_column("portfolios", "last_synced_at")

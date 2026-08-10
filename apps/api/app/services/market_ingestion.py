@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from random import Random
+from types import SimpleNamespace
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.market import (
@@ -13,6 +16,8 @@ from app.models.market import (
     MarketSnapshot,
     SectorDailyStats,
 )
+from app.services.market_numbers import safe_decimal, safe_int
+from app.services.market_providers import LatestPriceRow
 
 MOCK_COMPANIES = [
     ("MEBL", "Meezan Bank Limited", "Banking"),
@@ -61,6 +66,42 @@ def percent(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
 
+def decimalize(value: Decimal | int | float | str | None, default: Decimal = Decimal("0")) -> Decimal:
+    return safe_decimal(value) or default
+
+
+def sanitize_market_price_values(price: MarketPrice | LatestPriceRow) -> dict[str, Decimal | int | None]:
+    close = money(
+        decimalize(
+            getattr(price, "close", None),
+            safe_decimal(getattr(price, "previous_close", None))
+            or safe_decimal(getattr(price, "open", None))
+            or Decimal("0"),
+        )
+    )
+    previous_close = money(decimalize(getattr(price, "previous_close", None), close))
+    open_price = money(decimalize(getattr(price, "open", None), previous_close))
+    high = money(decimalize(getattr(price, "high", None), max(open_price, close)))
+    low = money(decimalize(getattr(price, "low", None), min(open_price, close)))
+    volume = safe_int(getattr(price, "volume", None)) or 0
+    change = money(close - previous_close)
+    change_percent = percent((change / previous_close) * Decimal("100")) if previous_close != 0 else Decimal("0")
+    value = money(decimalize(getattr(price, "value", None), close * Decimal(volume)))
+    market_cap = safe_decimal(getattr(price, "market_cap", None))
+    return {
+        "open": open_price,
+        "high": high,
+        "low": low,
+        "close": close,
+        "previous_close": previous_close,
+        "change": change,
+        "change_percent": change_percent,
+        "volume": volume,
+        "value": value,
+        "market_cap": market_cap,
+    }
+
+
 def trading_days_ending(end_date: date, days: int) -> list[date]:
     dates: list[date] = []
     cursor = end_date
@@ -71,12 +112,17 @@ def trading_days_ending(end_date: date, days: int) -> list[date]:
     return list(reversed(dates))
 
 
-def ensure_mock_companies(db: Session) -> list[Company]:
+def ensure_psx_exchange(db: Session) -> Exchange:
     exchange = db.scalar(select(Exchange).where(Exchange.code == "PSX"))
     if not exchange:
         exchange = Exchange(code="PSX", name="Pakistan Stock Exchange", timezone="Asia/Karachi")
         db.add(exchange)
         db.flush()
+    return exchange
+
+
+def ensure_mock_companies(db: Session) -> list[Company]:
+    exchange = ensure_psx_exchange(db)
 
     companies: list[Company] = []
     for symbol, name, sector in MOCK_COMPANIES:
@@ -100,6 +146,43 @@ def ensure_mock_companies(db: Session) -> list[Company]:
         companies.append(company)
 
     return companies
+
+
+def get_active_company_symbols(db: Session) -> list[str]:
+    return list(
+        db.scalars(select(Company.symbol).where(Company.is_active.is_(True)).order_by(Company.symbol.asc()))
+    )
+
+
+def upsert_company_from_price_row(db: Session, row: LatestPriceRow) -> Company:
+    exchange = ensure_psx_exchange(db)
+    company = db.scalar(select(Company).where(Company.symbol == row.symbol))
+    if not company:
+        company = Company(
+            symbol=row.symbol,
+            name=row.name or row.symbol,
+            sector=row.sector or "Unknown",
+            exchange_id=exchange.id,
+            psx_url=f"https://dps.psx.com.pk/company/{row.symbol}",
+            description=f"Market data company record for {row.symbol}.",
+            is_active=True,
+        )
+        db.add(company)
+        db.flush()
+        return company
+
+    if row.name:
+        company.name = row.name
+    elif not company.name:
+        company.name = row.symbol
+    if row.sector:
+        company.sector = row.sector
+    elif not company.sector:
+        company.sector = "Unknown"
+    company.exchange_id = exchange.id
+    company.is_active = True
+    db.flush()
+    return company
 
 
 def clear_mock_market_data(db: Session) -> None:
@@ -166,6 +249,133 @@ def generate_mock_market_data(db: Session, days: int = 365, end_date: date | Non
     return {"companies": len(companies), "prices": price_count, "derived_stats": stats_count}
 
 
+def cleanup_invalid_market_prices(db: Session) -> int:
+    rows = db.execute(
+        text(
+            """
+            SELECT id, open, high, low, close, previous_close, change, change_percent, volume, value, market_cap
+            FROM market_prices
+            """
+        )
+    ).mappings().all()
+    updates = 0
+    for price in rows:
+        cleaned = sanitize_market_price_values(SimpleNamespace(**price))
+        changed = any(price[field] != cleaned[field] for field in cleaned)
+        if changed:
+            db.execute(
+                text(
+                    """
+                    UPDATE market_prices
+                    SET open = :open,
+                        high = :high,
+                        low = :low,
+                        close = :close,
+                        previous_close = :previous_close,
+                        change = :change,
+                        change_percent = :change_percent,
+                        volume = :volume,
+                        value = :value,
+                        market_cap = :market_cap,
+                        ingested_at = :ingested_at
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "id": price["id"],
+                    "open": str(cleaned["open"]),
+                    "high": str(cleaned["high"]),
+                    "low": str(cleaned["low"]),
+                    "close": str(cleaned["close"]),
+                    "previous_close": str(cleaned["previous_close"]),
+                    "change": str(cleaned["change"]),
+                    "change_percent": str(cleaned["change_percent"]),
+                    "volume": cleaned["volume"],
+                    "value": str(cleaned["value"]),
+                    "market_cap": None if cleaned["market_cap"] is None else str(cleaned["market_cap"]),
+                    "ingested_at": datetime.now(UTC),
+                },
+            )
+            updates += 1
+
+    if updates:
+        db.commit()
+    return updates
+
+
+def persist_market_data(db: Session, *, latest_prices: list[LatestPriceRow], source: str) -> dict[str, int | date | None]:
+    if not latest_prices:
+        raise ValueError("latest_prices must not be empty")
+
+    company_count = 0
+    price_count = 0
+    touched_dates: set[date] = set()
+
+    for row in latest_prices:
+        company = upsert_company_from_price_row(db, row)
+        company_count += 1
+        cleaned = sanitize_market_price_values(row)
+
+        price = db.scalar(
+            select(MarketPrice).where(
+                MarketPrice.symbol == row.symbol,
+                MarketPrice.trade_date == row.trade_date,
+                MarketPrice.source == source,
+            )
+        )
+        if not price:
+            price = MarketPrice(
+                company_id=company.id,
+                symbol=row.symbol,
+                trade_date=row.trade_date,
+                open=cleaned["open"],
+                high=cleaned["high"],
+                low=cleaned["low"],
+                close=cleaned["close"],
+                previous_close=cleaned["previous_close"],
+                change=cleaned["change"],
+                change_percent=cleaned["change_percent"],
+                volume=cleaned["volume"],
+                value=cleaned["value"],
+                market_cap=cleaned["market_cap"],
+                source=source,
+                source_url=row.source_url,
+            )
+            db.add(price)
+        else:
+            price.company_id = company.id
+            price.open = cleaned["open"]
+            price.high = cleaned["high"]
+            price.low = cleaned["low"]
+            price.close = cleaned["close"]
+            price.previous_close = cleaned["previous_close"]
+            price.change = cleaned["change"]
+            price.change_percent = cleaned["change_percent"]
+            price.volume = cleaned["volume"]
+            price.value = cleaned["value"]
+            price.market_cap = cleaned["market_cap"]
+            price.source_url = row.source_url
+            price.ingested_at = datetime.now(UTC)
+
+        touched_dates.add(row.trade_date)
+        price_count += 1
+
+    db.flush()
+
+    derived_stats = 0
+    for trade_date in sorted(touched_dates):
+        derived_stats += compute_market_stats(db, source=source, target_date=trade_date)
+
+    latest_trade_date = max(touched_dates) if touched_dates else None
+    db.commit()
+    return {
+        "companies": company_count,
+        "prices": price_count,
+        "derived_stats": derived_stats,
+        "latest_trade_date": latest_trade_date,
+    }
+
+
 def compute_market_stats(
     db: Session,
     source: str = "mock",
@@ -199,7 +409,7 @@ def compute_market_stats(
         db.add(
             MarketSnapshot(
                 snapshot_date=trade_date,
-                index_name="KSE-100 Mock",
+                index_name="KSE-100 Mock" if source == "mock" else "KSE-100",
                 index_value=index_value,
                 index_change=index_change,
                 index_change_percent=percent(avg_change_percent),
@@ -258,7 +468,8 @@ def record_market_ingestion_run(
     db: Session,
     *,
     mode: str,
-    source: str,
+    attempted_provider: str,
+    used_provider: str | None,
     status: str,
     started_at: datetime,
     latest_trade_date: date | None = None,
@@ -267,7 +478,8 @@ def record_market_ingestion_run(
 ) -> MarketIngestionRun:
     run = MarketIngestionRun(
         mode=mode,
-        source=source,
+        attempted_provider=attempted_provider,
+        used_provider=used_provider,
         status=status,
         started_at=started_at,
         finished_at=datetime.now(UTC),
@@ -288,24 +500,28 @@ def run_market_data_cycle(db: Session, mode: str) -> MarketIngestionRun:
     provider = get_market_data_provider(mode)
     try:
         result = provider.refresh_latest(db)
-        latest_trade_date = db.scalar(
-            select(func.max(MarketPrice.trade_date)).where(MarketPrice.source == provider.source)
-        )
+        latest_trade_date = result.get("latest_trade_date")
+        if latest_trade_date is None and result.get("used_provider"):
+            latest_trade_date = db.scalar(
+                select(func.max(MarketPrice.trade_date)).where(MarketPrice.source == result["used_provider"])
+            )
         return record_market_ingestion_run(
             db,
             mode=provider.mode,
-            source=provider.source,
+            attempted_provider=str(result.get("attempted_provider", provider.source)),
+            used_provider=str(result.get("used_provider", provider.source)),
             status="success",
             started_at=started_at,
-            latest_trade_date=latest_trade_date,
+            latest_trade_date=latest_trade_date if isinstance(latest_trade_date, date) else None,
             records_written=int(result.get("prices", 0)),
-            message=f"Refreshed market data via {provider.source}.",
+            message=str(result.get("message", f"Refreshed market data via {provider.source}.")),
         )
     except Exception as exc:
         return record_market_ingestion_run(
             db,
             mode=provider.mode,
-            source=provider.source,
+            attempted_provider=provider.source,
+            used_provider=None,
             status="failed",
             started_at=started_at,
             records_written=0,

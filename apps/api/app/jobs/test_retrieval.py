@@ -15,6 +15,7 @@ def main() -> None:
     with SessionLocal() as db:
         result = search_rag(
             db,
+            None,
             RagSearchRequest(query=args.query, symbols=args.symbol, limit=args.limit),
         )
 

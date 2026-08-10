@@ -10,7 +10,9 @@ def run_once() -> None:
     with SessionLocal() as db:
         run = run_market_data_cycle(db, settings.market_data_mode)
     print(
-        f"Market scheduler run finished with status={run.status} mode={run.mode} source={run.source} latest_trade_date={run.latest_trade_date}"
+        "Market scheduler run finished with "
+        f"status={run.status} mode={run.mode} attempted_provider={run.attempted_provider} "
+        f"used_provider={run.used_provider} latest_trade_date={run.latest_trade_date}"
     )
 
 

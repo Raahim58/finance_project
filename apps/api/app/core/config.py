@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     encryption_key: str = "dev-only-invalid-key"
     market_data_mode: str = "mock"
     market_data_refresh_seconds: int = 300
+    source_artifact_root: str = "./data/artifacts"
+    market_data_default_symbols: Annotated[list[str], NoDecode] = Field(default_factory=list)
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:3000"]
     )
@@ -30,12 +32,19 @@ class Settings(BaseSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
+    @field_validator("market_data_default_symbols", mode="before")
+    @classmethod
+    def parse_market_data_default_symbols(cls, value: str | list[str]) -> list[str]:
+        if isinstance(value, str):
+            return [item.strip().upper() for item in value.split(",") if item.strip()]
+        return [str(item).strip().upper() for item in value if str(item).strip()]
+
     @field_validator("market_data_mode")
     @classmethod
     def validate_market_data_mode(cls, value: str) -> str:
         normalized = value.lower().strip()
-        if normalized not in {"mock", "dps", "vendor"}:
-            raise ValueError("MARKET_DATA_MODE must be one of: mock, dps, vendor")
+        if normalized not in {"mock", "psxdata", "yahoo", "auto", "dps", "vendor"}:
+            raise ValueError("MARKET_DATA_MODE must be one of: mock, psxdata, yahoo, auto, dps, vendor")
         return normalized
 
 

@@ -10,6 +10,19 @@ from app.models.market import (
 )
 from app.models.portfolio import Portfolio, PortfolioHolding, PortfolioTransaction
 from app.models.user import User, UserPreferences
+from app.models.workstation import (
+    AllocationItem,
+    AllocationSet,
+    DataSource,
+    Instrument,
+    InvestorFinancialProfileVersion,
+    MonitoringRule,
+    OptimizerRun,
+    PortfolioIPSVersion,
+    Recommendation,
+    ScenarioRun,
+    SourceArtifact,
+)
 
 __all__ = [
     "Company",
@@ -28,4 +41,15 @@ __all__ = [
     "SectorDailyStats",
     "User",
     "UserPreferences",
+    "AllocationItem",
+    "AllocationSet",
+    "DataSource",
+    "Instrument",
+    "InvestorFinancialProfileVersion",
+    "MonitoringRule",
+    "OptimizerRun",
+    "PortfolioIPSVersion",
+    "Recommendation",
+    "ScenarioRun",
+    "SourceArtifact",
 ]

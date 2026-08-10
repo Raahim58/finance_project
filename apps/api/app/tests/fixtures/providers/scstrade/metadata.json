@@ -1,0 +1,18 @@
+{
+  "provider": "SCSTrade",
+  "retrieved_at": "2026-08-10T10:03:50+05:00",
+  "parser_contract_version": "scstrade-chart-json-v1",
+  "source_page": {"url": "https://www.scstrade.com/MarketStatistics/MS_HistoricalPrices.aspx", "method": "GET", "original_sha256": "f50c44155c00f236f432ba01f3963a69d574d8cc72d9741600f6c62bed5f9ad0"},
+  "fixture": {
+    "url": "https://www.scstrade.com/MarketStatistics/MS_HistoricalPrices.aspx/chart",
+    "method": "POST",
+    "headers": {"Content-Type": "application/json; charset=utf-8", "X-Requested-With": "XMLHttpRequest"},
+    "request_json": {"par": "MEBL", "date1": "08/01/2026", "date2": "08/10/2026"},
+    "content_type": "application/json; charset=utf-8",
+    "original_sha256": "c8c198f245da2a59f6dfb61a7ce7f8c4b8488289764e26e40882ae0b130233ce",
+    "sanitized_or_truncated": true,
+    "original_rows": 5
+  },
+  "observation": "A form-encoded POST returned the full HTML page. The verified endpoint requires an ASP.NET JSON POST; the adapter uses only that observed contract.",
+  "use_note": "Supplemental historical gap check only; never outranks official DPS data."
+}

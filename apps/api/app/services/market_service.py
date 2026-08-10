@@ -22,6 +22,7 @@ from app.schemas.market import (
     MarketSnapshotResponse,
     SectorDailyStatsResponse,
 )
+from app.services.market_ingestion import cleanup_invalid_market_prices, sanitize_market_price_values
 
 
 def serialize_exchange(exchange: Exchange) -> ExchangeResponse:
@@ -43,19 +44,20 @@ def serialize_company(company: Company) -> CompanyResponse:
 
 
 def serialize_price(price: MarketPrice) -> MarketPriceResponse:
+    cleaned = sanitize_market_price_values(price)
     return MarketPriceResponse(
         symbol=price.symbol,
         trade_date=price.trade_date,
-        open=price.open,
-        high=price.high,
-        low=price.low,
-        close=price.close,
-        previous_close=price.previous_close,
-        change=price.change,
-        change_percent=price.change_percent,
-        volume=price.volume,
-        value=price.value,
-        market_cap=price.market_cap,
+        open=cleaned["open"],
+        high=cleaned["high"],
+        low=cleaned["low"],
+        close=cleaned["close"],
+        previous_close=cleaned["previous_close"],
+        change=cleaned["change"],
+        change_percent=cleaned["change_percent"],
+        volume=cleaned["volume"],
+        value=cleaned["value"],
+        market_cap=cleaned["market_cap"],
         source=price.source,
         source_url=price.source_url,
         ingested_at=price.ingested_at,
@@ -95,6 +97,7 @@ def get_latest_market_date(db: Session) -> date | None:
 
 
 def resolve_market_date(db: Session, requested_date: date | None) -> date:
+    cleanup_invalid_market_prices(db)
     if requested_date:
         exists = db.scalar(select(MarketPrice.id).where(MarketPrice.trade_date == requested_date).limit(1))
         if exists:
@@ -235,7 +238,7 @@ def get_market_freshness(db: Session) -> MarketFreshnessResponse:
 
     last_successful = latest_run.finished_at if latest_run else (latest_snapshot.ingested_at if latest_snapshot else None)
     latest_trade_date = latest_run.latest_trade_date if latest_run else (latest_snapshot.snapshot_date if latest_snapshot else None)
-    latest_source = latest_run.source if latest_run else (latest_snapshot.source if latest_snapshot else None)
+    latest_source = latest_run.used_provider if latest_run else (latest_snapshot.source if latest_snapshot else None)
     if last_successful is None:
         return MarketFreshnessResponse(
             market_data_mode=settings.market_data_mode,
@@ -243,8 +246,11 @@ def get_market_freshness(db: Session) -> MarketFreshnessResponse:
             last_successful_ingestion_at=None,
             latest_trade_date=None,
             latest_source=None,
+            latest_attempted_provider=None,
+            latest_used_provider=None,
             is_stale=True,
             stale_warning="No successful market ingestion has completed yet.",
+            backup_warning=None,
         )
 
     last_successful_utc = last_successful.astimezone(UTC) if last_successful.tzinfo else last_successful.replace(tzinfo=UTC)
@@ -252,9 +258,12 @@ def get_market_freshness(db: Session) -> MarketFreshnessResponse:
     is_stale = age_seconds > settings.market_data_refresh_seconds
     warning: str | None = None
     if latest_source == "mock":
-        warning = "Current market data mode is mock. Use DPS or vendor mode for live/current ingestion."
+        warning = "Current market data mode is mock. Use psxdata, yahoo, or auto mode for live/current ingestion."
     elif is_stale:
         warning = "Market data is older than MARKET_DATA_REFRESH_SECONDS. Refresh ingestion before relying on the latest view."
+    backup_warning: str | None = None
+    if latest_run and latest_run.attempted_provider in {"auto", "psxdata"} and latest_run.used_provider == "yahoo":
+        backup_warning = "Primary PSX source was unavailable. Yahoo Finance fallback data is currently in use."
 
     return MarketFreshnessResponse(
         market_data_mode=settings.market_data_mode,
@@ -262,6 +271,9 @@ def get_market_freshness(db: Session) -> MarketFreshnessResponse:
         last_successful_ingestion_at=last_successful,
         latest_trade_date=latest_trade_date,
         latest_source=latest_source,
+        latest_attempted_provider=latest_run.attempted_provider if latest_run else None,
+        latest_used_provider=latest_run.used_provider if latest_run else latest_source,
         is_stale=is_stale,
         stale_warning=warning,
+        backup_warning=backup_warning,
     )

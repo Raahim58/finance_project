@@ -83,5 +83,8 @@ class MarketFreshnessResponse(BaseModel):
     last_successful_ingestion_at: datetime | None
     latest_trade_date: date | None
     latest_source: str | None
+    latest_attempted_provider: str | None = None
+    latest_used_provider: str | None = None
     is_stale: bool
     stale_warning: str | None
+    backup_warning: str | None = None

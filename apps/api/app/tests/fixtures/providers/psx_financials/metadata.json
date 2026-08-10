@@ -1,0 +1,17 @@
+{
+  "provider": "PSX Financials",
+  "retrieved_at": "2026-08-10T10:01:00+05:00",
+  "parser_contract_version": "psx-financials-json-v1",
+  "source_page": {"url": "https://financials.psx.com.pk/", "method": "GET", "original_sha256": "b42b73118b0d94d731bbd4ad02d768c6996a3cdbe85c2dcaf2cc351e1dbef4e7"},
+  "fixture": {
+    "url": "https://financials.psx.com.pk/annQtrStmts.php",
+    "method": "POST",
+    "request_fields": {"name": "get_comp_y_data", "smbCode": "MEBL", "year": "2025"},
+    "content_type": "application/json",
+    "original_sha256": "415632a0c246f17500fb1a5c27861c220260f534a90a07ca6768996b68843243",
+    "sanitized_or_truncated": true,
+    "original_bytes": 577
+  },
+  "report_contract": {"url": "https://financials.psx.com.pk/lib/DownloadPDF.php?id=272066", "method": "HEAD", "status": 200, "content_type": "application/pdf", "content_disposition": "financials; filename=\"272066.pdf\""},
+  "use_note": "Bounded catalog fixture for parser tests; PDFs are discovered and stored privately with provenance, not redistributed."
+}

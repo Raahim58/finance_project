@@ -102,8 +102,11 @@ export type MarketFreshness = {
   last_successful_ingestion_at?: string | null;
   latest_trade_date?: string | null;
   latest_source?: string | null;
+  latest_attempted_provider?: string | null;
+  latest_used_provider?: string | null;
   is_stale: boolean;
   stale_warning?: string | null;
+  backup_warning?: string | null;
 };
 
 export type Portfolio = {

@@ -16,9 +16,18 @@ Copy the generated Fernet key into `ENCRYPTION_KEY`.
 Set market ingestion mode in `.env`:
 
 ```bash
-MARKET_DATA_MODE=mock
+MARKET_DATA_MODE=auto
 MARKET_DATA_REFRESH_SECONDS=300
+SOURCE_ARTIFACT_ROOT=./data/artifacts
 ```
+
+Supported market modes:
+
+- `mock` for local development and deterministic tests
+- `dps` for verified direct PSX DPS ingestion
+- `yahoo` for direct Yahoo Finance ingestion using `.KA` symbol mapping
+- `auto` to try DPS first and fall back to Yahoo if needed
+- `psxdata` for temporary compatibility/comparison only
 
 Run tests:
 
@@ -85,7 +94,17 @@ source .venv/bin/activate
 python -m app.jobs.compute_market_stats
 ```
 
-`MARKET_DATA_MODE=mock` is only for local development. Use `dps` or `vendor` when a current-data adapter is configured.
+`MARKET_DATA_MODE=mock` is only for local development. For current data, prefer `dps` or `auto`. Raw artifacts are content-addressed under `SOURCE_ARTIFACT_ROOT`. `vendor` remains disabled until a real contract is verified.
+
+Migration and verification commands:
+
+```bash
+cd apps/api
+alembic upgrade head
+pytest -q app/tests
+```
+
+The four workstation migrations deliberately persist audit/reproduction-sensitive optimizer, scenario, and recommendation state. Routine dashboard analytics remain calculated/cached.
 
 Ingest a Phase 4 local text/Markdown document:
 

@@ -60,6 +60,7 @@ def test_ingest_text_document_and_search_returns_citations(client):
 
     search = client.post(
         "/rag/search",
+        headers=headers,
         json={
             "query": "Islamic banking deposit growth",
             "symbols": ["MEBL"],
@@ -97,6 +98,7 @@ def test_rag_filters_and_empty_results(client):
 
     no_symbol_match = client.post(
         "/rag/search",
+        headers=headers,
         json={"query": "cloud services", "symbols": ["MEBL"], "limit": 5},
     )
     assert no_symbol_match.status_code == 200
@@ -104,6 +106,7 @@ def test_rag_filters_and_empty_results(client):
 
     no_content_match = client.post(
         "/rag/search",
+        headers=headers,
         json={"query": "cement clinker dispatches", "symbols": ["SYS"], "limit": 5},
     )
     assert no_content_match.status_code == 200
@@ -127,10 +130,24 @@ def test_document_list_and_detail(client):
     assert created.status_code == 201
     document_id = created.json()["id"]
 
-    docs = client.get("/documents?symbol=FFC")
+    docs = client.get("/documents?symbol=FFC", headers=headers)
     assert docs.status_code == 200
     assert docs.json()[0]["id"] == document_id
 
-    detail = client.get(f"/documents/{document_id}")
+    detail = client.get(f"/documents/{document_id}", headers=headers)
     assert detail.status_code == 200
     assert detail.json()["title"] == "FFC Investor Note"
+
+
+def test_private_documents_do_not_cross_users(client):
+    _seed_companies()
+    owner = _auth_headers(client)
+    other_signup = client.post("/auth/signup", json={"email": "rag-other@example.com", "password": "password123"})
+    other = {"Authorization": f"Bearer {other_signup.json()['access_token']}"}
+    created = client.post("/documents/ingest-text", headers=owner, json={"title": "Private note", "document_type": "note", "symbol": "MEBL", "source_name": "User", "text": "private liquidity concern evidence"})
+    assert created.status_code == 201
+    assert created.json()["visibility"] == "private"
+    assert client.get(f"/documents/{created.json()['id']}", headers=other).status_code == 404
+    search = client.post("/rag/search", headers=other, json={"query": "private liquidity concern"})
+    assert search.status_code == 200
+    assert search.json()["chunks"] == []

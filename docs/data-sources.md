@@ -1,38 +1,54 @@
 # Data Sources
 
-The app is designed for automatic current-data ingestion. Mock data is only a development and testing fallback.
+The production architecture is current-data oriented. `mock` is development-only. A provider is enabled only after this sequence succeeds:
 
-Planned source modes:
+```text
+inspect the live source
+  -> record the actual request/response contract
+  -> capture a bounded fixture plus original hash/metadata
+  -> implement semantic validation and parsing
+  -> pass offline fixture tests
+  -> enable the adapter
+```
 
-- Manual CSV or Excel import for MVP workflows
-- DPS daily downloads parser where legally and technically appropriate
-- Vendor/API adapter with configurable base URL and key
-- Mock data generator for demos and tests: implemented in `python -m app.jobs.ingest_psx_mock --days 365`
+No endpoint, form field, selector, download URL, unit, or date convention may be guessed. Raw responses from enabled ingestion runs are stored content-addressed under `SOURCE_ARTIFACT_ROOT`; the database records source URL, SHA-256, parser version, content type, effective time, and storage path.
 
-Required runtime settings:
+## Provider status
 
-- `MARKET_DATA_MODE=mock|dps|vendor`
-- `MARKET_DATA_REFRESH_SECONDS`
+| Source | Status | Observed contract and precedence |
+|---|---|---|
+| PSX DPS | Enabled, primary | `GET /symbols`; `POST /historical` with either `date` or `month/year/symbol`; `POST /daily-downloads`; `GET /timeseries/eod/{symbol}`. DPS date-wise OHLCV is canonical. Impossible rows are quarantined. |
+| DPS symbol-price ZIP | Disabled | Its URL was discovered from the live manifest, but ordinary direct and cookie/referer requests returned HTTP 403. No bypass is attempted. |
+| PSX Financials | Enabled | `POST annQtrStmts.php` using observed `get_yearly_data`, `get_comp_data`, and `get_comp_y_data` forms. Report links are accepted only when they match the observed `lib/DownloadPDF.php?id=...` contract and return a PDF. |
+| SCSTrade | Enabled, supplemental | JSON POST to `MS_HistoricalPrices.aspx/chart` with `par`, `date1`, and `date2`. Form encoding returned HTML and is not used. Never outranks DPS. |
+| PBS Price Statistics | Enabled | Workbook URL discovered from the current official catalog; `Items 1-51` title/header/average-price contracts are validated. |
+| World Bank Pink Sheet | Enabled | Monthly workbook URL discovered from the current official catalog; `Monthly Prices` title/update/name/unit rows are validated. |
+| Mettis Global | Enabled, metadata only | Static `/latest/` listing plus per-article `NewsArticle` JSON-LD. Store headline, canonical URL, timestamp, author, and visible summary only—not article bodies. |
+| Yahoo/yfinance | Degraded fallback | Unofficial `.KA` fallback only. The latest live verification hit an explicit rate limit; it must never silently outrank DPS. |
+| NCCPL | Manual import only | Ordinary access returned Cloudflare HTTP 403. No browser automation or anti-bot bypass is used. |
+| IMF RSS | Disabled | The current Social Hub links to an RSS directory that redirects to an error page. Re-enable only after a working official feed is observed and fixture-tested. |
+| `psxdata` | Compatibility/comparison only | It wraps DPS and is not canonical. Retire after direct DPS parity is complete. |
+| Vendor | Disabled placeholder | Requires an explicit verified contract and credentials. |
 
-Required ingestion entrypoint:
+Fixture sidecars live under `apps/api/app/tests/fixtures/providers/`. They record URLs, methods, non-secret request fields, retrieval timestamps, original hashes, truncation status, parser versions, and use notes.
 
-- `python -m app.jobs.scheduler`
+## Runtime settings
 
-No paid vendor API key or secret should be committed. Data source adapters must fail gracefully when a source changes or is unavailable.
+```bash
+MARKET_DATA_MODE=auto
+MARKET_DATA_DEFAULT_SYMBOLS=MEBL,SYS,OGDC
+MARKET_DATA_REFRESH_SECONDS=300
+SOURCE_ARTIFACT_ROOT=./data/artifacts
+```
 
-Current market tables:
+`auto` tries verified DPS first and uses Yahoo only as a labeled fallback. Exact prices, rankings, freshness, and sector statistics come from database queries. No live index value is synthesized from constituent averages.
 
-- `exchanges`
-- `companies`
-- `market_prices`
-- `market_snapshots`
-- `sector_daily_stats`
+## Commands
 
-Current implementation details:
+```bash
+cd apps/api
+python -m app.jobs.scheduler --once
+python -m app.jobs.scheduler
+```
 
-- `mock` mode is implemented and intended only for development.
-- `dps` and `vendor` modes are explicit adapter paths and scheduler modes, but still placeholder integrations until a real source contract is wired.
-- Freshness is tracked in `market_ingestion_runs`.
-- The frontend now consumes freshness status and surfaces stale/mock warnings.
-
-Manual portfolio entry remains the MVP fallback. Future broker portfolio sync should use official APIs or partnerships, not password scraping or broker-site automation.
+Manual portfolio entry remains the broker fallback. Never use password scraping or password-based broker automation.

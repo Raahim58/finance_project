@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field
 
 class DocumentResponse(BaseModel):
     id: str
+    visibility: str
+    portfolio_id: str | None
     symbol: str | None
     sector: str | None
     document_type: str
@@ -33,6 +35,8 @@ class DocumentIngestRequest(BaseModel):
     source_name: str = Field(default="manual", max_length=120)
     source_url: str | None = Field(default=None, max_length=500)
     published_date: date | None = None
+    visibility: str = Field(default="private", pattern="^(public|private)$")
+    portfolio_id: str | None = None
 
 
 class CitationResponse(BaseModel):

@@ -123,7 +123,8 @@ class MarketIngestionRun(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     mode: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    source: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    attempted_provider: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    used_provider: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False

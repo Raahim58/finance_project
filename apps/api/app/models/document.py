@@ -15,6 +15,9 @@ class Document(Base):
     __tablename__ = "documents"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    owner_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    portfolio_id: Mapped[str | None] = mapped_column(ForeignKey("portfolios.id"), nullable=True, index=True)
+    visibility: Mapped[str] = mapped_column(String(20), default="public", nullable=False, index=True)
     company_id: Mapped[str | None] = mapped_column(ForeignKey("companies.id"), nullable=True, index=True)
     symbol: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
     sector: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)

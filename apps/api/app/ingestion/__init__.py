@@ -1,0 +1,1 @@
+"""Verified-source ingestion primitives."""

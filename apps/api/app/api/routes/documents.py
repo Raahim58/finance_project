@@ -17,18 +17,19 @@ def documents(
     symbol: str | None = None,
     document_type: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[DocumentResponse]:
-    return list_documents(db, symbol=symbol, document_type=document_type, limit=limit)
+    return list_documents(db, current_user, symbol=symbol, document_type=document_type, limit=limit)
 
 
 @router.post("/ingest-text", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
 def post_text_document(
     payload: DocumentIngestRequest,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DocumentResponse:
-    return ingest_text_document(db, payload)
+    return ingest_text_document(db, current_user, payload)
 
 
 @router.post("/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
@@ -43,7 +44,9 @@ async def upload_document(
     source_name: str = Form(default="manual"),
     source_url: str | None = Form(default=None),
     published_date: date | None = Form(default=None),
-    _current_user: User = Depends(get_current_user),
+    visibility: str = Form(default="private", pattern="^(public|private)$"),
+    portfolio_id: str | None = Form(default=None),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DocumentResponse:
     return await ingest_upload(
@@ -58,9 +61,12 @@ async def upload_document(
         source_name=source_name,
         source_url=source_url,
         published_date=published_date,
+        user=current_user,
+        visibility=visibility,
+        portfolio_id=portfolio_id,
     )
 
 
 @router.get("/{document_id}", response_model=DocumentResponse)
-def document(document_id: str, db: Session = Depends(get_db)) -> DocumentResponse:
-    return get_document(db, document_id)
+def document(document_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentResponse:
+    return get_document(db, current_user, document_id)

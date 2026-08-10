@@ -1,0 +1,19 @@
+{
+  "provider": "PSX DPS",
+  "retrieved_at": "2026-08-10T09:54:19+05:00",
+  "parser_contract_version": "dps-html-v1",
+  "purpose": "Observed public contracts for universe, EOD time series, date-wise OHLCV, symbol history, and the daily download manifest.",
+  "use_note": "Bounded samples retained for parser regression tests for a personal, non-commercial application. Full responses are not redistributed.",
+  "fixtures": {
+    "symbols.sample.json": {"url": "https://dps.psx.com.pk/symbols", "method": "GET", "content_type": "application/json", "original_sha256": "03cb446e26a19b9e93f4dedb2d9694b63768ff77eb36ef69855c12995a687f35", "sanitized_or_truncated": true, "original_bytes": 129677},
+    "timeseries_eod_mebl.sample.json": {"url": "https://dps.psx.com.pk/timeseries/eod/MEBL", "method": "GET", "content_type": "application/json", "original_sha256": "c9c8e2d446d0d5659aea6e3d7a501835fa13629ed3a477a4a366d5c2d83e2e42", "sanitized_or_truncated": true, "original_rows": 1239},
+    "historical_date.sample.html": {"url": "https://dps.psx.com.pk/historical", "method": "POST", "request_fields": {"date": "2026-08-07"}, "content_type": "text/html", "original_sha256": "0f6f5bafb5155721dcbe014b16ac1da4a6500975efda8e94faadc0c82e78f3b7", "sanitized_or_truncated": true, "original_rows": 615},
+    "historical_mebl.sample.html": {"url": "https://dps.psx.com.pk/historical", "method": "POST", "request_fields": {"month": "8", "year": "2026", "symbol": "MEBL"}, "content_type": "text/html", "original_sha256": "61748420812e97353b85ff444add5035e4de442f663685e4777f0209d2d878cb", "sanitized_or_truncated": true},
+    "daily_manifest.sample.html": {"url": "https://dps.psx.com.pk/daily-downloads", "method": "POST", "request_fields": {"date": "2026-08-07"}, "content_type": "text/html", "original_sha256": "8374c46724a2282c16fa056bfe809b9dd6043d3b16d105fe5013a3f493670538", "sanitized_or_truncated": true, "original_links": 27}
+  },
+  "observations": [
+    "The EOD JSON arrays are [unix timestamp, close, volume, open] and are reverse ordered; they do not contain high or low.",
+    "The date-wise historical HTML contains authoritative LDCP/OHLCV fields and identifies debt rows via data-type.",
+    "The symbol-price ZIP URL was discovered from the manifest but returned HTTP 403 in both direct and ordinary cookie/referer sessions, so archive ingestion remains disabled rather than bypassed."
+  ]
+}

@@ -117,6 +117,7 @@ export default function MarketPage() {
           <h1 className="text-2xl font-semibold text-ink">Market</h1>
           <p className="mt-2 text-sm text-muted">
             Data mode: {freshness?.market_data_mode ?? "unknown"}.
+            {" "}Provider: {freshness?.latest_used_provider ?? freshness?.latest_source ?? "unknown"}.
             {" "}Latest trade date: {freshness?.latest_trade_date ?? "not available"}.
             {" "}Last updated: {freshness?.last_successful_ingestion_at ?? "not available"}.
           </p>
@@ -132,6 +133,12 @@ export default function MarketPage() {
       {freshness?.stale_warning ? (
         <p className="rounded-md border border-line bg-white px-4 py-3 text-sm text-warn">
           {freshness.stale_warning}
+        </p>
+      ) : null}
+
+      {freshness?.backup_warning ? (
+        <p className="rounded-md border border-line bg-white px-4 py-3 text-sm text-muted">
+          {freshness.backup_warning}
         </p>
       ) : null}
 
