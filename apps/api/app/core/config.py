@@ -16,9 +16,16 @@ class Settings(BaseSettings):
     encryption_key: str = "dev-only-invalid-key"
     market_data_mode: str = "mock"
     market_data_refresh_seconds: int = 300
+    market_history_years: int = 5
+    market_history_bootstrap_enabled: bool = True
+    scheduled_research_enabled: bool = True
+    research_report_limit_per_run: int = 20
     source_artifact_root: str = "./data/artifacts"
     embedding_dimensions: int = 384
-    assistant_max_tool_iterations: int = 6
+    embedding_backend: str = "hash"
+    embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    assistant_max_tool_iterations: int = 12
+    assistant_max_tool_cost_units: int = 18
     assistant_max_retrieved_chunks: int = 8
     assistant_timeout_seconds: int = 30
     market_data_default_symbols: Annotated[list[str], NoDecode] = Field(default_factory=list)
@@ -49,6 +56,14 @@ class Settings(BaseSettings):
         normalized = value.lower().strip()
         if normalized not in {"mock", "psxdata", "yahoo", "auto", "dps", "vendor"}:
             raise ValueError("MARKET_DATA_MODE must be one of: mock, psxdata, yahoo, auto, dps, vendor")
+        return normalized
+
+    @field_validator("embedding_backend")
+    @classmethod
+    def validate_embedding_backend(cls, value: str) -> str:
+        normalized = value.lower().strip()
+        if normalized not in {"hash", "sentence_transformers"}:
+            raise ValueError("EMBEDDING_BACKEND must be hash or sentence_transformers")
         return normalized
 
 

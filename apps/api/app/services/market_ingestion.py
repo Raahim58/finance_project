@@ -18,6 +18,10 @@ from app.models.market import (
 )
 from app.services.market_numbers import safe_decimal, safe_int
 from app.services.market_providers import LatestPriceRow
+from app.services.canonical_market_service import (
+    persist_normalized_observations,
+    validate_observed_price,
+)
 
 MOCK_COMPANIES = [
     ("MEBL", "Meezan Bank Limited", "Banking"),
@@ -320,9 +324,11 @@ def persist_market_data(db: Session, *, latest_prices: list[LatestPriceRow], sou
     touched_dates: set[date] = set()
 
     for row in latest_prices:
+        cleaned, issues = validate_observed_price(row)
+        if issues or cleaned is None:
+            continue
         company = upsert_company_from_price_row(db, row)
         company_count += 1
-        cleaned = sanitize_market_price_values(row)
 
         price = db.scalar(
             select(MarketPrice).where(
@@ -368,6 +374,8 @@ def persist_market_data(db: Session, *, latest_prices: list[LatestPriceRow], sou
         touched_dates.add(row.trade_date)
         price_count += 1
 
+    canonical_count, rejected_count = persist_normalized_observations(db, latest_prices, source)
+
     db.flush()
 
     derived_stats = 0
@@ -379,6 +387,8 @@ def persist_market_data(db: Session, *, latest_prices: list[LatestPriceRow], sou
     return {
         "companies": company_count,
         "prices": price_count,
+        "canonical_observations": canonical_count,
+        "rejected": rejected_count,
         "derived_stats": derived_stats,
         "latest_trade_date": latest_trade_date,
     }
@@ -528,6 +538,7 @@ def run_market_data_cycle(db: Session, mode: str) -> MarketIngestionRun:
             message=str(result.get("message", f"Refreshed market data via {provider.source}.")),
         )
     except Exception as exc:
+        db.rollback()
         return record_market_ingestion_run(
             db,
             mode=provider.mode,

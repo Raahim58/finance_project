@@ -11,19 +11,20 @@ inspect the live source
   -> enable the adapter
 ```
 
-No endpoint, form field, selector, download URL, unit, or date convention may be guessed. Raw responses from enabled ingestion runs are stored content-addressed under `SOURCE_ARTIFACT_ROOT`; the database records source URL, SHA-256, parser version, content type, effective time, and storage path.
+No endpoint, form field, selector, download URL, unit, or date convention may be guessed. Raw responses are retained when the adapter exposes them. Adapters that currently return parsed rows instead create an explicitly labeled `normalized_provider_output` artifact; this is never described as raw. The database records source URL, SHA-256, parser version, content type, effective time, and storage path.
 
 ## Provider status
 
 | Source | Status | Observed contract and precedence |
 |---|---|---|
-| PSX DPS | Enabled, primary | `GET /symbols`; `POST /historical` with either `date` or `month/year/symbol`; `POST /daily-downloads`; `GET /timeseries/eod/{symbol}`. DPS date-wise OHLCV is canonical. Impossible rows are quarantined. |
+| PSX DPS | Integrated + scheduled, primary prices | Current and historical OHLCV are validated, reconciled, and selected by priority. Invalid rows become quality issues. Index history, announcements, payouts, and corporate-action discovery are not yet certified complete. |
 | DPS symbol-price ZIP | Disabled | Its URL was discovered from the live manifest, but ordinary direct and cookie/referer requests returned HTTP 403. No bypass is attempted. |
-| PSX Financials | Enabled | `POST annQtrStmts.php` using observed `get_yearly_data`, `get_comp_data`, and `get_comp_y_data` forms. Report links are accepted only when they match the observed `lib/DownloadPDF.php?id=...` contract and return a PDF. |
-| SCSTrade | Enabled, supplemental | JSON POST to `MS_HistoricalPrices.aspx/chart` with `par`, `date1`, and `date2`. Form encoding returned HTML and is not used. Never outranks DPS. |
-| PBS Price Statistics | Enabled | Workbook URL discovered from the current official catalog; `Items 1-51` title/header/average-price contracts are validated. |
-| World Bank Pink Sheet | Enabled | Monthly workbook URL discovered from the current official catalog; `Monthly Prices` title/update/name/unit rows are validated. |
-| Mettis Global | Enabled, metadata only | Static `/latest/` listing plus per-article `NewsArticle` JSON-LD. Store headline, canonical URL, timestamp, author, and visible summary only—not article bodies. |
+| PSX Financials | Integrated + daily schedule | New catalogue PDFs are content-addressed, parsed page-by-page, and indexed into public RAG. Automatic normalized `FinancialFact` table extraction is not claimed yet. |
+| SCSTrade | Integrated + weekly supplemental schedule | Verified JSON history is normalized into canonical observations at lower priority than DPS. |
+| SBP key indicators | Integrated + daily schedule | Raw official page HTML is retained. Policy rate and observed 3-month MTB cut-off yield are effective-dated; the latter is explicitly marked risk-free. Broader EasyData FX/reserve/monetary history still needs stable dataset contracts. |
+| PBS Price Statistics | Integrated + weekly schedule | The current parser covers the official monthly SPI item workbook. Broader CPI/release/revision coverage remains incomplete. |
+| World Bank Pink Sheet | Integrated + monthly schedule | Monthly commodity workbook rows are persisted with artifact provenance. |
+| Mettis Global | Integrated + daily metadata schedule | Headline, canonical URL, timestamp, author, and visible summary become sourced events/documents. Article bodies are not republished. |
 | Yahoo/yfinance | Degraded fallback | Unofficial `.KA` fallback only. The latest live verification hit an explicit rate limit; it must never silently outrank DPS. |
 | NCCPL | Manual import only | Ordinary access returned Cloudflare HTTP 403. No browser automation or anti-bot bypass is used. |
 | IMF RSS | Disabled | The current Social Hub links to an RSS directory that redirects to an error page. Re-enable only after a working official feed is observed and fixture-tested. |
@@ -38,6 +39,9 @@ Fixture sidecars live under `apps/api/app/tests/fixtures/providers/`. They recor
 MARKET_DATA_MODE=auto
 MARKET_DATA_DEFAULT_SYMBOLS=MEBL,SYS,OGDC
 MARKET_DATA_REFRESH_SECONDS=300
+MARKET_HISTORY_YEARS=5
+MARKET_HISTORY_BOOTSTRAP_ENABLED=true
+SCHEDULED_RESEARCH_ENABLED=true
 SOURCE_ARTIFACT_ROOT=./data/artifacts
 ```
 
@@ -49,6 +53,7 @@ SOURCE_ARTIFACT_ROOT=./data/artifacts
 cd apps/api
 python -m app.jobs.scheduler --once
 python -m app.jobs.scheduler
+python -m app.jobs.backfill_market_history --provider dps --symbols MEBL,SYS --start 2021-01-01 --end 2026-08-10
 ```
 
 Manual portfolio entry remains the broker fallback. Never use password scraping or password-based broker automation.

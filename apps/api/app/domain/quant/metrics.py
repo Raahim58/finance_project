@@ -5,6 +5,9 @@ import numpy as np
 
 @dataclass(frozen=True)
 class RiskMetrics:
+    arithmetic_expected_return: float
+    realized_cagr: float | None
+    downside_target_annual: float
     annual_return: float
     annual_volatility: float
     downside_deviation: float
@@ -68,15 +71,45 @@ def correlation_matrix(returns: np.ndarray) -> np.ndarray:
     return np.atleast_2d(np.corrcoef(returns, rowvar=False))
 
 
-def regression_metrics(asset_returns: np.ndarray, benchmark_returns: np.ndarray, annualization: int = 252) -> dict[str, float | int]:
+def _daily_rate(annual_rate: float, annualization: int) -> float:
+    if annual_rate <= -1:
+        raise ValueError("Annual rates must be greater than -100%")
+    return float((1 + annual_rate) ** (1 / annualization) - 1)
+
+
+def realized_cagr(returns: np.ndarray, annualization: int = 252) -> float | None:
+    values = _finite(returns)
+    terminal_wealth = float(np.prod(1 + values))
+    if terminal_wealth <= 0:
+        return None
+    return float(terminal_wealth ** (annualization / values.size) - 1)
+
+
+def regression_metrics(
+    asset_returns: np.ndarray,
+    benchmark_returns: np.ndarray,
+    annualization: int = 252,
+    risk_free_rate: float = 0.0,
+) -> dict[str, float | int]:
     asset = _finite(asset_returns, 60)
     benchmark = _finite(benchmark_returns, 60)
     if asset.shape != benchmark.shape:
         raise ValueError("Asset and benchmark returns must be aligned")
-    design = np.column_stack([np.ones(asset.size), benchmark])
-    alpha_daily, beta = np.linalg.lstsq(design, asset, rcond=None)[0]
-    residuals = asset - design @ np.array([alpha_daily, beta])
-    return {"alpha": float(alpha_daily * annualization), "beta": float(beta), "residual_volatility": float(np.std(residuals, ddof=2) * np.sqrt(annualization)), "sample_size": int(asset.size)}
+    daily_risk_free = _daily_rate(risk_free_rate, annualization)
+    asset_excess = asset - daily_risk_free
+    benchmark_excess = benchmark - daily_risk_free
+    design = np.column_stack([np.ones(asset.size), benchmark_excess])
+    alpha_daily, beta = np.linalg.lstsq(design, asset_excess, rcond=None)[0]
+    residuals = asset_excess - design @ np.array([alpha_daily, beta])
+    return {
+        "alpha": float(alpha_daily * annualization),
+        "jensen_alpha": float(alpha_daily * annualization),
+        "beta": float(beta),
+        "residual_volatility": float(np.std(residuals, ddof=2) * np.sqrt(annualization)),
+        "sample_size": int(asset.size),
+        "risk_free_rate": risk_free_rate,
+        "regression": "asset_excess_on_benchmark_excess",
+    }
 
 
 def capm_required_return(beta: float, risk_free_rate: float, market_expected_return: float) -> float:
@@ -92,7 +125,11 @@ def tail_risk(returns: np.ndarray, confidence: float) -> tuple[float, float]:
     return float(-cutoff), float(-np.mean(tail))
 
 
-def risk_metrics(returns: list[float] | np.ndarray, annualization: int = 252) -> RiskMetrics:
+def risk_metrics(
+    returns: list[float] | np.ndarray,
+    annualization: int = 252,
+    downside_target_annual: float = 0.0,
+) -> RiskMetrics:
     values = _finite(np.asarray(returns, dtype=float))
     var95, es95 = tail_risk(values, 0.95)
     var99, es99 = tail_risk(values, 0.99)
@@ -100,11 +137,17 @@ def risk_metrics(returns: list[float] | np.ndarray, annualization: int = 252) ->
     standard = float(np.std(values, ddof=1))
     skewness = float(np.mean(centered**3) / standard**3) if standard else 0.0
     excess_kurtosis = float(np.mean(centered**4) / standard**4 - 3) if standard else 0.0
-    downside = values[values < 0]
+    target_daily = _daily_rate(downside_target_annual, annualization)
+    downside_shortfall = np.minimum(values - target_daily, 0.0)
+    arithmetic_return = float(np.mean(values) * annualization)
     return RiskMetrics(
-        annual_return=float(np.mean(values) * annualization),
+        arithmetic_expected_return=arithmetic_return,
+        realized_cagr=realized_cagr(values, annualization),
+        downside_target_annual=downside_target_annual,
+        # Compatibility alias. New clients should use arithmetic_expected_return.
+        annual_return=arithmetic_return,
         annual_volatility=float(standard * np.sqrt(annualization)),
-        downside_deviation=float(np.sqrt(np.mean(downside**2)) * np.sqrt(annualization)) if downside.size else 0.0,
+        downside_deviation=float(np.sqrt(np.mean(downside_shortfall**2)) * np.sqrt(annualization)),
         max_drawdown=float(np.min(drawdown_series(values))),
         historical_var_95=var95,
         historical_es_95=es95,
@@ -121,7 +164,11 @@ def performance_ratios(returns: np.ndarray, *, risk_free_rate: float = 0.0, benc
     values = _finite(returns)
     annual_return = float(np.mean(values) * annualization)
     volatility = float(np.std(values, ddof=1) * np.sqrt(annualization))
-    result: dict[str, float | None] = {"sharpe": (annual_return - risk_free_rate) / volatility if volatility else None}
+    result: dict[str, float | None] = {
+        "arithmetic_expected_return": annual_return,
+        "realized_cagr": realized_cagr(values, annualization),
+        "sharpe": (annual_return - risk_free_rate) / volatility if volatility else None,
+    }
     if benchmark_returns is None:
         result.update({"tracking_error": None, "information_ratio": None, "treynor": None, "jensen_alpha": None, "m2": None})
         return result
@@ -130,14 +177,14 @@ def performance_ratios(returns: np.ndarray, *, risk_free_rate: float = 0.0, benc
         raise ValueError("Benchmark returns must be aligned")
     active = values - benchmark
     tracking_error = float(np.std(active, ddof=1) * np.sqrt(annualization))
-    regression = regression_metrics(values, benchmark)
+    regression = regression_metrics(values, benchmark, annualization, risk_free_rate)
     beta = float(regression["beta"])
     benchmark_vol = float(np.std(benchmark, ddof=1) * np.sqrt(annualization))
     result.update({
         "tracking_error": tracking_error,
         "information_ratio": float(np.mean(active) * annualization / tracking_error) if tracking_error else None,
         "treynor": (annual_return - risk_free_rate) / beta if beta else None,
-        "jensen_alpha": float(regression["alpha"]),
+        "jensen_alpha": float(regression["jensen_alpha"]),
         "m2": risk_free_rate + ((annual_return - risk_free_rate) / volatility * benchmark_vol) if volatility else None,
     })
     return result

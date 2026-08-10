@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.models.market import Company, MarketPrice
+from app.models.market import Company
 from app.models.portfolio import Portfolio, PortfolioHolding, PortfolioTransaction
-from app.models.workstation import Instrument, PortfolioCashAccount
+from app.models.workstation import (
+    CorporateAction,
+    Instrument,
+    PortfolioCashAccount,
+    PortfolioCashSnapshot,
+    PortfolioPositionSnapshot,
+)
+from app.services.canonical_market_service import latest_price
 
 
 ZERO = Decimal("0")
@@ -48,7 +55,8 @@ def instrument_for_symbol(db: Session, symbol: str) -> Instrument:
 
 
 def baseline_date(db: Session, symbol: str) -> date:
-    return db.scalar(select(func.max(MarketPrice.trade_date)).where(func.upper(MarketPrice.symbol) == symbol.upper())) or date.today()
+    observed = latest_price(db, symbol)
+    return observed.trade_date if observed else date.today()
 
 
 def ensure_cash_account(db: Session, portfolio: Portfolio, currency: str | None = None) -> PortfolioCashAccount:
@@ -88,7 +96,11 @@ def replay_positions(db: Session, portfolio_id: str, as_of: date | None = None) 
         if row.transaction_type in {"sell"}:
             state.quantity -= quantity
         elif row.transaction_type == "corporate_action":
+            # ``quantity`` is the split/consolidation multiplier.  Economic cost
+            # basis is unchanged, so per-unit cost moves inversely with quantity.
             state.quantity *= quantity
+            if quantity > 0:
+                state.average_cost /= quantity
         else:
             new_quantity = state.quantity + quantity
             if row.transaction_type == "manual_adjustment" and price > 0:
@@ -108,6 +120,9 @@ def cash_balance(db: Session, portfolio_id: str, currency: str = "PKR", as_of: d
     for row in rows:
         if row.id in reversed_ids or row.reversal_of_id or row.currency.upper() != currency.upper() or row.transaction_type not in CASH_TYPES:
             continue
+        effective_cash_date = row.settlement_date if row.transaction_type in {"buy", "sell"} and row.settlement_date else row.transaction_date
+        if as_of is not None and effective_cash_date > as_of:
+            continue
         amount = Decimal(row.amount or ZERO)
         fees = Decimal(row.fees or ZERO)
         taxes = Decimal(row.taxes or ZERO)
@@ -122,6 +137,157 @@ def cash_balance(db: Session, portfolio_id: str, currency: str = "PKR", as_of: d
         elif row.transaction_type == "opening_balance" and row.symbol == "CASH":
             balance += amount
     return balance
+
+
+def external_flow(db: Session, portfolio_id: str, start_exclusive: date | None, end_inclusive: date) -> Decimal:
+    """Return signed external capital added during a valuation period.
+
+    Deposits and transferred-in opening/manual positions are positive. Withdrawals
+    and transferred-out manual positions are negative. Trades, income, expenses,
+    and corporate actions are portfolio activity rather than external capital.
+    """
+    rows = _transactions(db, portfolio_id, end_inclusive)
+    reversed_ids = {row.reversal_of_id for row in rows if row.reversal_of_id}
+    flow = ZERO
+    for row in rows:
+        if row.id in reversed_ids or row.reversal_of_id:
+            continue
+        if start_exclusive is not None and row.transaction_date <= start_exclusive:
+            continue
+        amount = Decimal(row.amount or ZERO)
+        if row.transaction_type == "deposit":
+            flow += amount
+        elif row.transaction_type == "withdrawal":
+            flow -= amount
+        elif row.transaction_type == "opening_balance":
+            flow += amount if row.symbol == "CASH" else Decimal(row.quantity or ZERO) * Decimal(row.price or ZERO)
+        elif row.transaction_type == "manual_adjustment":
+            flow += Decimal(row.quantity or ZERO) * Decimal(row.price or ZERO)
+    return flow
+
+
+def net_external_contributions(db: Session, portfolio_id: str, as_of: date | None = None) -> Decimal:
+    return external_flow(db, portfolio_id, None, as_of or date.today())
+
+
+def generate_portfolio_snapshot(
+    db: Session,
+    portfolio: Portfolio,
+    snapshot_date: date,
+    source_transaction_id: str | None = None,
+) -> None:
+    """Idempotently materialize ledger-derived position and cash state for a date."""
+    positions = replay_positions(db, portfolio.id, snapshot_date)
+    existing_positions = {
+        row.instrument_id: row
+        for row in db.scalars(
+            select(PortfolioPositionSnapshot).where(
+                PortfolioPositionSnapshot.portfolio_id == portfolio.id,
+                PortfolioPositionSnapshot.snapshot_date == snapshot_date,
+            )
+        )
+    }
+    for state in positions.values():
+        row = existing_positions.pop(state.instrument_id, None)
+        if row is None:
+            row = PortfolioPositionSnapshot(
+                portfolio_id=portfolio.id,
+                instrument_id=state.instrument_id,
+                snapshot_date=snapshot_date,
+                quantity=state.quantity,
+                average_cost=state.average_cost,
+            )
+        else:
+            row.quantity = state.quantity
+            row.average_cost = state.average_cost
+        row.source_transaction_id = source_transaction_id
+        db.add(row)
+    for obsolete in existing_positions.values():
+        db.delete(obsolete)
+
+    accounts = list(
+        db.scalars(
+            select(PortfolioCashAccount).where(PortfolioCashAccount.portfolio_id == portfolio.id)
+        )
+    )
+    for account in accounts:
+        row = db.scalar(
+            select(PortfolioCashSnapshot).where(
+                PortfolioCashSnapshot.cash_account_id == account.id,
+                PortfolioCashSnapshot.snapshot_date == snapshot_date,
+            )
+        )
+        if row is None:
+            row = PortfolioCashSnapshot(cash_account_id=account.id, snapshot_date=snapshot_date, balance=ZERO)
+        row.balance = cash_balance(db, portfolio.id, account.currency, snapshot_date)
+        row.source_transaction_id = source_transaction_id
+        db.add(row)
+    db.flush()
+
+
+def generate_daily_snapshots(db: Session, snapshot_date: date | None = None) -> int:
+    target = snapshot_date or date.today()
+    portfolios = list(db.scalars(select(Portfolio).where(Portfolio.archived_at.is_(None))))
+    for portfolio in portfolios:
+        ensure_cash_account(db, portfolio)
+        generate_portfolio_snapshot(db, portfolio, target)
+    db.commit()
+    return len(portfolios)
+
+
+def apply_recorded_corporate_actions(db: Session, through_date: date | None = None) -> dict[str, int]:
+    """Apply only structured, recorded actions to entitled ledger positions.
+
+    Supported contracts are explicit: split/consolidation requires
+    ``split_multiplier`` and cash dividend requires ``cash_per_share``. Unknown
+    action payloads are counted as unsupported rather than guessed.
+    """
+    import json
+
+    cutoff = through_date or date.today()
+    actions = list(db.scalars(select(CorporateAction).where(CorporateAction.effective_date <= cutoff).order_by(CorporateAction.effective_date)))
+    applied = skipped = unsupported = 0
+    affected: dict[str, tuple[Portfolio, date, str]] = {}
+    portfolios = list(db.scalars(select(Portfolio).where(Portfolio.archived_at.is_(None))))
+    for action in actions:
+        instrument = db.get(Instrument, action.instrument_id)
+        if instrument is None or instrument.company_id is None:
+            unsupported += 1
+            continue
+        details = json.loads(action.details_json)
+        action_type = action.action_type.lower()
+        transaction_date = action.payment_date if action_type in {"cash_dividend", "dividend"} and action.payment_date else action.effective_date
+        for portfolio in portfolios:
+            external_id = f"corporate_action:{action.id}"
+            if db.scalar(select(PortfolioTransaction.id).where(PortfolioTransaction.portfolio_id == portfolio.id, PortfolioTransaction.external_id == external_id)):
+                skipped += 1
+                continue
+            entitlement_date = action.ex_date or action.effective_date
+            state = replay_positions(db, portfolio.id, entitlement_date - timedelta(days=1)).get(instrument.symbol)
+            if state is None or state.quantity <= 0:
+                continue
+            if action_type in {"split", "stock_split", "consolidation"} and details.get("split_multiplier"):
+                multiplier = Decimal(str(details["split_multiplier"]))
+                if multiplier <= 0:
+                    unsupported += 1
+                    continue
+                transaction = PortfolioTransaction(portfolio_id=portfolio.id, company_id=instrument.company_id, instrument_id=instrument.id, symbol=instrument.symbol, transaction_type="corporate_action", quantity=multiplier, price=ZERO, amount=ZERO, transaction_date=transaction_date, source="recorded_corporate_action", currency=portfolio.base_currency, external_id=external_id, notes=f"Applied corporate action {action.id}")
+            elif action_type in {"cash_dividend", "dividend"} and details.get("cash_per_share") is not None:
+                cash_per_share = Decimal(str(details["cash_per_share"]))
+                if cash_per_share < 0:
+                    unsupported += 1
+                    continue
+                transaction = PortfolioTransaction(portfolio_id=portfolio.id, company_id=instrument.company_id, instrument_id=instrument.id, symbol=instrument.symbol, transaction_type="dividend", quantity=state.quantity, price=cash_per_share, amount=state.quantity * cash_per_share, transaction_date=transaction_date, source="recorded_corporate_action", currency=portfolio.base_currency, external_id=external_id, notes=f"Applied corporate action {action.id}")
+            else:
+                unsupported += 1
+                continue
+            db.add(transaction); db.flush(); applied += 1
+            affected[portfolio.id] = (portfolio, transaction_date, transaction.id)
+    for portfolio, transaction_date, transaction_id in affected.values():
+        rebuild_holding_projection(db, portfolio)
+        generate_portfolio_snapshot(db, portfolio, transaction_date, transaction_id)
+    db.commit()
+    return {"applied": applied, "already_applied": skipped, "unsupported": unsupported}
 
 
 def rebuild_holding_projection(db: Session, portfolio: Portfolio) -> list[PortfolioHolding]:
@@ -180,6 +346,7 @@ def record_holding_adjustment(
     portfolio.history_start = portfolio.history_start or transaction.transaction_date
     portfolio.history_complete = False
     rebuild_holding_projection(db, portfolio)
+    generate_portfolio_snapshot(db, portfolio, transaction.transaction_date, transaction.id)
     return transaction
 
 
@@ -208,4 +375,5 @@ def reverse_transaction(db: Session, row: PortfolioTransaction, notes: str = "Re
     portfolio = db.get(Portfolio, row.portfolio_id)
     if portfolio:
         rebuild_holding_projection(db, portfolio)
+        generate_portfolio_snapshot(db, portfolio, reversal.transaction_date, reversal.id)
     return reversal

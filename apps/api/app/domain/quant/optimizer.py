@@ -51,11 +51,14 @@ def _convex_optimize(
     betas: np.ndarray | None,
     lower: np.ndarray,
     upper: np.ndarray,
+    linear_upper_bounds: list[tuple[np.ndarray, float, str]] | None = None,
 ) -> OptimizationResult:
     count = covariance.shape[0]
     weights = cp.Variable(count)
     variance = cp.quad_form(weights, cp.psd_wrap(covariance))
     constraints = [cp.sum(weights) == 1, weights >= lower, weights <= upper]
+    for coefficients, limit, _label in linear_upper_bounds or []:
+        constraints.append(np.asarray(coefficients, dtype=float) @ weights <= float(limit))
     if target_return is not None:
         if expected_returns is None:
             raise ValueError("Target return requires expected returns")
@@ -74,7 +77,7 @@ def _convex_optimize(
     problem = cp.Problem(expression, constraints)
     solver, attempts = _solve(problem)
     if problem.status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE} or weights.value is None:
-        return OptimizationResult("infeasible" if problem.status in {cp.INFEASIBLE, cp.INFEASIBLE_INACCURATE} else "failed", [], None, None, {"solver_attempts": attempts, "reason": str(problem.status), "constraints_relaxed": False})
+        return OptimizationResult("infeasible" if problem.status in {cp.INFEASIBLE, cp.INFEASIBLE_INACCURATE} else "failed", [], None, None, {"solver_attempts": attempts, "reason": str(problem.status), "constraints_relaxed": False, "active_group_constraints": [label for _, _, label in linear_upper_bounds or []], "nearest_relaxations": ["Increase one or more upper bounds", "Reduce minimum cash/weight requirements", "Relax target return, volatility, beta, or sector caps"]})
     values = np.asarray(weights.value, dtype=float)
     values[np.abs(values) < 1e-10] = 0
     values /= values.sum()
@@ -125,6 +128,7 @@ def optimize(
     risk_free_rate: float = 0.0,
     lower_bounds: list[float] | None = None,
     upper_bounds: list[float] | None = None,
+    linear_upper_bounds: list[tuple[np.ndarray, float, str]] | None = None,
 ) -> OptimizationResult:
     covariance = np.asarray(covariance, dtype=float)
     count = covariance.shape[0] if covariance.ndim == 2 else 0
@@ -139,6 +143,8 @@ def optimize(
         if expected_returns.shape != (count,) or not np.all(np.isfinite(expected_returns)):
             raise ValueError("Expected returns must match asset count and be finite")
     if objective in {"risk_parity", "risk_budget"}:
+        if linear_upper_bounds:
+            raise ValueError("Risk-budget objectives do not support group constraints")
         return _risk_budget_optimize(covariance, lower, upper, risk_budgets if objective == "risk_budget" else None)
     if objective == "target_return_minimum_variance" and target_return is None:
         raise ValueError("Target-return optimization requires a target")
@@ -149,11 +155,11 @@ def optimize(
             raise ValueError("Max Sharpe requires expected returns")
         candidates = []
         for target in np.linspace(float(np.min(expected_returns)), float(np.max(expected_returns)), 40):
-            candidate = _convex_optimize(covariance, "target_return_minimum_variance", expected_returns, float(target), None, None, None, lower, upper)
+            candidate = _convex_optimize(covariance, "target_return_minimum_variance", expected_returns, float(target), None, None, None, lower, upper, linear_upper_bounds)
             if candidate.status == "optimal" and candidate.volatility and candidate.expected_return is not None:
                 candidates.append(((candidate.expected_return - risk_free_rate) / candidate.volatility, candidate))
         if not candidates:
             return OptimizationResult("infeasible", [], None, None, {"reason": "no_feasible_frontier_portfolio", "constraints_relaxed": False})
         _, best = max(candidates, key=lambda item: item[0])
         return OptimizationResult(best.status, best.weights, best.expected_return, best.volatility, {**best.diagnostics, "method": "deterministic_target_return_grid", "grid_size": 40})
-    return _convex_optimize(covariance, objective, expected_returns, target_return if objective == "target_return_minimum_variance" else None, target_volatility if objective == "target_volatility_maximum_return" else None, target_beta if objective == "target_beta" else None, betas, lower, upper)
+    return _convex_optimize(covariance, objective, expected_returns, target_return, target_volatility, target_beta, betas, lower, upper, linear_upper_bounds)

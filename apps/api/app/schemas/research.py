@@ -48,3 +48,12 @@ class HistoricalReplayRequest(BaseModel):
     end_date: date
     use_current_holdings: bool = False
 
+
+class EventStudyRequest(BaseModel):
+    instrument_id: str
+    benchmark_instrument_id: str
+    event_dates: list[date] = Field(min_length=1, max_length=50)
+    estimation_window: int = Field(default=120, ge=60, le=500)
+    estimation_gap: int = Field(default=20, ge=1, le=60)
+    pre_sessions: int = Field(default=5, ge=0, le=30)
+    post_sessions: int = Field(default=5, ge=0, le=60)

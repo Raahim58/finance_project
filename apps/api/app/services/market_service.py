@@ -1,4 +1,5 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy import Select, func, select
@@ -22,7 +23,7 @@ from app.schemas.market import (
     MarketSnapshotResponse,
     SectorDailyStatsResponse,
 )
-from app.services.market_ingestion import cleanup_invalid_market_prices, sanitize_market_price_values
+from app.services.canonical_market_service import CanonicalPrice, canonical_prices_for_date, latest_price, price_series
 
 
 def serialize_exchange(exchange: Exchange) -> ExchangeResponse:
@@ -43,24 +44,23 @@ def serialize_company(company: Company) -> CompanyResponse:
     )
 
 
-def serialize_price(price: MarketPrice) -> MarketPriceResponse:
-    cleaned = sanitize_market_price_values(price)
+def serialize_price(price: MarketPrice | CanonicalPrice) -> MarketPriceResponse:
     return MarketPriceResponse(
         symbol=price.symbol,
         trade_date=price.trade_date,
-        open=cleaned["open"],
-        high=cleaned["high"],
-        low=cleaned["low"],
-        close=cleaned["close"],
-        previous_close=cleaned["previous_close"],
-        change=cleaned["change"],
-        change_percent=cleaned["change_percent"],
-        volume=cleaned["volume"],
-        value=cleaned["value"],
-        market_cap=cleaned["market_cap"],
+        open=price.open,
+        high=price.high,
+        low=price.low,
+        close=price.close,
+        previous_close=price.previous_close,
+        change=price.change,
+        change_percent=price.change_percent,
+        volume=price.volume,
+        value=price.value,
+        market_cap=price.market_cap,
         source=price.source,
         source_url=price.source_url,
-        ingested_at=price.ingested_at,
+        ingested_at=price.observed_at if isinstance(price, CanonicalPrice) else price.ingested_at,
     )
 
 
@@ -93,14 +93,14 @@ def serialize_sector_stats(stats: SectorDailyStats) -> SectorDailyStatsResponse:
 
 
 def get_latest_market_date(db: Session) -> date | None:
-    return db.scalar(select(func.max(MarketPrice.trade_date)))
+    from app.models.workstation import MarketObservation
+    observed = db.scalar(select(func.max(MarketObservation.effective_at)).where(MarketObservation.is_selected.is_(True), MarketObservation.frequency == "daily"))
+    return observed.date() if observed else db.scalar(select(func.max(MarketPrice.trade_date)))
 
 
 def resolve_market_date(db: Session, requested_date: date | None) -> date:
-    cleanup_invalid_market_prices(db)
     if requested_date:
-        exists = db.scalar(select(MarketPrice.id).where(MarketPrice.trade_date == requested_date).limit(1))
-        if exists:
+        if canonical_prices_for_date(db, requested_date) or db.scalar(select(MarketPrice.id).where(MarketPrice.trade_date == requested_date).limit(1)):
             return requested_date
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -128,30 +128,49 @@ def _price_query(trade_date: date) -> Select[tuple[MarketPrice]]:
     return select(MarketPrice).where(MarketPrice.trade_date == trade_date)
 
 
+def _prices_for_date(db: Session, trade_date: date) -> list[MarketPrice | CanonicalPrice]:
+    canonical = canonical_prices_for_date(db, trade_date)
+    if canonical:
+        return canonical
+    return list(db.scalars(_price_query(trade_date)))
+
+
 def get_top_gainers(db: Session, requested_date: date | None = None, limit: int = 10) -> list[MarketPriceResponse]:
     trade_date = resolve_market_date(db, requested_date)
-    rows = db.scalars(
-        _price_query(trade_date).order_by(MarketPrice.change_percent.desc(), MarketPrice.volume.desc()).limit(limit)
-    ).all()
+    rows = sorted(_prices_for_date(db, trade_date), key=lambda row: (row.change_percent, row.volume), reverse=True)[:limit]
     return [serialize_price(row) for row in rows]
 
 
 def get_top_losers(db: Session, requested_date: date | None = None, limit: int = 10) -> list[MarketPriceResponse]:
     trade_date = resolve_market_date(db, requested_date)
-    rows = db.scalars(
-        _price_query(trade_date).order_by(MarketPrice.change_percent.asc(), MarketPrice.volume.desc()).limit(limit)
-    ).all()
+    rows = sorted(_prices_for_date(db, trade_date), key=lambda row: (row.change_percent, -row.volume))[:limit]
     return [serialize_price(row) for row in rows]
 
 
 def get_top_volume(db: Session, requested_date: date | None = None, limit: int = 10) -> list[MarketPriceResponse]:
     trade_date = resolve_market_date(db, requested_date)
-    rows = db.scalars(_price_query(trade_date).order_by(MarketPrice.volume.desc()).limit(limit)).all()
+    rows = sorted(_prices_for_date(db, trade_date), key=lambda row: row.volume, reverse=True)[:limit]
     return [serialize_price(row) for row in rows]
 
 
 def get_sectors(db: Session, requested_date: date | None = None) -> list[SectorDailyStatsResponse]:
     trade_date = resolve_market_date(db, requested_date)
+    canonical = canonical_prices_for_date(db, trade_date)
+    if canonical:
+        companies = {row.symbol: row for row in db.scalars(select(Company).where(Company.symbol.in_([price.symbol for price in canonical])))}
+        grouped: dict[str, list[CanonicalPrice]] = {}
+        for price in canonical:
+            grouped.setdefault(companies.get(price.symbol).sector if companies.get(price.symbol) else "Unknown", []).append(price)
+        return sorted([
+            SectorDailyStatsResponse(
+                sector=sector, trade_date=trade_date,
+                total_volume=sum(row.volume for row in prices),
+                total_value=sum((row.value for row in prices), Decimal("0")),
+                average_change_percent=sum((row.change_percent for row in prices), Decimal("0")) / len(prices),
+                advancers=sum(row.change > 0 for row in prices), decliners=sum(row.change < 0 for row in prices),
+                unchanged=sum(row.change == 0 for row in prices), source="canonical_selected_observations",
+            ) for sector, prices in grouped.items()
+        ], key=lambda row: row.average_change_percent, reverse=True)
     rows = db.scalars(
         select(SectorDailyStats)
         .where(SectorDailyStats.trade_date == trade_date)
@@ -166,6 +185,19 @@ def get_sector_performance(
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> list[SectorDailyStatsResponse]:
+    dates = []
+    latest = get_latest_market_date(db)
+    if latest:
+        cursor = start_date or (latest - timedelta(days=365))
+        final = end_date or latest
+        while cursor <= final:
+            if canonical_prices_for_date(db, cursor):
+                dates.append(cursor)
+            cursor += timedelta(days=1)
+    canonical_rows = [next((row for row in get_sectors(db, day) if row.sector.lower() == sector.lower()), None) for day in dates]
+    canonical_rows = [row for row in canonical_rows if row is not None]
+    if canonical_rows:
+        return canonical_rows
     query = select(SectorDailyStats).where(func.lower(SectorDailyStats.sector) == sector.lower())
     if start_date:
         query = query.where(SectorDailyStats.trade_date >= start_date)
@@ -195,15 +227,10 @@ def get_company_detail(db: Session, symbol: str) -> CompanyDetailResponse:
     if not company:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
 
-    latest_price = db.scalar(
-        select(MarketPrice)
-        .where(func.upper(MarketPrice.symbol) == company.symbol.upper())
-        .order_by(MarketPrice.trade_date.desc())
-        .limit(1)
-    )
+    latest_observation = latest_price(db, company.symbol)
     return CompanyDetailResponse(
         company=serialize_company(company),
-        latest_price=serialize_price(latest_price) if latest_price else None,
+        latest_price=serialize_price(latest_observation) if latest_observation else None,
     )
 
 
@@ -218,13 +245,8 @@ def get_company_history(
     if not company_exists:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
 
-    query = select(MarketPrice).where(func.upper(MarketPrice.symbol) == symbol.upper())
-    if start_date:
-        query = query.where(MarketPrice.trade_date >= start_date)
-    if end_date:
-        query = query.where(MarketPrice.trade_date <= end_date)
-    rows = db.scalars(query.order_by(MarketPrice.trade_date.desc()).limit(limit)).all()
-    return [serialize_price(row) for row in reversed(rows)]
+    rows = price_series(db, symbol, start_date, end_date)
+    return [serialize_price(row) for row in rows[-limit:]]
 
 
 def get_market_freshness(db: Session) -> MarketFreshnessResponse:

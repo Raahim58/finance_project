@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 
@@ -8,18 +8,30 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.domain.quant import correlation_matrix, covariance_matrix, estimate_expected_returns, optimize, return_matrix, risk_contributions, risk_metrics
-from app.models.market import MarketPrice
+from app.domain.quant import (
+    correlation_matrix,
+    covariance_matrix,
+    estimate_expected_returns,
+    optimize,
+    performance_ratios,
+    regression_metrics,
+    return_matrix,
+    risk_contributions,
+    risk_metrics,
+)
 from app.models.portfolio import PortfolioHolding
 from app.models.user import User
 from app.models.workstation import (
     AnalysisRun,
     AllocationItem,
     AllocationSet,
+    CorporateAction,
     Instrument,
     InvestorFinancialProfile,
     InvestorFinancialProfileVersion,
     MonitoringRule,
+    MacroObservation,
+    MacroSeries,
     OptimizerRun,
     OptimizerAllocation,
     PortfolioIPSVersion,
@@ -30,7 +42,8 @@ from app.models.workstation import (
 from app.schemas.workstation import IPSDraft, OptimizerRequest, RebalanceRequest, ScenarioRequest, VersionDraft
 from app.services.ledger_service import cash_balance, replay_positions
 from app.services.scenario_service import resolve_shock
-from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_summary
+from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_performance, get_portfolio_summary
+from app.services.canonical_market_service import latest_price, price_series
 
 
 def _json(value: object) -> str:
@@ -78,23 +91,62 @@ def save_ips_version(db: Session, user: User, portfolio_id: str, payload: IPSDra
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     version = (db.scalar(select(func.max(PortfolioIPSVersion.version)).where(PortfolioIPSVersion.portfolio_id == portfolio.id)) or 0) + 1
     required_return = None
-    if payload.starting_capital and payload.target_value and payload.horizon_years:
+    valuation_date = payload.valuation_date or date.today()
+    horizon_years = payload.horizon_years
+    if payload.target_date:
+        horizon_years = (payload.target_date - valuation_date).days / 365.2425
+    if payload.starting_capital and payload.target_value and horizon_years:
+        target_value = payload.target_value
+        if payload.target_value_is_real:
+            target_value *= (1 + float(payload.inflation_rate)) ** horizon_years
+        dated = [(item.contribution_date, item.amount) for item in payload.dated_contributions]
+        if any(day < valuation_date or (payload.target_date and day > payload.target_date) for day, _ in dated):
+            raise HTTPException(status_code=422, detail="Dated contributions must fall between valuation_date and target_date")
+
         def future_value(rate: float) -> float:
-            years = payload.horizon_years
-            growth = (1 + rate) ** years
-            contributions = payload.annual_contribution * ((growth - 1) / rate) if rate != 0 else payload.annual_contribution * years
-            return payload.starting_capital * growth + contributions
+            growth = (1 + rate) ** horizon_years
+            annual_contributions = payload.annual_contribution * ((growth - 1) / rate) if rate != 0 else payload.annual_contribution * horizon_years
+            dated_value = 0.0
+            for contribution_date, amount in dated:
+                remaining = ((payload.target_date or (valuation_date + timedelta(days=round(horizon_years * 365.2425)))) - contribution_date).days / 365.2425
+                dated_value += amount * (1 + rate) ** max(remaining, 0)
+            return payload.starting_capital * growth + annual_contributions + dated_value
         low, high = -0.99, 5.0
-        if not future_value(low) <= payload.target_value <= future_value(high):
+        if not future_value(low) <= target_value <= future_value(high):
             raise HTTPException(status_code=422, detail={"message": "Goal is outside the supported feasible return range", "minimum_future_value": future_value(low), "maximum_future_value": future_value(high)})
         for _ in range(100):
             midpoint = (low + high) / 2
-            if future_value(midpoint) < payload.target_value: low = midpoint
+            if future_value(midpoint) < target_value: low = midpoint
             else: high = midpoint
         required_return = (low + high) / 2
     constraints = dict(payload.constraints)
     if payload.goal: constraints["goal"] = payload.goal
     if payload.benchmark_symbol: constraints["benchmark_symbol"] = payload.benchmark_symbol.upper()
+    typed_constraints = {
+        "risk_capacity": payload.risk_capacity,
+        "risk_willingness": payload.risk_willingness,
+        "overall_risk_tolerance": payload.overall_risk_tolerance,
+        "loss_budget": payload.loss_budget,
+        "liquidity_requirement": payload.liquidity_requirement,
+        "allowed_asset_types": payload.allowed_asset_types,
+        "allowed_currencies": payload.allowed_currencies,
+        "shariah_only": payload.shariah_only,
+        "leverage_allowed": payload.leverage_allowed,
+        "derivatives_allowed": payload.derivatives_allowed,
+        "tax_notes": payload.tax_notes,
+    }
+    constraints.update({key: value for key, value in typed_constraints.items() if value is not None})
+    if required_return is not None:
+        constraints["required_return_method"] = {
+            "method": "dated_cash_flow_future_value_bisection",
+            "valuation_date": valuation_date.isoformat(),
+            "target_date": payload.target_date.isoformat() if payload.target_date else None,
+            "horizon_years": horizon_years,
+            "target_value_is_real": payload.target_value_is_real,
+            "inflation_rate": payload.inflation_rate,
+            "dated_contributions": [{"date": day.isoformat(), "amount": amount} for day, amount in dated],
+            "annual_contribution_timing": "end_of_year",
+        }
     for key in ("max_instrument_weight", "max_sector_weight", "min_cash_weight", "target_volatility", "target_beta"):
         if key in constraints and not isinstance(constraints[key], (int, float)):
             raise HTTPException(status_code=422, detail=f"{key} must be numeric")
@@ -157,18 +209,115 @@ def _aligned_prices(db: Session, portfolio_id: str, start: date | None, end: dat
     symbols = list(db.scalars(select(PortfolioHolding.symbol).where(PortfolioHolding.portfolio_id == portfolio_id).order_by(PortfolioHolding.symbol)).all())
     if len(symbols) < 2:
         raise HTTPException(status_code=422, detail="At least two holdings are required")
-    statement = select(MarketPrice).where(MarketPrice.symbol.in_(symbols))
-    if start: statement = statement.where(MarketPrice.trade_date >= start)
-    if end: statement = statement.where(MarketPrice.trade_date <= end)
-    rows = db.scalars(statement.order_by(MarketPrice.trade_date)).all()
     by_symbol = {symbol: {} for symbol in symbols}
-    for row in rows:
-        by_symbol[row.symbol][row.trade_date] = float(row.close)
+    for symbol in symbols:
+        for row in price_series(db, symbol, start, end):
+            by_symbol[symbol][row.trade_date] = float(row.close)
     aligned_dates = sorted(set.intersection(*(set(values) for values in by_symbol.values())))
     if len(aligned_dates) < 31:
         raise HTTPException(status_code=422, detail="At least 31 aligned price observations are required")
     prices = [[by_symbol[symbol][day] for day in aligned_dates] for symbol in symbols]
     return symbols, aligned_dates, prices
+
+
+def _selected_ips_constraints(db: Session, portfolio) -> dict[str, object]:
+    version = db.get(PortfolioIPSVersion, portfolio.selected_ips_version_id) if portfolio.selected_ips_version_id else None
+    return _load(version.constraints_json) if version else {}
+
+
+def _benchmark_symbol(db: Session, portfolio, constraints: dict[str, object]) -> str | None:
+    configured = constraints.get("benchmark_symbol")
+    if configured:
+        return str(configured).strip().upper()
+    instrument = db.get(Instrument, portfolio.benchmark_instrument_id) if portfolio.benchmark_instrument_id else None
+    return instrument.symbol if instrument else None
+
+
+def _effective_risk_free_rate(db: Session, as_of: date, series_key: str | None = None) -> dict[str, object] | None:
+    """Resolve an observed, effective-dated annual risk-free input.
+
+    No default rate is invented. A series is eligible only when explicitly selected,
+    marked ``is_risk_free`` in metadata, or uses a recognized SBP risk-free key.
+    """
+    preferred_keys = [series_key] if series_key else ["sbp.tbill.3m_yield", "sbp.policy_rate"]
+    candidates = list(db.scalars(select(MacroSeries)))
+    ranked = []
+    for series in candidates:
+        metadata = _load(series.metadata_json)
+        if series.key not in preferred_keys and not metadata.get("is_risk_free"):
+            continue
+        priority = preferred_keys.index(series.key) if series.key in preferred_keys else len(preferred_keys)
+        ranked.append((priority, series))
+    for _, series in sorted(ranked, key=lambda item: item[0]):
+        observation = db.scalar(
+            select(MacroObservation)
+            .where(
+                MacroObservation.series_id == series.id,
+                MacroObservation.is_selected.is_(True),
+                MacroObservation.effective_date <= as_of,
+            )
+            .order_by(MacroObservation.effective_date.desc(), MacroObservation.revision.desc())
+        )
+        if observation is None:
+            continue
+        value = float(observation.value)
+        unit = series.unit.strip().lower()
+        annual_rate = value / 100 if unit in {"%", "percent", "percentage", "pct"} else value
+        return {
+            "annual_rate": annual_rate,
+            "series_key": series.key,
+            "effective_date": observation.effective_date,
+            "release_at": observation.release_at,
+            "artifact_id": observation.artifact_id,
+        }
+    return None
+
+
+def _benchmark_analysis(
+    db: Session,
+    benchmark_symbol: str,
+    portfolio_returns_by_date: dict[date, float],
+    risk_free_rate: float,
+) -> dict[str, object]:
+    rows = price_series(db, benchmark_symbol)
+    benchmark_returns = {
+        rows[index].trade_date: float(rows[index].close / rows[index - 1].close - 1)
+        for index in range(1, len(rows))
+        if rows[index - 1].close > 0
+    }
+    aligned_dates = sorted(set(portfolio_returns_by_date) & set(benchmark_returns))
+    if len(aligned_dates) < 60:
+        return {
+            "available": False,
+            "symbol": benchmark_symbol,
+            "reason": "At least 60 aligned portfolio and benchmark return observations are required",
+            "sample_size": len(aligned_dates),
+        }
+    asset = np.asarray([portfolio_returns_by_date[day] for day in aligned_dates])
+    benchmark = np.asarray([benchmark_returns[day] for day in aligned_dates])
+    regression = regression_metrics(asset, benchmark, risk_free_rate=risk_free_rate)
+    return {
+        "available": True,
+        "symbol": benchmark_symbol,
+        "start_date": aligned_dates[0],
+        "end_date": aligned_dates[-1],
+        "sample_size": len(aligned_dates),
+        "metrics": {**regression, **performance_ratios(asset, risk_free_rate=risk_free_rate, benchmark_returns=benchmark)},
+        "market_arithmetic_expected_return": float(np.mean(benchmark) * 252),
+    }
+
+
+def _rolling_metrics(values: np.ndarray, window: int = 60) -> list[dict[str, float | int]]:
+    if values.size < window:
+        return []
+    output = []
+    for end in range(window, values.size + 1):
+        sample = values[end - window:end]
+        output.append({
+            "observation": end,
+            "annualized_volatility": float(np.std(sample, ddof=1) * np.sqrt(252)),
+        })
+    return output
 
 
 def portfolio_quant(db: Session, user: User, portfolio_id: str, shrinkage: float = 0.20):
@@ -181,36 +330,46 @@ def portfolio_quant(db: Session, user: User, portfolio_id: str, shrinkage: float
     market_values = {row.symbol: float(row.market_value) for row in summary.holdings}
     total = sum(market_values.values())
     weights = np.array([market_values[s] / total for s in symbols]) if total else np.full(len(symbols), 1 / len(symbols))
-    ledger_values: list[float] = []
-    ledger_days: list[date] = []
-    price_maps = {symbol: {day: prices[index][day_index] for day_index, day in enumerate(days)} for index, symbol in enumerate(symbols)}
-    for day in days:
-        if portfolio.history_start and day < portfolio.history_start:
-            continue
-        positions = replay_positions(db, portfolio.id, day)
-        if not positions:
-            continue
-        value = float(cash_balance(db, portfolio.id, portfolio.base_currency, day))
-        missing = False
-        for position in positions.values():
-            if position.symbol not in price_maps or day not in price_maps[position.symbol]:
-                missing = True; break
-            value += float(position.quantity) * price_maps[position.symbol][day]
-        if not missing:
-            ledger_days.append(day); ledger_values.append(value)
-    if len(ledger_values) >= 31 and all(value > 0 for value in ledger_values):
-        portfolio_returns = np.asarray(ledger_values[1:]) / np.asarray(ledger_values[:-1]) - 1
+    performance = get_portfolio_performance(db, user, portfolio.id, limit=5000)
+    portfolio_returns_by_date = {
+        point.trade_date: float(point.day_change_percent) / 100
+        for point in performance
+        if point.day_change_percent is not None
+    }
+    portfolio_returns = np.asarray(list(portfolio_returns_by_date.values()))
+    if len(portfolio_returns) >= 30:
         metrics: dict[str, object] = risk_metrics(portfolio_returns).to_dict()
-        metrics["history_method"] = "ledger_positions_and_cash"
+        metrics["history_method"] = "ledger_time_weighted_return"
     else:
-        metrics = {"available": False, "reason": "At least 30 post-baseline ledger return observations are required", "sample_size": max(len(ledger_values) - 1, 0)}
+        metrics = {"available": False, "reason": "At least 30 cash-flow-adjusted ledger return observations are required", "sample_size": len(portfolio_returns)}
     metrics["concentration_hhi"] = float(weights @ weights)
     metrics["variance"] = float(weights @ covariance @ weights)
+    metrics["return_basis"] = "ledger_time_weighted_price_and_recorded_cash_income"
+    # Corporate-action coverage is not yet complete enough to make an adjusted
+    # total-return claim. Recorded ledger actions are honored, but absence is not
+    # treated as evidence that no action occurred.
+    recorded_actions = db.scalar(select(func.count()).select_from(CorporateAction)) or 0
+    metrics["total_return_available"] = False
+    metrics["total_return_unavailable_reason"] = (
+        "Corporate-action source coverage is not certified complete; metrics include only recorded ledger actions and cash income."
+    )
+    metrics["recorded_corporate_action_count"] = int(recorded_actions)
+    constraints = _selected_ips_constraints(db, portfolio)
+    benchmark_symbol = _benchmark_symbol(db, portfolio, constraints)
+    risk_free = _effective_risk_free_rate(db, days[-1], str(constraints.get("risk_free_series_key")) if constraints.get("risk_free_series_key") else None)
+    benchmark = None
+    if benchmark_symbol and risk_free:
+        benchmark = _benchmark_analysis(db, benchmark_symbol, portfolio_returns_by_date, float(risk_free["annual_rate"]))
+        benchmark["risk_free"] = risk_free
+    elif benchmark_symbol:
+        benchmark = {"available": False, "symbol": benchmark_symbol, "reason": "No effective-dated observed risk-free series is available"}
+    else:
+        benchmark = {"available": False, "reason": "No benchmark is configured in the confirmed IPS or portfolio"}
     contributions = risk_contributions(weights, covariance)
     fingerprint_data = {"portfolio_id": portfolio.id, "holding_version": [(row.symbol, str(row.quantity), str(row.average_cost)) for row in summary.holdings], "data_cutoff": days[-1].isoformat(), "shrinkage": shrinkage, "history_start": portfolio.history_start.isoformat() if portfolio.history_start else None}
     fingerprint = sha256(_json(fingerprint_data).encode()).hexdigest()
     run = db.scalar(select(AnalysisRun).where(AnalysisRun.input_fingerprint == fingerprint))
-    result_data = {"data_cutoff": days[-1].isoformat(), "symbols": symbols, "sample_size": len(days) - 1, "annualization": 252, "covariance_shrinkage": shrinkage, "portfolio": metrics, "covariance": covariance.tolist(), "correlation": correlation.tolist(), "risk_contributions": dict(zip(symbols, [float(value) for value in contributions["percentage"]], strict=True)), "warnings": [] if portfolio.history_complete else ["Performance before the migration/opening-balance baseline is unavailable."]}
+    result_data = {"data_cutoff": days[-1].isoformat(), "symbols": symbols, "sample_size": len(days) - 1, "annualization": 252, "covariance_shrinkage": shrinkage, "portfolio": metrics, "benchmark": benchmark, "rolling": {"window": 60, "portfolio_volatility": _rolling_metrics(portfolio_returns)}, "covariance": covariance.tolist(), "correlation": correlation.tolist(), "risk_contributions": dict(zip(symbols, [float(value) for value in contributions["percentage"]], strict=True)), "warnings": [] if portfolio.history_complete else ["Performance before the migration/opening-balance baseline is unavailable."]}
     if run is None:
         run = AnalysisRun(portfolio_id=portfolio.id, analysis_type="portfolio_quant", input_fingerprint=fingerprint, data_cutoff=days[-1], estimator_json=_json({"covariance": "diagonal_shrinkage", "lambda": shrinkage, "annualization": 252}), code_version="quant-v1", result_json=_json(result_data), artifact_hashes_json="[]", status="completed")
         db.add(run); db.commit(); db.refresh(run)
@@ -223,44 +382,136 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     symbols, days, prices = _aligned_prices(db, portfolio.id, payload.start_date, payload.end_date)
     returns = return_matrix(prices)
-    covariance = covariance_matrix(returns, payload.covariance_shrinkage)
     estimate = None
+    capm_inputs = None
+    constraints = _selected_ips_constraints(db, portfolio)
     if payload.expected_return_method == "capm":
-        raise HTTPException(status_code=422, detail="CAPM requires an effective-dated risk-free series and aligned benchmark data; neither is available for this portfolio")
+        benchmark_symbol = (payload.benchmark_symbol or _benchmark_symbol(db, portfolio, constraints) or "").upper()
+        if not benchmark_symbol:
+            raise HTTPException(status_code=422, detail="CAPM requires a configured benchmark symbol")
+        benchmark_by_date = {row.trade_date: float(row.close) for row in price_series(db, benchmark_symbol, payload.start_date, payload.end_date)}
+        selected_indexes = [index for index, day in enumerate(days) if day in benchmark_by_date]
+        if len(selected_indexes) < 31:
+            raise HTTPException(status_code=422, detail="CAPM requires at least 31 dates aligned across holdings and benchmark")
+        days = [days[index] for index in selected_indexes]
+        prices = [[column[index] for index in selected_indexes] for column in prices]
+        returns = return_matrix(prices)
+        benchmark_prices = np.asarray([benchmark_by_date[day] for day in days])
+        market_returns = benchmark_prices[1:] / benchmark_prices[:-1] - 1
+        risk_free = _effective_risk_free_rate(db, days[-1], payload.risk_free_series_key)
+        if risk_free is None:
+            raise HTTPException(status_code=422, detail="CAPM requires an effective-dated observed risk-free series")
+        estimate = estimate_expected_returns(
+            "capm",
+            returns,
+            market_returns=market_returns,
+            risk_free_rate=float(risk_free["annual_rate"]),
+        )
+        capm_inputs = {"benchmark_symbol": benchmark_symbol, "risk_free": risk_free}
     if payload.expected_return_method:
-        assumptions = [payload.expected_return_assumptions[s] for s in symbols] if payload.expected_return_method == "user_model" else None
-        estimate = estimate_expected_returns(payload.expected_return_method, returns, assumptions=assumptions, shrinkage=payload.expected_return_shrinkage)
+        if payload.expected_return_method != "capm":
+            try:
+                assumptions = [payload.expected_return_assumptions[s] for s in symbols] if payload.expected_return_method == "user_model" else None
+            except KeyError as exc:
+                raise HTTPException(status_code=422, detail=f"Missing expected-return assumption for {exc.args[0]}") from exc
+            estimate = estimate_expected_returns(payload.expected_return_method, returns, assumptions=assumptions, shrinkage=payload.expected_return_shrinkage)
+    ips_version = db.get(PortfolioIPSVersion, portfolio.selected_ips_version_id) if portfolio.selected_ips_version_id else None
+    constraints = _load(ips_version.constraints_json) if ips_version else constraints
+    informational = {"goal", "benchmark_symbol", "risk_free_series_key", "long_only", "loss_budget", "horizon_years", "notes", "risk_capacity", "risk_willingness", "overall_risk_tolerance", "tax_notes", "required_return_method"}
+    supported = {
+        "max_instrument_weight", "excluded_instruments", "allowed_instruments", "min_cash_weight",
+        "max_sector_weight", "allowed_asset_types", "allowed_currencies", "shariah_only",
+        "minimum_daily_volume", "target_volatility", "target_beta", "risk_budgets",
+        "leverage_allowed", "derivatives_allowed", "liquidity_requirement",
+    }
+    unsupported = sorted(set(constraints) - informational - supported)
+    if unsupported:
+        raise HTTPException(status_code=422, detail={"message": "IPS contains constraints that cannot be represented by this optimizer", "unsupported_constraints": unsupported})
+    instruments_by_symbol = {item.symbol: item for item in db.scalars(select(Instrument).where(Instrument.symbol.in_(symbols)))}
     lower = [payload.minimum_weight] * len(symbols)
     upper = [payload.maximum_weight] * len(symbols)
-    ips_version = db.get(PortfolioIPSVersion, portfolio.selected_ips_version_id) if portfolio.selected_ips_version_id else None
-    constraints = _load(ips_version.constraints_json) if ips_version else {}
     excluded = {str(value).upper() for value in constraints.get("excluded_instruments", [])}
     allowed = {str(value).upper() for value in constraints.get("allowed_instruments", [])}
+    allowed_types = {str(value).lower() for value in constraints.get("allowed_asset_types", [])}
+    allowed_currencies = {str(value).upper() for value in constraints.get("allowed_currencies", [])}
+    minimum_volume = float(constraints.get("minimum_daily_volume", 0) or 0)
     for index, symbol in enumerate(symbols):
         if symbol in excluded or (allowed and symbol not in allowed): upper[index] = 0
         if "max_instrument_weight" in constraints: upper[index] = min(upper[index], float(constraints["max_instrument_weight"]))
-    unsupported = [key for key in ("max_drawdown", "derivatives_rule") if key in constraints]
-    if unsupported:
-        raise HTTPException(status_code=422, detail={"message": "IPS contains constraints that cannot be represented by this optimizer", "unsupported_constraints": unsupported})
-    betas = np.array([payload.beta_assumptions[s] for s in symbols]) if payload.beta_assumptions else None
-    budgets = np.array([payload.risk_budgets[s] for s in symbols]) if payload.risk_budgets else None
-    result = optimize(
-        covariance, objective=payload.objective, expected_returns=estimate.values if estimate else None,
-        target_return=payload.target_return, target_volatility=payload.target_volatility,
-        target_beta=payload.target_beta, betas=betas, risk_budgets=budgets,
-        risk_free_rate=payload.risk_free_rate, lower_bounds=lower, upper_bounds=upper,
-    )
-    assumptions_data = {"covariance": "diagonal_shrinkage", "covariance_shrinkage": payload.covariance_shrinkage, "expected_returns": estimate.assumptions if estimate else None, "annualization": 252}
+        instrument = instruments_by_symbol.get(symbol)
+        metadata = _load(instrument.metadata_json) if instrument else {}
+        if instrument and allowed_types and instrument.instrument_type.lower() not in allowed_types: upper[index] = 0
+        if instrument and allowed_currencies and instrument.currency.upper() not in allowed_currencies: upper[index] = 0
+        if instrument and constraints.get("derivatives_allowed") is False and instrument.instrument_type.lower() in {"derivative", "future", "option"}: upper[index] = 0
+        if constraints.get("shariah_only") and metadata.get("shariah_compliant") is not True: upper[index] = 0
+        observed = latest_price(db, symbol)
+        if minimum_volume and (observed is None or observed.volume < minimum_volume): upper[index] = 0
+    include_cash = payload.include_cash or float(payload.minimum_cash_weight or 0) > 0 or float(constraints.get("min_cash_weight", 0) or 0) > 0 or float(constraints.get("liquidity_requirement", 0) or 0) > 0
+    if include_cash and payload.objective in {"risk_parity", "risk_budget"}:
+        raise HTTPException(status_code=422, detail="Cash cannot be included in risk-parity/risk-budget objectives because it has zero modeled covariance")
+    portfolio_value = float(get_portfolio_summary(db, user, portfolio.id).total_value)
+    liquidity_weight = float(constraints.get("liquidity_requirement", 0) or 0) / portfolio_value if portfolio_value else 0
+    cash_minimum = max(float(payload.minimum_cash_weight or 0), float(constraints.get("min_cash_weight", 0) or 0), liquidity_weight)
+    if include_cash:
+        symbols.append("CASH")
+        returns = np.column_stack([returns, np.zeros(returns.shape[0])])
+        lower.append(cash_minimum)
+        upper.append(1.0)
+        if estimate:
+            cash_return = float(capm_inputs["risk_free"]["annual_rate"]) if capm_inputs else payload.risk_free_rate
+            estimate = type(estimate)(estimate.method, np.append(estimate.values, cash_return), {**estimate.assumptions, "cash_return_assumption": cash_return})
+    covariance = covariance_matrix(returns, payload.covariance_shrinkage)
+    linear_upper_bounds = []
+    if "max_sector_weight" in constraints:
+        sector_cap = float(constraints["max_sector_weight"])
+        sectors = sorted({instrument.sector or "Unknown" for instrument in instruments_by_symbol.values()})
+        for sector in sectors:
+            coefficients = np.asarray([
+                1.0 if symbol in instruments_by_symbol and (instruments_by_symbol[symbol].sector or "Unknown") == sector else 0.0
+                for symbol in symbols
+            ])
+            linear_upper_bounds.append((coefficients, sector_cap, f"sector:{sector}"))
+    try:
+        betas = np.array([payload.beta_assumptions[s] for s in symbols if s != "CASH"]) if payload.beta_assumptions else None
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=f"Missing beta assumption for {exc.args[0]}") from exc
+    if betas is None and estimate and estimate.method == "capm":
+        betas = np.asarray(estimate.assumptions["betas"], dtype=float)
+    if include_cash and betas is not None:
+        betas = np.append(betas, 0.0)
+    configured_budgets = payload.risk_budgets or constraints.get("risk_budgets")
+    try:
+        budgets = np.array([configured_budgets[s] for s in symbols]) if configured_budgets else None
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=f"Missing risk budget for {exc.args[0]}") from exc
+    target_return = payload.target_return
+    if payload.objective == "target_return_minimum_variance" and target_return is None and ips_version and ips_version.required_return is not None:
+        target_return = float(ips_version.required_return)
+    target_volatility = payload.target_volatility if payload.target_volatility is not None else (float(constraints["target_volatility"]) if "target_volatility" in constraints else None)
+    target_beta = payload.target_beta if payload.target_beta is not None else (float(constraints["target_beta"]) if "target_beta" in constraints else None)
+    try:
+        result = optimize(
+            covariance, objective=payload.objective, expected_returns=estimate.values if estimate else None,
+            target_return=target_return, target_volatility=target_volatility,
+            target_beta=target_beta, betas=betas, risk_budgets=budgets,
+            risk_free_rate=float(capm_inputs["risk_free"]["annual_rate"]) if capm_inputs else payload.risk_free_rate,
+            lower_bounds=lower, upper_bounds=upper, linear_upper_bounds=linear_upper_bounds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"message": str(exc), "lower_bound_sum": sum(lower), "upper_bound_sum": sum(upper), "nearest_relaxations": ["Reduce minimum weights or cash", "Increase maximum instrument/sector weights", "Remove exclusions"]}) from exc
+    assumptions_data = {"covariance": "diagonal_shrinkage", "covariance_shrinkage": payload.covariance_shrinkage, "expected_returns": estimate.assumptions if estimate else None, "capm_inputs": capm_inputs, "annualization": 252}
     result_data = result.to_dict()
     row = OptimizerRun(portfolio_id=portfolio.id, objective=payload.objective, expected_return_method=payload.expected_return_method, ips_version_id=ips_version.id if ips_version else None, data_cutoff=days[-1], bounds_json=_json({"lower": lower, "upper": upper}), solver=str(result.diagnostics.get("solver")) if result.diagnostics.get("solver") else None, seed=0, input_json=_json(payload.model_dump(mode="json")), result_json=_json({**result_data, "symbols": symbols}), status=result.status, diagnostics_json=_json(result.diagnostics))
     db.add(row); db.flush()
     if result.status == "optimal":
-        instruments = {item.symbol: item for item in db.scalars(select(Instrument).where(Instrument.symbol.in_(symbols)))}
+        instruments = instruments_by_symbol
         proposal_version = (db.scalar(select(func.max(AllocationSet.version)).where(AllocationSet.portfolio_id == portfolio.id, AllocationSet.kind == "optimized")) or 0) + 1
         proposal = AllocationSet(portfolio_id=portfolio.id, kind="optimized", version=proposal_version, status="proposal", assumptions_json=_json(assumptions_data), base_value=Decimal(str(get_portfolio_summary(db, user, portfolio.id).total_value)), created_by_user_id=user.id)
         db.add(proposal); db.flush()
         for symbol, weight in zip(symbols, result.weights, strict=True):
-            if symbol in instruments:
+            if symbol == "CASH":
+                db.add(AllocationItem(allocation_set_id=proposal.id, symbol="CASH", instrument_id=None, is_cash=True, target_weight=Decimal(str(weight)), locked=False))
+            elif symbol in instruments:
                 db.add(OptimizerAllocation(optimizer_run_id=row.id, instrument_id=instruments[symbol].id, weight=Decimal(str(weight))))
                 db.add(AllocationItem(allocation_set_id=proposal.id, symbol=symbol, instrument_id=instruments[symbol].id, is_cash=False, target_weight=Decimal(str(weight)), locked=False))
     db.commit(); db.refresh(row)
@@ -271,7 +522,7 @@ def security_quant(db: Session, instrument_id: str):
     instrument = db.get(Instrument, instrument_id)
     if instrument is None:
         raise HTTPException(status_code=404, detail="Instrument not found")
-    rows = list(db.scalars(select(MarketPrice).where(MarketPrice.symbol == instrument.symbol).order_by(MarketPrice.trade_date)))
+    rows = price_series(db, instrument.symbol)
     if len(rows) < 31:
         raise HTTPException(status_code=422, detail="At least 31 price observations are required")
     values = np.array([float(row.close) for row in rows])
@@ -299,30 +550,78 @@ def rebalance_preview(db: Session, user: User, portfolio_id: str, payload: Rebal
     summary = get_portfolio_summary(db, user, portfolio.id)
     total = float(summary.total_value)
     current = {holding.symbol: float(holding.market_value) for holding in summary.holdings}
+    current_quantities = {holding.symbol: float(holding.quantity) for holding in summary.holdings}
+    targets = {symbol.upper(): weight for symbol, weight in payload.target_weights.items()}
+    for symbol in current:
+        targets.setdefault(symbol, 0.0)
     trades = []
     residual_cash = float(summary.cash_balance)
     warnings = []
-    for symbol, weight in payload.target_weights.items():
+    locked = {symbol.upper() for symbol in payload.locked_symbols}
+    for symbol, weight in targets.items():
+        if symbol == "CASH":
+            continue
         instrument = db.scalar(select(Instrument).where(Instrument.symbol == symbol.upper()))
-        price = db.scalar(select(MarketPrice).where(MarketPrice.symbol == symbol.upper()).order_by(MarketPrice.trade_date.desc()))
+        price = latest_price(db, symbol.upper())
         if instrument is None or price is None:
             warnings.append(f"{symbol.upper()}: missing instrument or current price")
             continue
         target_amount = total * weight
         difference = target_amount - current.get(symbol.upper(), 0)
+        if symbol in locked and abs(difference) >= payload.minimum_trade_value:
+            warnings.append(f"{symbol}: locked position was not traded")
+            continue
+        if difference < 0 and not payload.allow_sells:
+            warnings.append(f"{symbol}: sell required but sells are disabled")
+            continue
         if abs(difference) < payload.minimum_trade_value:
             continue
         metadata = _load(instrument.metadata_json)
         lot_size = float(metadata.get("lot_size", 1) or 1)
         quantity = np.floor(abs(difference) / float(price.close) / lot_size) * lot_size
+        if quantity <= 0:
+            warnings.append(f"{symbol}: target difference is below one tradable lot")
+            continue
         gross = quantity * float(price.close)
         fee = gross * payload.fee_rate
+        tax = gross * payload.tax_rate if difference < 0 else 0.0
         side = "buy" if difference > 0 else "sell"
-        residual_cash += (-gross - fee) if side == "buy" else (gross - fee)
-        trades.append({"symbol": symbol.upper(), "side": side, "quantity": float(quantity), "price": float(price.close), "gross_amount": gross, "estimated_fee": fee, "before_weight": current.get(symbol.upper(), 0) / total if total else 0, "target_weight": weight})
+        if side == "sell" and quantity > current_quantities.get(symbol, 0):
+            quantity = current_quantities.get(symbol, 0)
+            gross = quantity * float(price.close); fee = gross * payload.fee_rate; tax = gross * payload.tax_rate
+        residual_cash += (-gross - fee) if side == "buy" else (gross - fee - tax)
+        trades.append({"symbol": symbol.upper(), "side": side, "quantity": float(quantity), "price": float(price.close), "gross_amount": gross, "estimated_fee": fee, "estimated_tax": tax, "before_weight": current.get(symbol.upper(), 0) / total if total else 0, "target_weight": weight})
     if residual_cash < -1e-6:
         warnings.append("Proposed buys exceed available cash after estimated fees.")
-    return {"portfolio_id": portfolio.id, "data_cutoff": summary.data_freshness_date, "trades": trades, "residual_cash": residual_cash, "warnings": warnings}
+    projected = dict(current)
+    for trade in trades:
+        projected[trade["symbol"]] = projected.get(trade["symbol"], 0) + (trade["gross_amount"] if trade["side"] == "buy" else -trade["gross_amount"])
+    projected_total = residual_cash + sum(max(value, 0) for value in projected.values())
+    projected_weights = {symbol: max(value, 0) / projected_total if projected_total else 0 for symbol, value in projected.items()}
+    projected_weights["CASH"] = residual_cash / projected_total if projected_total else 0
+    constraints = _selected_ips_constraints(db, portfolio)
+    violations = []
+    if "min_cash_weight" in constraints and projected_weights["CASH"] + 1e-8 < float(constraints["min_cash_weight"]):
+        violations.append({"code": "min_cash_weight", "actual": projected_weights["CASH"], "limit": float(constraints["min_cash_weight"])})
+    if "max_instrument_weight" in constraints:
+        limit = float(constraints["max_instrument_weight"])
+        violations.extend({"code": "max_instrument_weight", "symbol": symbol, "actual": weight, "limit": limit} for symbol, weight in projected_weights.items() if symbol != "CASH" and weight > limit + 1e-8)
+    excluded = {str(value).upper() for value in constraints.get("excluded_instruments", [])}
+    violations.extend({"code": "instrument_not_allowed", "symbol": symbol} for symbol, weight in projected_weights.items() if symbol in excluded and weight > 1e-8)
+    risk_impact: dict[str, object] = {"available": False, "reason": "Aligned covariance is unavailable."}
+    try:
+        quant = portfolio_quant(db, user, portfolio.id)
+        quant_symbols = quant["symbols"]
+        if all(symbol in projected_weights for symbol in quant_symbols):
+            covariance = np.asarray(quant["covariance"], dtype=float)
+            risky_target = np.asarray([projected_weights[symbol] for symbol in quant_symbols])
+            before_volatility = float(np.sqrt(float(quant["portfolio"]["variance"])))
+            after_volatility = float(np.sqrt(max(risky_target @ covariance @ risky_target, 0)))
+            risk_impact = {"available": True, "before_annualized_volatility": before_volatility, "after_annualized_volatility": after_volatility, "change": after_volatility - before_volatility, "method": "same_covariance_post_rounding_weights"}
+    except (HTTPException, ValueError, KeyError):
+        pass
+    post_validation = {"valid": residual_cash >= -1e-6 and not violations, "projected_weights": projected_weights, "violations": violations, "fees_and_taxes_included": True, "lot_sizes_applied": True, "locked_positions_checked": True, "sell_rules_checked": True}
+    return {"portfolio_id": portfolio.id, "data_cutoff": summary.data_freshness_date, "trades": trades, "residual_cash": residual_cash, "warnings": warnings, "post_trade_validation": post_validation, "risk_impact": risk_impact}
 
 
 def run_scenario(db: Session, user: User, portfolio_id: str, payload: ScenarioRequest):

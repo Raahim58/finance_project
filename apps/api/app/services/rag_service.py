@@ -4,6 +4,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile, status
@@ -47,7 +48,7 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def embed_text(text: str) -> list[float]:
+def _hash_embedding(text: str) -> list[float]:
     vector = [0.0] * EMBEDDING_DIMENSIONS
     for token in tokenize(text):
         digest = hashlib.sha256(token.encode("utf-8")).digest()
@@ -57,6 +58,28 @@ def embed_text(text: str) -> list[float]:
     if not magnitude:
         return vector
     return [value / magnitude for value in vector]
+
+
+@lru_cache(maxsize=1)
+def _semantic_model():
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError as exc:
+        raise RuntimeError(
+            "sentence-transformers is required when EMBEDDING_BACKEND=sentence_transformers"
+        ) from exc
+    model = SentenceTransformer(settings.embedding_model_name)
+    dimension = model.get_sentence_embedding_dimension()
+    if dimension != EMBEDDING_DIMENSIONS:
+        raise RuntimeError(f"Embedding model dimension {dimension} does not match configured {EMBEDDING_DIMENSIONS}")
+    return model
+
+
+def embed_text(text: str) -> list[float]:
+    if settings.embedding_backend == "sentence_transformers":
+        vector = _semantic_model().encode(text, normalize_embeddings=True, convert_to_numpy=True)
+        return [float(value) for value in vector.tolist()]
+    return _hash_embedding(text)
 
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:
@@ -71,19 +94,28 @@ def keyword_score(query_tokens: set[str], chunk_text: str) -> float:
 
 
 def chunk_page_text(text: str, page_number: int) -> list[tuple[str, int]]:
-    tokens = tokenize(text)
-    if not tokens:
+    matches = list(TOKEN_RE.finditer(text))
+    if not matches:
         return []
     chunks: list[tuple[str, int]] = []
     start = 0
-    while start < len(tokens):
-        end = min(start + CHUNK_TOKENS, len(tokens))
-        chunk_tokens = tokens[start:end]
-        chunks.append((" ".join(chunk_tokens), page_number))
-        if end == len(tokens):
+    while start < len(matches):
+        end = min(start + CHUNK_TOKENS, len(matches))
+        # Slice the original page so punctuation, casing, line breaks, and table
+        # layout survive retrieval and citations.
+        chunk = text[matches[start].start():matches[end - 1].end()].strip()
+        chunks.append((chunk, page_number))
+        if end == len(matches):
             break
         start = max(end - CHUNK_OVERLAP, start + 1)
     return chunks
+
+
+def infer_section_title(text: str) -> str | None:
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    if first_line and len(first_line) <= 120 and (first_line.isupper() or first_line.endswith(":")):
+        return first_line.rstrip(":")
+    return None
 
 
 def first_snippet(text: str, max_chars: int = 260) -> str:
@@ -183,6 +215,8 @@ def create_document_from_pages(
     owner_user_id: str | None = None,
     visibility: str = "public",
     portfolio_id: str | None = None,
+    artifact_id: str | None = None,
+    commit: bool = True,
 ) -> Document:
     full_text = "\n\n".join(page.text for page in pages)
     if not full_text.strip():
@@ -195,6 +229,7 @@ def create_document_from_pages(
         company_id=company.id if company else None,
         owner_user_id=owner_user_id,
         portfolio_id=portfolio_id,
+        artifact_id=artifact_id,
         visibility=visibility,
         symbol=normalized_symbol,
         sector=resolved_sector,
@@ -239,6 +274,8 @@ def create_document_from_pages(
                 "source_name": source_name,
                 "source_url": source_url,
                 "page_number": page_number,
+                "embedding_backend": settings.embedding_backend,
+                "embedding_model": settings.embedding_model_name if settings.embedding_backend == "sentence_transformers" else "token-hash-v1-development-only",
             }
             vector = embed_text(chunk_text)
             chunk = DocumentChunk(
@@ -253,6 +290,7 @@ def create_document_from_pages(
                 metadata_json=json.dumps(metadata),
                 source_url=source_url,
                 page_number=page_number,
+                section_title=infer_section_title(chunk_text),
             )
             db.add(chunk)
             db.flush()
@@ -269,8 +307,11 @@ def create_document_from_pages(
             )
             chunk_index += 1
 
-    db.commit()
-    db.refresh(document)
+    if commit:
+        db.commit()
+        db.refresh(document)
+    else:
+        db.flush()
     return document
 
 
@@ -406,10 +447,13 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
     ranked: list[tuple[float, DocumentChunk, Citation]] = []
     for chunk, _document, citation in rows:
         vector = json.loads(chunk.embedding_json)
+        metadata = json.loads(chunk.metadata_json)
+        if metadata.get("embedding_backend", "hash") != settings.embedding_backend:
+            continue
         vector_score = cosine_similarity(query_vector, vector)
         lexical_score = keyword_score(query_tokens, chunk.chunk_text)
         score = (0.75 * vector_score) + (0.25 * lexical_score)
-        if lexical_score > 0 and score > 0:
+        if score > 0 and (settings.embedding_backend == "sentence_transformers" or lexical_score > 0):
             ranked.append((score, chunk, citation))
 
     if not ranked:

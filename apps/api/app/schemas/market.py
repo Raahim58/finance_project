@@ -37,7 +37,7 @@ class MarketPriceResponse(BaseModel):
     market_cap: Decimal | None = None
     source: str
     source_url: str | None = None
-    ingested_at: datetime
+    ingested_at: datetime | None
 
 
 class MarketSnapshotResponse(BaseModel):

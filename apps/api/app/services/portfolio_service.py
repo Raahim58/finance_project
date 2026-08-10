@@ -7,20 +7,24 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.market import Company, MarketPrice
+from app.models.market import Company
 from app.models.portfolio import Portfolio, PortfolioHolding, PortfolioTransaction
 from app.models.user import User
 from app.models.workstation import AllocationItem, AllocationSet, PortfolioIPS, PortfolioIPSVersion
 from app.services.ledger_service import (
     cash_balance,
     ensure_cash_account,
+    external_flow,
+    generate_portfolio_snapshot,
     instrument_for_symbol,
+    net_external_contributions,
     rebuild_holding_projection,
     record_holding_adjustment,
     replay_positions,
     reverse_transaction,
 )
 from app.services.portfolio_providers import describe_portfolio_source, get_portfolio_provider
+from app.services.canonical_market_service import latest_price as canonical_latest_price, price_series
 from app.schemas.portfolio import (
     AllocationItemResponse,
     AllocationSetCreate,
@@ -153,22 +157,12 @@ def get_company_by_symbol_or_404(db: Session, symbol: str) -> Company:
     return company
 
 
-def latest_price_for_symbol(db: Session, symbol: str) -> MarketPrice | None:
-    return db.scalar(
-        select(MarketPrice)
-        .where(func.upper(MarketPrice.symbol) == symbol.upper())
-        .order_by(MarketPrice.trade_date.desc())
-        .limit(1)
-    )
+def latest_price_for_symbol(db: Session, symbol: str):
+    return canonical_latest_price(db, symbol)
 
 
-def price_for_symbol_on_or_before(db: Session, symbol: str, target_date: date) -> MarketPrice | None:
-    return db.scalar(
-        select(MarketPrice)
-        .where(func.upper(MarketPrice.symbol) == symbol.upper(), MarketPrice.trade_date <= target_date)
-        .order_by(MarketPrice.trade_date.desc())
-        .limit(1)
-    )
+def price_for_symbol_on_or_before(db: Session, symbol: str, target_date: date):
+    return canonical_latest_price(db, symbol, target_date)
 
 
 def list_portfolios(db: Session, user: User) -> list[PortfolioResponse]:
@@ -320,6 +314,14 @@ def add_transaction(
     company = db.get(Company, instrument.company_id) if instrument and instrument.company_id else None
     if payload.transaction_type in {"buy", "sell", "dividend", "corporate_action"} and instrument is None:
         raise HTTPException(status_code=422, detail="This transaction type requires an instrument")
+    if payload.external_id and db.scalar(
+        select(PortfolioTransaction).where(
+            PortfolioTransaction.portfolio_id == portfolio.id,
+            PortfolioTransaction.source == payload.source,
+            PortfolioTransaction.external_id == payload.external_id,
+        )
+    ):
+        raise HTTPException(status_code=409, detail="Duplicate external transaction ID for this source")
     transaction = PortfolioTransaction(
         portfolio_id=portfolio.id,
         company_id=company.id if company else None,
@@ -342,6 +344,9 @@ def add_transaction(
     ensure_cash_account(db, portfolio, payload.currency)
     db.flush()
     rebuild_holding_projection(db, portfolio)
+    generate_portfolio_snapshot(db, portfolio, payload.transaction_date, transaction.id)
+    if payload.settlement_date and payload.settlement_date != payload.transaction_date:
+        generate_portfolio_snapshot(db, portfolio, payload.settlement_date, transaction.id)
     db.commit()
     db.refresh(transaction)
     return serialize_transaction(transaction)
@@ -365,6 +370,13 @@ def update_transaction(
     immutable = set(data) - {"notes", "external_id", "settlement_date"}
     if immutable:
         raise HTTPException(status_code=409, detail="Financial transaction fields are immutable; reverse and replace the transaction")
+    if "settlement_date" in data and data["settlement_date"] is not None:
+        if transaction.transaction_type not in {"buy", "sell"}:
+            raise HTTPException(status_code=422, detail="settlement_date is only valid for buy and sell transactions")
+        if data["settlement_date"] < transaction.transaction_date:
+            raise HTTPException(status_code=422, detail="settlement_date cannot precede transaction_date")
+    if data.get("external_id") and db.scalar(select(PortfolioTransaction.id).where(PortfolioTransaction.portfolio_id == transaction.portfolio_id, PortfolioTransaction.source == transaction.source, PortfolioTransaction.external_id == data["external_id"], PortfolioTransaction.id != transaction.id)):
+        raise HTTPException(status_code=409, detail="A transaction with this source/external_id already exists")
     for key, value in data.items():
         setattr(transaction, key, value)
     db.add(transaction)
@@ -413,6 +425,9 @@ def _holding_summaries(db: Session, portfolio: Portfolio) -> list[HoldingSummary
                 day_change=day_change,
                 day_change_percent=day_change_percent,
                 data_source=latest.source if latest else None,
+                artifact_id=latest.artifact_id if latest else None,
+                quality_status=latest.quality_status if latest else None,
+                adjustment_state=latest.adjustment_state if latest else None,
             )
         )
     return summaries
@@ -424,7 +439,9 @@ def get_portfolio_summary(db: Session, user: User, portfolio_id: str) -> Portfol
     cash = cash_balance(db, portfolio.id, portfolio.base_currency)
     total_value = money(sum((holding.market_value for holding in holdings), Decimal("0")) + cash)
     cost_basis = money(sum((holding.cost_basis for holding in holdings), Decimal("0")))
-    unrealized = money(total_value - cost_basis)
+    unrealized = money(sum((holding.unrealized_gain_loss for holding in holdings), Decimal("0")))
+    contributions = money(net_external_contributions(db, portfolio.id))
+    total_gain_loss = money(total_value - contributions)
     day_change = money(
         sum((holding.day_change for holding in holdings if holding.day_change is not None), Decimal("0"))
     )
@@ -435,6 +452,8 @@ def get_portfolio_summary(db: Session, user: User, portfolio_id: str) -> Portfol
         cost_basis=cost_basis,
         unrealized_gain_loss=unrealized,
         unrealized_gain_loss_percent=percent((unrealized / cost_basis) * Decimal("100")) if cost_basis else None,
+        net_external_contributions=contributions,
+        total_gain_loss=total_gain_loss,
         day_change=day_change,
         day_change_percent=percent((day_change / previous_value) * Decimal("100")) if previous_value else None,
         cash_balance=money(cash),
@@ -480,31 +499,60 @@ def get_portfolio_performance(
     if not db.scalar(select(func.count(PortfolioTransaction.id)).where(PortfolioTransaction.portfolio_id == portfolio.id)):
         return []
 
-    dates = db.scalars(
-        select(MarketPrice.trade_date).distinct().order_by(MarketPrice.trade_date.desc()).limit(limit)
-    ).all()
+    historical_symbols = set(
+        db.scalars(
+            select(PortfolioTransaction.symbol)
+            .where(
+                PortfolioTransaction.portfolio_id == portfolio.id,
+                PortfolioTransaction.instrument_id.is_not(None),
+            )
+            .distinct()
+        )
+    )
+    if not historical_symbols:
+        return []
+    market_dates = {row.trade_date for symbol in historical_symbols for row in price_series(db, symbol)}
+    transaction_dates = set(
+        db.scalars(
+            select(PortfolioTransaction.transaction_date)
+            .where(PortfolioTransaction.portfolio_id == portfolio.id)
+            .distinct()
+        )
+    )
+    dates = sorted(market_dates | transaction_dates)
+    dates = dates[-(limit + 1):]
     points: list[PortfolioPerformancePoint] = []
     previous_total: Decimal | None = None
-    for value_date in reversed(dates):
+    previous_date: date | None = None
+    cumulative_twr = Decimal("1")
+    for value_date in dates:
         total = cash_balance(db, portfolio.id, portfolio.base_currency, value_date)
         for position in replay_positions(db, portfolio.id, value_date).values():
             price = price_for_symbol_on_or_before(db, position.symbol, value_date)
             if price:
                 total += position.quantity * price.close
         total = money(total)
-        day_change = money(total - previous_total) if previous_total is not None else Decimal("0.0000")
+        flow = money(external_flow(db, portfolio.id, previous_date, value_date))
+        value_change = money(total - previous_total) if previous_total is not None else Decimal("0.0000")
+        investment_change = money(value_change - flow) if previous_total is not None else Decimal("0.0000")
+        period_return: Decimal | None = None
+        if previous_total is not None and previous_total != 0:
+            period_return = investment_change / previous_total
+            cumulative_twr *= Decimal("1") + period_return
         points.append(
             PortfolioPerformancePoint(
                 value_date=value_date,
                 total_value=total,
-                day_change=day_change,
-                day_change_percent=percent((day_change / previous_total) * Decimal("100"))
-                if previous_total
-                else None,
+                external_cash_flow=flow,
+                value_change=value_change,
+                day_change=investment_change,
+                day_change_percent=percent(period_return * Decimal("100")) if period_return is not None else None,
+                cumulative_twr_percent=percent((cumulative_twr - Decimal("1")) * Decimal("100")) if period_return is not None else None,
             )
         )
         previous_total = total
-    return points
+        previous_date = value_date
+    return points[-limit:]
 
 
 def get_positions(db: Session, user: User, portfolio_id: str) -> list[PositionResponse]:

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from time import monotonic
 from typing import Any, Callable
 
 from pydantic import BaseModel
@@ -27,6 +28,7 @@ class ToolDefinition:
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolDefinition] = {}
+        self._cost_units_spent = 0
 
     def register(self, definition: ToolDefinition) -> None:
         if definition.name in self._tools:
@@ -36,14 +38,32 @@ class ToolRegistry:
     def definitions(self) -> list[ToolDefinition]:
         return list(self._tools.values())
 
-    def invoke(self, name: str, db: Session, user: User, arguments: dict[str, Any], *, confirmed: bool = False) -> dict[str, Any]:
+    def invoke(
+        self,
+        name: str,
+        db: Session,
+        user: User,
+        arguments: dict[str, Any],
+        *,
+        confirmed: bool = False,
+        max_cost_units: int | None = None,
+    ) -> dict[str, Any]:
         if name not in self._tools:
             raise KeyError(f"Tool is not allowlisted: {name}")
         definition = self._tools[name]
         if definition.requires_confirmation and not confirmed:
             raise PermissionError(f"Tool {name} requires explicit confirmation")
+        units = {"low": 1, "medium": 3, "high": 6}.get(definition.cost_class, 6)
+        if max_cost_units is not None and self._cost_units_spent + units > max_cost_units:
+            raise PermissionError(f"Tool {name} exceeds the assistant cost budget")
         payload = definition.input_model.model_validate(arguments)
-        return definition.handler(db, user, payload)
+        started = monotonic()
+        result = definition.handler(db, user, payload)
+        elapsed = monotonic() - started
+        if elapsed > definition.timeout_seconds:
+            raise TimeoutError(f"Tool {name} exceeded its {definition.timeout_seconds}s execution limit")
+        self._cost_units_spent += units
+        return result
 
 
 def build_tool_registry() -> ToolRegistry:

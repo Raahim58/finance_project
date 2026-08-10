@@ -40,6 +40,7 @@ Run the API and scheduler:
 uvicorn app.main:app --reload
 python -m app.jobs.scheduler --once
 python -m app.jobs.scheduler
+python -m app.jobs.backfill_market_history --provider dps --symbols MEBL,SYS --start 2021-01-01 --end 2026-08-10
 ```
 
 `MARKET_DATA_MODE=mock` is development-only. `dps` uses the verified direct DPS adapter; `auto` tries DPS and uses Yahoo only as a labeled fallback. NCCPL remains a manual CSV import because ordinary retrieval is blocked; no anti-bot bypass is implemented.
@@ -81,7 +82,7 @@ python -m app.jobs.ingest_document --file ./sample.pdf --symbol MEBL --type annu
 python -m app.jobs.test_retrieval --query "deposit growth" --symbol MEBL
 ```
 
-PostgreSQL stores 384-dimensional vectors with an indexed cosine search; SQLite stores the same deterministic vectors as JSON and scans only for tests/local use. Private uploads must be queried through their owner/portfolio scope.
+For production semantic retrieval, set `EMBEDDING_BACKEND=sentence_transformers`, install requirements, then run `python -m app.jobs.reindex_rag`. PostgreSQL stores 384-dimensional vectors with an indexed cosine search; SQLite stores vectors as JSON and scans only for tests/local use. Private uploads must be queried through their owner/portfolio scope.
 
 ## Safety assumptions
 

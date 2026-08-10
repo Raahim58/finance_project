@@ -16,6 +16,11 @@ class ProfileVersionResponse(BaseModel):
     confirmed_at: datetime | None
 
 
+class DatedContribution(BaseModel):
+    contribution_date: date
+    amount: float = Field(gt=0)
+
+
 class IPSDraft(BaseModel):
     constraints: dict[str, object] = Field(default_factory=dict)
     starting_capital: float | None = Field(default=None, gt=0)
@@ -24,6 +29,30 @@ class IPSDraft(BaseModel):
     annual_contribution: float = Field(default=0, ge=0)
     goal: str | None = Field(default=None, max_length=500)
     benchmark_symbol: str | None = Field(default=None, max_length=30)
+    valuation_date: date | None = None
+    target_date: date | None = None
+    dated_contributions: list[DatedContribution] = Field(default_factory=list)
+    inflation_rate: float | None = Field(default=None, gt=-1)
+    target_value_is_real: bool = False
+    risk_capacity: Literal["low", "moderate", "high"] | None = None
+    risk_willingness: Literal["low", "moderate", "high"] | None = None
+    overall_risk_tolerance: Literal["low", "moderate", "high"] | None = None
+    loss_budget: float | None = Field(default=None, ge=0, le=1)
+    liquidity_requirement: float | None = Field(default=None, ge=0)
+    allowed_asset_types: list[str] | None = None
+    allowed_currencies: list[str] | None = None
+    shariah_only: bool | None = None
+    leverage_allowed: bool | None = None
+    derivatives_allowed: bool | None = None
+    tax_notes: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_goal_dates(self):
+        if self.target_date and self.valuation_date and self.target_date <= self.valuation_date:
+            raise ValueError("target_date must be after valuation_date")
+        if self.target_value_is_real and self.inflation_rate is None:
+            raise ValueError("A real target value requires an inflation_rate assumption")
+        return self
 
 
 class IPSVersionResponse(BaseModel):
@@ -53,12 +82,16 @@ class OptimizerRequest(BaseModel):
     beta_assumptions: dict[str, float] | None = None
     risk_budgets: dict[str, float] | None = None
     risk_free_rate: float = 0.0
+    benchmark_symbol: str | None = Field(default=None, max_length=30)
+    risk_free_series_key: str | None = Field(default=None, max_length=160)
     start_date: date | None = None
     end_date: date | None = None
     covariance_shrinkage: float = Field(default=0.20, ge=0, le=1)
     expected_return_shrinkage: float = Field(default=0.50, ge=0, le=1)
     minimum_weight: float = Field(default=0, ge=0, le=1)
     maximum_weight: float = Field(default=1, gt=0, le=1)
+    include_cash: bool = False
+    minimum_cash_weight: float | None = Field(default=None, ge=0, le=1)
 
     @model_validator(mode="after")
     def validate_method(self):
@@ -92,6 +125,8 @@ class PortfolioQuantResponse(BaseModel):
     annualization: int
     covariance_shrinkage: float
     portfolio: dict[str, object]
+    benchmark: dict[str, object] = Field(default_factory=dict)
+    rolling: dict[str, object] = Field(default_factory=dict)
     covariance: list[list[float]] = Field(default_factory=list)
     correlation: list[list[float]] = Field(default_factory=list)
     risk_contributions: dict[str, float] = Field(default_factory=dict)
@@ -110,6 +145,9 @@ class RebalanceRequest(BaseModel):
     target_weights: dict[str, float] = Field(min_length=1)
     minimum_trade_value: float = Field(default=0, ge=0)
     fee_rate: float = Field(default=0, ge=0)
+    tax_rate: float = Field(default=0, ge=0)
+    allow_sells: bool = True
+    locked_symbols: list[str] = Field(default_factory=list)
 
 
 class RebalanceResponse(BaseModel):
@@ -118,6 +156,8 @@ class RebalanceResponse(BaseModel):
     trades: list[dict[str, object]]
     residual_cash: float
     warnings: list[str]
+    post_trade_validation: dict[str, object] = Field(default_factory=dict)
+    risk_impact: dict[str, object] = Field(default_factory=dict)
 
 
 class ScenarioResponse(BaseModel):
@@ -133,7 +173,7 @@ class ScenarioResponse(BaseModel):
 
 
 class MonitoringRuleCreate(BaseModel):
-    rule_type: Literal["position_weight", "concentration", "stale_data", "drawdown", "volatility", "var", "liquidity", "event", "ingestion_failure"]
+    rule_type: Literal["position_weight", "concentration", "stale_data", "drawdown", "volatility", "var", "liquidity", "event", "ingestion_failure", "beta_shift", "correlation_shift", "risk_budget", "scenario_breach"]
     threshold: dict[str, object]
     deduplication_window_minutes: int = Field(default=1440, ge=1, le=525600)
 

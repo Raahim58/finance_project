@@ -6,10 +6,11 @@ Implemented capabilities include:
 
 - Authentication, encrypted bring-your-own LLM keys, and strict user ownership.
 - Generic instruments, aliases, source artifacts, ingestion runs, canonical observations, and quality issues.
-- Multiple portfolio lifecycle, cash/transaction ledger, derived holdings, baseline snapshots, target/sandbox/optimized allocations, profile and IPS versioning.
-- Returns, risk, performance, covariance, regression, optimizer methods, risk contributions, scenarios, and rebalance previews.
+- Multiple portfolio lifecycle, settlement-aware cash/transaction ledger, cash-flow-adjusted performance, daily snapshots, recorded split/dividend application, target/sandbox/optimized allocations, and typed/versioned IPS inputs.
+- Canonical selected observations, source-priority reconciliation, quality issues, historical backfill/gap reporting, explicit PSX calendar overrides, and compatibility caches.
+- Realized CAGR and arithmetic expected return, target downside risk, excess-return Jensen alpha, CAPM inputs, risk contributions, event studies, cash-aware optimization, path scenarios, and post-rounding rebalance validation.
 - Structured macro/fundamental/event data kept separate from private/public document retrieval and pgvector search.
-- One bounded assistant using an allowlisted typed tool registry, plus recommendations, monitoring runs, and deduplicated alerts.
+- One bounded multi-turn assistant with real OpenAI/Anthropic/Gemini/OpenRouter transports, an allowlisted typed tool planner, claim/evidence validation, recommendations, monitoring runs, and deduplicated alerts.
 - Portfolio, market, research, stress, and assistant workspaces in the frontend, with generated OpenAPI contracts and ECharts.
 
 The application never automates broker passwords or places trades. Mock market data is development-only; all exact values are queried from stored structured data and advice-like assistant output carries evidence or states what is missing.

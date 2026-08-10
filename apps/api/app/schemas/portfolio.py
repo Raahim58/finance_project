@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class PortfolioCreate(BaseModel):
@@ -69,7 +69,7 @@ class TransactionCreate(BaseModel):
     )
     quantity: Decimal | None = Field(default=None, gt=0)
     price: Decimal | None = Field(default=None, ge=0)
-    amount: Decimal
+    amount: Decimal = Field(ge=0)
     transaction_date: date
     notes: str | None = None
     source: str = "manual"
@@ -78,6 +78,52 @@ class TransactionCreate(BaseModel):
     taxes: Decimal = Field(default=Decimal("0"), ge=0)
     settlement_date: date | None = None
     external_id: str | None = Field(default=None, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_financial_contract(self):
+        transaction_type = self.transaction_type
+        symbol = self.symbol.strip().upper()
+        instrument_types = {"buy", "sell", "dividend", "manual_adjustment", "corporate_action"}
+        cash_types = {"deposit", "withdrawal", "fee", "tax"}
+
+        if transaction_type in instrument_types and symbol == "CASH":
+            raise ValueError(f"{transaction_type} requires an instrument symbol")
+        if transaction_type in cash_types and symbol != "CASH":
+            raise ValueError(f"{transaction_type} must use symbol CASH")
+        if transaction_type in {"buy", "sell"}:
+            if self.quantity is None or self.price is None or self.price <= 0:
+                raise ValueError(f"{transaction_type} requires positive quantity and price")
+            expected = self.quantity * self.price
+            tolerance = max(Decimal("0.01"), expected * Decimal("0.0001"))
+            if abs(self.amount - expected) > tolerance:
+                raise ValueError("amount must equal quantity × price within 0.01% (minimum PKR 0.01)")
+        elif transaction_type == "dividend":
+            if self.amount <= 0:
+                raise ValueError("dividend requires a positive amount")
+        elif transaction_type in cash_types:
+            if self.amount <= 0:
+                raise ValueError(f"{transaction_type} requires a positive amount")
+            if self.quantity is not None or self.price is not None:
+                raise ValueError(f"{transaction_type} cannot include quantity or price")
+        elif transaction_type == "corporate_action":
+            if self.quantity is None or self.quantity <= 0 or self.amount != 0:
+                raise ValueError("corporate_action requires a positive split multiplier and zero amount")
+        elif transaction_type == "manual_adjustment":
+            if self.quantity is None or self.price is None or self.amount != 0:
+                raise ValueError("manual_adjustment requires quantity, price, and zero amount")
+        elif transaction_type == "opening_balance":
+            if symbol == "CASH":
+                if self.amount <= 0 or self.quantity is not None or self.price is not None:
+                    raise ValueError("cash opening_balance requires a positive amount only")
+            elif self.quantity is None or self.price is None or self.amount != 0:
+                raise ValueError("instrument opening_balance requires quantity, price, and zero amount")
+
+        if self.settlement_date is not None:
+            if transaction_type not in {"buy", "sell"}:
+                raise ValueError("settlement_date is only valid for buy and sell transactions")
+            if self.settlement_date < self.transaction_date:
+                raise ValueError("settlement_date cannot precede transaction_date")
+        return self
 
 
 class TransactionUpdate(BaseModel):
@@ -133,6 +179,9 @@ class HoldingSummary(BaseModel):
     day_change: Decimal | None
     day_change_percent: Decimal | None
     data_source: str | None
+    artifact_id: str | None = None
+    quality_status: str | None = None
+    adjustment_state: str | None = None
 
 
 class PortfolioSummaryResponse(BaseModel):
@@ -141,6 +190,8 @@ class PortfolioSummaryResponse(BaseModel):
     cost_basis: Decimal
     unrealized_gain_loss: Decimal
     unrealized_gain_loss_percent: Decimal | None
+    net_external_contributions: Decimal
+    total_gain_loss: Decimal
     day_change: Decimal
     day_change_percent: Decimal | None
     cash_balance: Decimal
@@ -171,8 +222,11 @@ class PortfolioExposureResponse(BaseModel):
 class PortfolioPerformancePoint(BaseModel):
     value_date: date
     total_value: Decimal
+    external_cash_flow: Decimal
+    value_change: Decimal
     day_change: Decimal
     day_change_percent: Decimal | None
+    cumulative_twr_percent: Decimal | None
 
 
 class PortfolioRiskFlag(BaseModel):

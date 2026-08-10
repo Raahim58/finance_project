@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from bs4 import BeautifulSoup
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -182,6 +183,7 @@ class DpsMarketDataProvider(MarketDataProvider):
 
     def __init__(self) -> None:
         self.captured_responses: list[dict[str, Any]] = []
+        self.quality_issues: list[dict[str, Any]] = []
 
     def _capture(self, response: httpx.Response, effective_date: date | None = None) -> None:
         self.captured_responses.append({
@@ -223,7 +225,11 @@ class DpsMarketDataProvider(MarketDataProvider):
         return rows
 
     @staticmethod
-    def parse_datewise_history(html: str, trade_date: date) -> list[LatestPriceRow]:
+    def parse_datewise_history(
+        html: str,
+        trade_date: date,
+        quality_issues: list[dict[str, Any]] | None = None,
+    ) -> list[LatestPriceRow]:
         soup = BeautifulSoup(html, "html.parser")
         table = soup.find("table", id="historicalTable")
         if table is None:
@@ -243,10 +249,14 @@ class DpsMarketDataProvider(MarketDataProvider):
             values = [_dps_decimal(value) for value in cells[1:8]]
             volume = _dps_int(cells[8])
             if not symbol or any(value is None for value in values[:5]) or volume is None:
+                if quality_issues is not None:
+                    quality_issues.append({"trade_date": trade_date, "symbol": symbol or cells[0], "rule": "required_market_field_missing", "cells": cells})
                 continue
             previous_close, open_price, high, low, close = values[:5]
             if min(previous_close, open_price, high, low, close) <= 0 or high < max(open_price, close) or low > min(open_price, close) or volume < 0:
                 logger.warning("Quarantined invalid DPS row for %s on %s", symbol, trade_date)
+                if quality_issues is not None:
+                    quality_issues.append({"trade_date": trade_date, "symbol": symbol, "rule": "invalid_ohlc_or_volume", "cells": cells})
                 continue
             rows.append(
                 LatestPriceRow(
@@ -332,7 +342,7 @@ class DpsMarketDataProvider(MarketDataProvider):
                     response = client.post("/historical", data={"date": cursor.isoformat()})
                     response.raise_for_status()
                     self._capture(response, cursor)
-                    rows = self.parse_datewise_history(response.text, cursor)
+                    rows = self.parse_datewise_history(response.text, cursor, self.quality_issues)
                     if rows:
                         break
                 cursor = cursor.fromordinal(cursor.toordinal() - 1)
@@ -349,13 +359,15 @@ class DpsMarketDataProvider(MarketDataProvider):
 
     def refresh_latest(self, db: Session) -> dict[str, Any]:
         from app.ingestion.artifact_store import LocalArtifactStore
-        from app.models.workstation import DataSource, Instrument, MarketObservation, SourceArtifact
+        from app.models.workstation import DataQualityIssue, DataSource, Instrument, MarketObservation, SourceArtifact
+        from app.services.canonical_market_service import reconcile_market_observations
         from app.services.market_ingestion import persist_market_data
         from sqlalchemy import select
         from hashlib import sha256
         import json
 
         self.captured_responses = []
+        self.quality_issues = []
         latest_prices = self.fetch_latest_prices()
         if not latest_prices:
             raise RuntimeError("DPS returned no usable market price rows")
@@ -394,8 +406,19 @@ class DpsMarketDataProvider(MarketDataProvider):
             if db.scalar(select(MarketObservation).where(MarketObservation.instrument_id == instrument.id, MarketObservation.effective_at == datetime.combine(price.trade_date, datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi")), MarketObservation.artifact_id == artifact.id)):
                 continue
             values = {"open": str(price.open), "high": str(price.high), "low": str(price.low), "close": str(price.close), "previous_close": str(price.previous_close), "volume": price.volume}
-            db.add(MarketObservation(instrument_id=instrument.id, effective_at=datetime.combine(price.trade_date, datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi")), frequency="daily", values_json=json.dumps(values, sort_keys=True), currency="PKR", unit="price", adjustment_state="unadjusted", artifact_id=artifact.id, is_selected=True))
+            db.add(MarketObservation(instrument_id=instrument.id, effective_at=datetime.combine(price.trade_date, datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi")), frequency="daily", values_json=json.dumps(values, sort_keys=True), currency="PKR", unit="price", adjustment_state="unadjusted", artifact_id=artifact.id, is_selected=False))
             observation_count += 1
+        for issue in self.quality_issues:
+            artifact = artifacts_by_date.get(issue["trade_date"])
+            db.add(DataQualityIssue(
+                artifact_id=artifact.id if artifact else None,
+                rule=str(issue["rule"]),
+                severity="error",
+                details_json=json.dumps({"symbol": issue["symbol"], "trade_date": issue["trade_date"].isoformat(), "raw_cells": issue["cells"]}),
+                selection_status="rejected",
+            ))
+        db.flush()
+        reconcile_market_observations(db)
         db.commit()
         result.update({"attempted_provider": self.source, "used_provider": self.source, "artifacts_written": artifact_count, "observations_written": observation_count, "message": "Refreshed verified DPS market data with immutable raw artifacts."})
         return result
@@ -761,10 +784,20 @@ class AutoMarketDataProvider(MarketDataProvider):
             result["attempted_provider"] = self.source
             result["used_provider"] = self.primary_provider.source
             return result
+        except SQLAlchemyError:
+            # Persistence failures are operational failures, not evidence that
+            # the primary data source is unavailable. Do not obscure or repeat
+            # them by invoking another provider.
+            raise
         except Exception as exc:
             primary_error = str(exc)
 
-        result = self.fallback_provider.refresh_latest(db)
+        try:
+            result = self.fallback_provider.refresh_latest(db)
+        except Exception as fallback_exc:
+            raise RuntimeError(
+                f"DPS refresh failed ({primary_error}); Yahoo fallback also failed ({fallback_exc})"
+            ) from fallback_exc
         result["attempted_provider"] = self.source
         result["used_provider"] = self.fallback_provider.source
         result["message"] = (

@@ -7,6 +7,8 @@ from app.services.market_ingestion import run_market_data_cycle
 from app.models.user import User
 from app.models.workstation import MonitoringRule
 from app.services.monitoring_service import run_monitoring
+from app.services.ledger_service import apply_recorded_corporate_actions, generate_daily_snapshots
+from app.services.ingestion_service import bootstrap_next_market_history, run_due_ingestion_jobs
 from sqlalchemy import select
 
 
@@ -27,12 +29,19 @@ def run_monitoring_jobs(db) -> int:
 def run_once() -> None:
     with SessionLocal() as db:
         run = run_market_data_cycle(db, settings.market_data_mode)
+        corporate_actions = apply_recorded_corporate_actions(db)
+        snapshot_count = generate_daily_snapshots(db)
+        history_run = bootstrap_next_market_history(db) if run.status == "success" else None
+        background_runs = run_due_ingestion_jobs(db) if run.status == "success" else []
         monitoring_runs = run_monitoring_jobs(db)
     print(
         "Market scheduler run finished with "
         f"status={run.status} mode={run.mode} attempted_provider={run.attempted_provider} "
         f"used_provider={run.used_provider} latest_trade_date={run.latest_trade_date}"
-        f" monitoring_runs={monitoring_runs}"
+        f" portfolio_snapshots={snapshot_count} monitoring_runs={monitoring_runs}"
+        f" history_run={history_run.id if history_run else None}"
+        f" background_jobs={len(background_runs)}"
+        f" corporate_actions={corporate_actions['applied']}"
     )
 
 

@@ -16,3 +16,4 @@ htmlcov/
 *.sqlite3
 storage/
 apps/api/storage/
+data/

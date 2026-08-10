@@ -8,8 +8,8 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
 from app.models.workstation import DataSource
-from app.schemas.research import HistoricalReplayRequest, InstrumentResponse, ScenarioDefinitionCreate, ScenarioDefinitionResponse
-from app.services.research_service import company_overview, instrument_detail, list_events, list_macro_series, macro_releases, market_series, search_instruments
+from app.schemas.research import EventStudyRequest, HistoricalReplayRequest, InstrumentResponse, ScenarioDefinitionCreate, ScenarioDefinitionResponse
+from app.services.research_service import company_overview, instrument_detail, list_events, list_macro_series, macro_releases, market_series, run_event_study, search_instruments
 from app.services.scenario_service import create_definition, historical_replay, list_definitions
 
 router = APIRouter()
@@ -89,6 +89,11 @@ def relevance(instrument_id: str, current_user: User = Depends(get_current_user)
 @router.get("/research/events")
 def events(entity_key: str | None = None, limit: int = Query(default=100, ge=1, le=500), db: Session = Depends(get_db)):
     return list_events(db, entity_key, limit)
+
+
+@router.post("/research/event-study")
+def event_study(payload: EventStudyRequest, _: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return run_event_study(db, payload)
 
 
 @router.get("/portfolios/{portfolio_id}/scenarios", response_model=list[ScenarioDefinitionResponse])

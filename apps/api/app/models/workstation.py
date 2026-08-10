@@ -127,6 +127,20 @@ class MarketObservation(Base):
     is_selected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
 
 
+class ExchangeCalendarDay(Base):
+    __tablename__ = "exchange_calendar_days"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    exchange_code: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    session_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    is_session: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    open_time: Mapped[str | None] = mapped_column(String(10))
+    close_time: Mapped[str | None] = mapped_column(String(10))
+    reason: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(20), default="observed", nullable=False)
+    artifact_id: Mapped[str | None] = mapped_column(ForeignKey("source_artifacts.id"), index=True)
+
+
 class InvestorFinancialProfile(Base):
     __tablename__ = "investor_financial_profiles"
 
