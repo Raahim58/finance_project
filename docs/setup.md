@@ -57,7 +57,24 @@ npm run build
 npm run dev
 ```
 
-`generate:api` expects the API at `NEXT_PUBLIC_API_BASE_URL`/`http://localhost:8000` and checks `lib/generated/api.d.ts` into the repository. Main routes are `/dashboard`, `/portfolios`, `/portfolios/[id]/*`, `/markets`, `/research`, `/companies/[symbol]`, `/documents`, `/assistant`, and `/settings`.
+`generate:api` expects the API at `http://localhost:8000` and checks `lib/generated/api.d.ts` into the repository. Main routes are `/dashboard`, `/portfolios`, `/portfolios/[id]/*`, `/markets`, `/research`, `/companies/[symbol]`, `/documents`, `/assistant`, and `/settings`.
+
+Browser requests default to the same-origin `/api` path. Next.js proxies that path to
+`API_INTERNAL_BASE_URL` (default `http://127.0.0.1:8000`), so an HTTPS development
+tunnel only needs to expose the frontend:
+
+```bash
+cd apps/api
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+cd ../web
+npm run dev -- --hostname 0.0.0.0
+
+cloudflared tunnel --url http://localhost:3000
+```
+
+Do not set `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` for a remote preview: the
+remote browser would try its own localhost and HTTPS pages may block the HTTP request.
 
 ## Verification
 

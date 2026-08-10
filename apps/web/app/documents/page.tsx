@@ -65,27 +65,27 @@ export default function DocumentsPage() {
   }
 
   if (loading) {
-    return <section className="mx-auto max-w-6xl px-5 py-8 text-sm text-muted">Loading documents...</section>;
+    return <section className="page-wrap text-sm text-muted">Loading documents...</section>;
   }
 
   return (
-    <section className="mx-auto grid max-w-6xl gap-6 px-5 py-8">
-      <div>
-        <h1 className="text-2xl font-semibold text-ink">Documents & RAG</h1>
-        <p className="mt-2 text-sm text-muted">
+    <section className="page-wrap grid gap-4">
+      <header className="page-heading">
+        <div><p className="eyebrow">Evidence operations</p><h1 className="page-title">Document library</h1>
+        <p className="page-subtitle">
           Upload documents, preserve metadata, and search cited chunks. RAG is for unstructured text only.
-        </p>
-      </div>
+        </p></div>
+      </header>
 
-      {message ? <p className="rounded-md border border-line bg-white px-4 py-3 text-sm text-ink">{message}</p> : null}
+      {message ? <p className="notice">{message}</p> : null}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <form onSubmit={onUpload} className="grid gap-4 rounded-lg border border-line bg-white p-5">
+        <form onSubmit={onUpload} className="panel grid gap-4 p-5">
           <h2 className="text-base font-semibold text-ink">Upload document</h2>
           <label className="grid gap-2 text-sm text-ink">
             File
             <input
-              className="rounded-md border border-line px-3 py-2"
+              className="field"
               type="file"
               accept=".txt,.md,.pdf,text/plain,application/pdf"
               onChange={(event) => setFile(event.target.files?.[0] ?? null)}
@@ -93,56 +93,56 @@ export default function DocumentsPage() {
           </label>
           <label className="grid gap-2 text-sm text-ink">
             Title
-            <input className="rounded-md border border-line px-3 py-2" value={title} onChange={(event) => setTitle(event.target.value)} />
+            <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} />
           </label>
           <div className="grid gap-3 md:grid-cols-3">
             <label className="grid gap-2 text-sm text-ink">
               Type
-              <input className="rounded-md border border-line px-3 py-2" value={documentType} onChange={(event) => setDocumentType(event.target.value)} />
+              <input className="field" value={documentType} onChange={(event) => setDocumentType(event.target.value)} />
             </label>
             <label className="grid gap-2 text-sm text-ink">
               Symbol
-              <input className="rounded-md border border-line px-3 py-2 uppercase" value={symbol} onChange={(event) => setSymbol(event.target.value)} />
+              <input className="field uppercase" value={symbol} onChange={(event) => setSymbol(event.target.value)} />
             </label>
             <label className="grid gap-2 text-sm text-ink">
               Source
-              <input className="rounded-md border border-line px-3 py-2" value={sourceName} onChange={(event) => setSourceName(event.target.value)} />
+              <input className="field" value={sourceName} onChange={(event) => setSourceName(event.target.value)} />
             </label>
           </div>
-          <button className="rounded-md bg-accent px-4 py-2 text-sm font-semibold text-white" type="submit">
+          <button className="btn btn-primary" type="submit">
             Upload
           </button>
         </form>
 
-        <form onSubmit={onSearch} className="grid content-start gap-4 rounded-lg border border-line bg-white p-5">
+        <form onSubmit={onSearch} className="panel grid content-start gap-4 p-5">
           <h2 className="text-base font-semibold text-ink">Search cited context</h2>
           <label className="grid gap-2 text-sm text-ink">
             Query
-            <input className="rounded-md border border-line px-3 py-2" value={query} onChange={(event) => setQuery(event.target.value)} />
+            <input className="field" value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>
           <div className="grid gap-3 md:grid-cols-2">
             <label className="grid gap-2 text-sm text-ink">
               Symbol filter
-              <input className="rounded-md border border-line px-3 py-2 uppercase" value={symbol} onChange={(event) => setSymbol(event.target.value)} />
+              <input className="field uppercase" value={symbol} onChange={(event) => setSymbol(event.target.value)} />
             </label>
             <label className="grid gap-2 text-sm text-ink">
               Type filter
-              <input className="rounded-md border border-line px-3 py-2" value={documentType} onChange={(event) => setDocumentType(event.target.value)} />
+              <input className="field" value={documentType} onChange={(event) => setDocumentType(event.target.value)} />
             </label>
           </div>
-          <button className="rounded-md bg-accent px-4 py-2 text-sm font-semibold text-white" type="submit">
+          <button className="btn btn-primary" type="submit">
             Search
           </button>
         </form>
       </div>
 
-      <section className="rounded-lg border border-line bg-white">
+      <section className="panel">
         <div className="border-b border-line px-4 py-3">
           <h2 className="text-sm font-semibold text-ink">Search results</h2>
         </div>
         <div className="grid gap-3 p-4">
           {(searchResults?.chunks ?? []).map((chunk, index) => (
-            <article key={chunk.id} className="rounded-md border border-line bg-surface p-4 text-sm">
+            <article key={chunk.id} className="border border-line bg-surface p-4 text-sm">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <p className="font-semibold text-ink">
                   [{index + 1}] {chunk.citation.title}
@@ -160,13 +160,13 @@ export default function DocumentsPage() {
         </div>
       </section>
 
-      <section className="rounded-lg border border-line bg-white">
+      <section className="panel">
         <div className="border-b border-line px-4 py-3">
           <h2 className="text-sm font-semibold text-ink">Documents</h2>
         </div>
         <div className="grid gap-2 p-4">
           {documents.map((document) => (
-            <div key={document.id} className="rounded-md border border-line bg-surface px-3 py-3 text-sm">
+            <div key={document.id} className="border border-line bg-surface px-3 py-3 text-sm">
               <p className="font-semibold text-ink">{document.title}</p>
               <p className="mt-1 text-xs text-muted">
                 {document.symbol ?? "No symbol"} · {document.document_type} · {document.source_name} · {document.status}

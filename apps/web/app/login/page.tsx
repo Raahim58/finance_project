@@ -4,10 +4,10 @@ import { AuthForm } from "@/components/AuthForm";
 
 export default function LoginPage() {
   return (
-    <section className="mx-auto grid max-w-md gap-5 px-5 py-12">
+    <section className="mx-auto grid min-h-screen max-w-md content-center gap-5 px-5 py-12">
       <div>
-        <h1 className="text-2xl font-semibold text-ink">Login</h1>
-        <p className="mt-2 text-sm text-muted">Use your MVP account to access protected pages.</p>
+        <p className="eyebrow">PSX Workstation</p><h1 className="page-title mt-2">Sign in</h1>
+        <p className="mt-2 text-sm text-muted">Access your private investment workspace.</p>
       </div>
       <AuthForm mode="login" />
       <Link className="text-sm text-accent" href="/signup">

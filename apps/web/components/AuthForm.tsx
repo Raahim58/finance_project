@@ -25,7 +25,7 @@ export function AuthForm({ mode }: AuthFormProps) {
       const response =
         mode === "signup" ? await signup(email, password, fullName) : await login(email, password);
       setToken(response.access_token);
-      router.push("/dashboard");
+      router.push((mode === "signup" ? "/onboarding" : "/dashboard") as never);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");
     } finally {
@@ -34,12 +34,12 @@ export function AuthForm({ mode }: AuthFormProps) {
   }
 
   return (
-    <form onSubmit={onSubmit} className="grid gap-4 rounded-lg border border-line bg-white p-5">
+    <form onSubmit={onSubmit} className="panel grid gap-4 p-5">
       {mode === "signup" ? (
         <label className="grid gap-2 text-sm text-ink">
           Full name
           <input
-            className="rounded-md border border-line px-3 py-2"
+            className="field"
             value={fullName}
             onChange={(event) => setFullName(event.target.value)}
           />
@@ -48,7 +48,7 @@ export function AuthForm({ mode }: AuthFormProps) {
       <label className="grid gap-2 text-sm text-ink">
         Email
         <input
-          className="rounded-md border border-line px-3 py-2"
+          className="field"
           type="email"
           required
           value={email}
@@ -58,7 +58,7 @@ export function AuthForm({ mode }: AuthFormProps) {
       <label className="grid gap-2 text-sm text-ink">
         Password
         <input
-          className="rounded-md border border-line px-3 py-2"
+          className="field"
           type="password"
           required
           minLength={8}
@@ -68,7 +68,7 @@ export function AuthForm({ mode }: AuthFormProps) {
       </label>
       {error ? <p className="text-sm text-warn">{error}</p> : null}
       <button
-        className="rounded-md bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+        className="btn btn-primary"
         disabled={loading}
         type="submit"
       >

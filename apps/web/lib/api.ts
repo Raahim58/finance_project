@@ -170,6 +170,29 @@ export type PortfolioSummary = {
   data_source?: string | null;
 };
 
+export type PortfolioPerformancePoint = {
+  value_date: string;
+  total_value: string;
+  external_cash_flow: string;
+  value_change: string;
+  day_change: string;
+  day_change_percent?: string | null;
+  cumulative_twr_percent?: string | null;
+};
+
+export type Transaction = {
+  id: string; portfolio_id: string; symbol: string; transaction_type: string;
+  quantity?: string | null; price?: string | null; amount: string; transaction_date: string;
+  notes?: string | null; source: string; currency: string; fees: string; taxes: string;
+  settlement_date?: string | null; created_at: string;
+};
+
+export type AllocationSet = {
+  id: string; portfolio_id: string; kind: string; version: number; status: string;
+  base_value?: string | null; assumptions: Record<string, unknown>; created_at: string;
+  items: Array<{ id: string; symbol: string; target_weight: string; target_amount?: string | null; locked: boolean; is_cash: boolean }>;
+};
+
 export type SectorExposure = {
   sector: string;
   market_value: string;
@@ -259,11 +282,19 @@ export type PortfolioQuant = {
   annualization: number;
   covariance_shrinkage: number;
   portfolio: Record<string, unknown>;
+  benchmark: Record<string, unknown>;
+  rolling: Record<string, unknown>;
   covariance: number[][];
   correlation: number[][];
   risk_contributions: Record<string, number>;
   warnings: string[];
   run_id?: string | null;
+};
+
+export type ScenarioResult = {
+  id: string; name: string; data_cutoff: string; shocks: Record<string, number>;
+  portfolio_value: number; pnl: number; pnl_percent: number;
+  positions: Array<Record<string, unknown>>; assumptions: string[];
 };
 
 export type AssistantResult = {
@@ -278,7 +309,9 @@ export type AssistantResult = {
   created_at: string;
 };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+// Keep browser requests on the frontend origin. Next proxies /api to FastAPI,
+// which also makes temporary HTTPS preview tunnels work without CORS or mixed content.
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 const TOKEN_KEY = "psx_ai_token";
 
 export function getToken() {
@@ -379,6 +412,19 @@ export function createPortfolio(name: string, baseCurrency = "PKR") {
   });
 }
 
+export function duplicatePortfolio(portfolioId: string, name: string, includePositions = true) {
+  return request<Portfolio>(`/portfolios/${encodeURIComponent(portfolioId)}/duplicate`, { method: "POST", body: JSON.stringify({ name, include_positions: includePositions }) });
+}
+
+export function archivePortfolio(portfolioId: string) {
+  return request<Portfolio>(`/portfolios/${encodeURIComponent(portfolioId)}/archive`, { method: "POST" });
+}
+
+export function comparePortfolios(portfolioIds: string[]) {
+  const query = portfolioIds.map((id) => `portfolio_ids=${encodeURIComponent(id)}`).join("&");
+  return request<{ portfolios: PortfolioSummary[] }>(`/portfolios/compare?${query}`);
+}
+
 export function getPortfolioSummary(portfolioId: string) {
   return request<PortfolioSummary>(`/portfolios/${encodeURIComponent(portfolioId)}/summary`);
 }
@@ -389,6 +435,18 @@ export function getPortfolioExposure(portfolioId: string) {
 
 export function getPortfolioRiskFlags(portfolioId: string) {
   return request<PortfolioRiskFlags>(`/portfolios/${encodeURIComponent(portfolioId)}/risk-flags`);
+}
+
+export function getPortfolioPerformance(portfolioId: string, limit = 90) {
+  return request<PortfolioPerformancePoint[]>(`/portfolios/${encodeURIComponent(portfolioId)}/performance?limit=${limit}`);
+}
+
+export function getTransactions(portfolioId: string) {
+  return request<Transaction[]>(`/portfolios/${encodeURIComponent(portfolioId)}/transactions`);
+}
+
+export function getAllocations(portfolioId: string) {
+  return request<AllocationSet[]>(`/portfolios/${encodeURIComponent(portfolioId)}/allocations`);
 }
 
 export function addHolding(portfolioId: string, symbol: string, quantity: string, averageCost: string) {
@@ -455,8 +513,10 @@ export function createAllocation(portfolioId: string, payload: Record<string, un
 }
 
 export function runScenario(portfolioId: string, payload: Record<string, unknown>) {
-  return request<Record<string, unknown>>(`/portfolios/${encodeURIComponent(portfolioId)}/scenario-runs`, { method: "POST", body: JSON.stringify(payload) });
+  return request<ScenarioResult>(`/portfolios/${encodeURIComponent(portfolioId)}/scenario-runs`, { method: "POST", body: JSON.stringify(payload) });
 }
+
+export function getScenarioRuns(portfolioId: string) { return request<ScenarioResult[]>(`/portfolios/${encodeURIComponent(portfolioId)}/scenario-runs`); }
 
 export function sendAssistantMessage(question: string, portfolioId?: string) {
   return request<AssistantResult>("/assistant/messages", { method: "POST", body: JSON.stringify({ question, portfolio_id: portfolioId || null }) });
@@ -468,6 +528,18 @@ export function getAlerts(portfolioId?: string) {
 
 export function getRecommendations() {
   return request<Array<Record<string, unknown>>>("/recommendations");
+}
+
+export function decideRecommendation(recommendationId: string, decision: "accepted" | "dismissed") {
+  return request<{ id: string; status: string }>(`/recommendations/${encodeURIComponent(recommendationId)}?decision=${decision}`, { method: "PATCH" });
+}
+
+export function acknowledgeAlert(alertId: string) {
+  return request<Record<string, unknown>>(`/monitoring/alerts/${encodeURIComponent(alertId)}/acknowledge`, { method: "POST" });
+}
+
+export function saveFinancialProfile(data: Record<string, unknown>, confirm = true) {
+  return request<Record<string, unknown>>(`/profiles/financial/${confirm ? "confirm" : "draft"}`, { method: "POST", body: JSON.stringify({ data }) });
 }
 
 export function searchInstruments(query = "") {
