@@ -29,6 +29,15 @@ class Portfolio(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     history_start: Mapped[date | None] = mapped_column(Date, nullable=True)
     history_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    goal_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    benchmark_instrument_id: Mapped[str | None] = mapped_column(
+        ForeignKey("instruments.id"), nullable=True, index=True
+    )
+    selected_ips_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("portfolio_ips_versions.id", use_alter=True, name="fk_portfolio_selected_ips"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
@@ -54,6 +63,7 @@ class PortfolioHolding(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     portfolio_id: Mapped[str] = mapped_column(ForeignKey("portfolios.id"), nullable=False, index=True)
     company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), nullable=False, index=True)
+    instrument_id: Mapped[str | None] = mapped_column(ForeignKey("instruments.id"), nullable=True, index=True)
     symbol: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     quantity: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
     average_cost: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
@@ -76,6 +86,7 @@ class PortfolioTransaction(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     portfolio_id: Mapped[str] = mapped_column(ForeignKey("portfolios.id"), nullable=False, index=True)
     company_id: Mapped[str | None] = mapped_column(ForeignKey("companies.id"), nullable=True, index=True)
+    instrument_id: Mapped[str | None] = mapped_column(ForeignKey("instruments.id"), nullable=True, index=True)
     symbol: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     transaction_type: Mapped[str] = mapped_column(String(40), nullable=False)
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(24, 6), nullable=True)

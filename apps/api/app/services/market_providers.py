@@ -187,6 +187,8 @@ class DpsMarketDataProvider(MarketDataProvider):
         self.captured_responses.append({
             "url": str(response.url), "content": response.content,
             "content_type": response.headers.get("content-type"), "effective_date": effective_date,
+            "method": response.request.method,
+            "request_content": response.request.content,
         })
 
     def _client(self) -> httpx.Client:
@@ -347,7 +349,7 @@ class DpsMarketDataProvider(MarketDataProvider):
 
     def refresh_latest(self, db: Session) -> dict[str, Any]:
         from app.ingestion.artifact_store import LocalArtifactStore
-        from app.models.workstation import DataSource, SourceArtifact
+        from app.models.workstation import DataSource, Instrument, MarketObservation, SourceArtifact
         from app.services.market_ingestion import persist_market_data
         from sqlalchemy import select
         from hashlib import sha256
@@ -364,19 +366,38 @@ class DpsMarketDataProvider(MarketDataProvider):
             db.add(data_source); db.flush()
         store = LocalArtifactStore(settings.source_artifact_root)
         artifact_count = 0
+        artifacts_by_date = {}
         for captured in self.captured_responses:
             digest = sha256(captured["content"]).hexdigest()
-            if db.scalar(select(SourceArtifact).where(SourceArtifact.sha256 == digest)) is not None:
+            existing_artifact = db.scalar(select(SourceArtifact).where(SourceArtifact.sha256 == digest))
+            if existing_artifact is not None:
+                if captured["effective_date"]:
+                    artifacts_by_date[captured["effective_date"]] = existing_artifact
                 continue
             suffix = ".json" if "json" in (captured["content_type"] or "") else ".html"
             stored = store.put(captured["content"], suffix)
             effective_at = None
             if captured["effective_date"]:
                 effective_at = datetime.combine(captured["effective_date"], datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi"))
-            db.add(SourceArtifact(data_source_id=data_source.id, source_url=captured["url"], effective_at=effective_at, sha256=stored.sha256, content_type=captured["content_type"], storage_path=stored.storage_path, parser_version=self.parser_version, status="parsed", response_metadata_json=json.dumps({"bytes": stored.bytes})))
+            request_fingerprint = sha256(captured["method"].encode() + captured["url"].encode() + captured["request_content"]).hexdigest()
+            artifact = SourceArtifact(data_source_id=data_source.id, source_url=captured["url"], http_method=captured["method"], request_fingerprint=request_fingerprint, effective_at=effective_at, sha256=stored.sha256, content_type=captured["content_type"], storage_path=stored.storage_path, parser_version=self.parser_version, status="parsed", response_metadata_json=json.dumps({"bytes": stored.bytes}))
+            db.add(artifact); db.flush()
+            if captured["effective_date"]:
+                artifacts_by_date[captured["effective_date"]] = artifact
             artifact_count += 1
+        observation_count = 0
+        for price in latest_prices:
+            artifact = artifacts_by_date.get(price.trade_date)
+            instrument = db.scalar(select(Instrument).where(Instrument.symbol == price.symbol))
+            if not artifact or not instrument:
+                continue
+            if db.scalar(select(MarketObservation).where(MarketObservation.instrument_id == instrument.id, MarketObservation.effective_at == datetime.combine(price.trade_date, datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi")), MarketObservation.artifact_id == artifact.id)):
+                continue
+            values = {"open": str(price.open), "high": str(price.high), "low": str(price.low), "close": str(price.close), "previous_close": str(price.previous_close), "volume": price.volume}
+            db.add(MarketObservation(instrument_id=instrument.id, effective_at=datetime.combine(price.trade_date, datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi")), frequency="daily", values_json=json.dumps(values, sort_keys=True), currency="PKR", unit="price", adjustment_state="unadjusted", artifact_id=artifact.id, is_selected=True))
+            observation_count += 1
         db.commit()
-        result.update({"attempted_provider": self.source, "used_provider": self.source, "artifacts_written": artifact_count, "message": "Refreshed verified DPS market data with immutable raw artifacts."})
+        result.update({"attempted_provider": self.source, "used_provider": self.source, "artifacts_written": artifact_count, "observations_written": observation_count, "message": "Refreshed verified DPS market data with immutable raw artifacts."})
         return result
 
     def fetch_symbol_history(

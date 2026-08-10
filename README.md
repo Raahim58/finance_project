@@ -1,27 +1,20 @@
-# psx-ai-portfolio-agent
+# PSX Quant Portfolio Workstation
 
-AI-powered Pakistan Stock Exchange portfolio intelligence assistant.
+A FastAPI + Next.js workstation for user-owned PSX portfolios, ledger-based valuation, reproducible quant analysis, optimization, research/RAG, deterministic scenarios, and a grounded assistant.
 
-This repository is a production-style side-project MVP scaffold. Phases 0 through 4 are implemented:
+Implemented capabilities include:
 
-- Monorepo layout with `apps/api` and `apps/web`
-- FastAPI backend skeleton
-- Next.js App Router frontend skeleton
-- Email/password authentication
-- User preferences
-- Bring-your-own LLM provider settings
-- Encrypted LLM API key storage
-- Provider-agnostic LLM gateway with mock provider and adapter placeholders
-- Project docs, skills, agents, and MCP-style design notes
-- Mock PSX market data tables, ingestion job, APIs, dashboard, and company history pages
-- Portfolio tables, holdings and transactions APIs, valuation/exposure/PnL services, risk flags, and portfolio dashboard
-- Company document ingestion, deterministic chunking, local RAG retrieval, citations, and document search UI
+- Authentication, encrypted bring-your-own LLM keys, and strict user ownership.
+- Generic instruments, aliases, source artifacts, ingestion runs, canonical observations, and quality issues.
+- Multiple portfolio lifecycle, cash/transaction ledger, derived holdings, baseline snapshots, target/sandbox/optimized allocations, profile and IPS versioning.
+- Returns, risk, performance, covariance, regression, optimizer methods, risk contributions, scenarios, and rebalance previews.
+- Structured macro/fundamental/event data kept separate from private/public document retrieval and pgvector search.
+- One bounded assistant using an allowlisted typed tool registry, plus recommendations, monitoring runs, and deduplicated alerts.
+- Portfolio, market, research, stress, and assistant workspaces in the frontend, with generated OpenAPI contracts and ECharts.
 
-Later phases for policy intelligence, chat, digests, alerts, watchlists, and order intents are intentionally not implemented yet.
+The application never automates broker passwords or places trades. Mock market data is development-only; all exact values are queried from stored structured data and advice-like assistant output carries evidence or states what is missing.
 
-## Quick Start
-
-Backend:
+## Quick start
 
 ```bash
 cd apps/api
@@ -31,18 +24,15 @@ pip install -r requirements-dev.txt
 cp ../../.env.example .env
 python -m app.core.keys
 alembic upgrade head
-python -m app.jobs.ingest_psx_mock --days 365
-python -m app.jobs.ingest_document --file ./sample.txt --symbol MEBL --type annual_report
-pytest
+python -m app.seed.demo
 uvicorn app.main:app --reload
 ```
-
-Frontend:
 
 ```bash
 cd apps/web
 npm install
+npm run generate:api
 npm run dev
 ```
 
-Full setup details are in [docs/setup.md](docs/setup.md).
+See [setup](docs/setup.md), [architecture](docs/architecture.md), [data sources](docs/data-sources.md), [formulas](docs/formulas.md), [assistant tools](docs/mcp-tools.md), and [trading safety](docs/trading-safety.md).

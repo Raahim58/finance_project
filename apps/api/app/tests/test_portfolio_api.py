@@ -73,7 +73,9 @@ def test_portfolio_crud_summary_exposure_and_risk_flags(client):
 
     transactions = client.get(f"/portfolios/{portfolio_id}/transactions", headers=headers)
     assert transactions.status_code == 200
-    assert len(transactions.json()) == 1
+    # Direct holding edits are now auditable opening/adjustment ledger entries.
+    assert len(transactions.json()) == 4
+    assert {row["source"] for row in transactions.json()} == {"holding_adjustment", "manual"}
 
     patched_transaction = client.patch(
         f"/portfolios/transactions/{transaction_id}",
@@ -87,7 +89,8 @@ def test_portfolio_crud_summary_exposure_and_risk_flags(client):
     assert summary.status_code == 200
     summary_body = summary.json()
     assert Decimal(summary_body["total_value"]) > Decimal("0")
-    assert Decimal(summary_body["cost_basis"]) == Decimal("4120.0000")
+    assert Decimal(summary_body["cost_basis"]) == Decimal("6640.0000")
+    assert Decimal(summary_body["cash_balance"]) == Decimal("-2520.0000")
     assert summary_body["data_freshness_date"] == "2026-06-30"
     assert {holding["symbol"] for holding in summary_body["holdings"]} == {"MEBL", "SYS"}
 

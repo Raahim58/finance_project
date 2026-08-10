@@ -6,6 +6,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.workstation import (
     IPSDraft,
+    IPSComplianceResponse,
     IPSVersionResponse,
     MonitoringRuleCreate,
     MonitoringRuleResponse,
@@ -14,16 +15,24 @@ from app.schemas.workstation import (
     PortfolioQuantResponse,
     ProfileVersionResponse,
     RecommendationResponse,
+    RebalanceRequest,
+    RebalanceResponse,
     ScenarioRequest,
     ScenarioResponse,
     VersionDraft,
 )
 from app.services.workstation_service import (
     create_monitoring_rule,
+    ips_compliance,
     list_ips_versions,
+    list_optimizer_runs,
     list_profile_versions,
     list_recommendations,
+    list_scenario_runs,
     portfolio_quant,
+    rebalance_preview,
+    security_quant,
+    efficient_frontier,
     run_optimizer,
     run_scenario,
     save_ips_version,
@@ -63,9 +72,35 @@ def ips_versions(portfolio_id: str, current_user: User = Depends(get_current_use
     return list_ips_versions(db, current_user, portfolio_id)
 
 
+@router.get("/portfolios/{portfolio_id}/ips/compliance", response_model=IPSComplianceResponse)
+def compliance(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return ips_compliance(db, current_user, portfolio_id)
+
+
 @router.get("/portfolios/{portfolio_id}/quant", response_model=PortfolioQuantResponse)
 def quant(portfolio_id: str, covariance_shrinkage: float = Query(default=0.20, ge=0, le=1), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return portfolio_quant(db, current_user, portfolio_id, covariance_shrinkage)
+
+
+@router.get("/quant/security/{instrument_id}")
+def quant_security(instrument_id: str, db: Session = Depends(get_db)):
+    return security_quant(db, instrument_id)
+
+
+@router.get("/portfolios/{portfolio_id}/frontier")
+def frontier(portfolio_id: str, points: int = Query(default=20, ge=5, le=100), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return efficient_frontier(db, current_user, portfolio_id, points)
+
+
+@router.get("/portfolios/{portfolio_id}/risk", response_model=PortfolioQuantResponse)
+def risk(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return portfolio_quant(db, current_user, portfolio_id)
+
+
+@router.get("/portfolios/{portfolio_id}/risk-contributions")
+def contributions(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    result = portfolio_quant(db, current_user, portfolio_id)
+    return {"portfolio_id": portfolio_id, "data_cutoff": result["data_cutoff"], "risk_contributions": result["risk_contributions"], "run_id": result["run_id"]}
 
 
 @router.post("/portfolios/{portfolio_id}/optimizer-runs", response_model=OptimizerResponse, status_code=201)
@@ -73,14 +108,29 @@ def optimizer(portfolio_id: str, payload: OptimizerRequest, current_user: User =
     return run_optimizer(db, current_user, portfolio_id, payload)
 
 
+@router.get("/portfolios/{portfolio_id}/optimizer-runs")
+def optimizer_history(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return list_optimizer_runs(db, current_user, portfolio_id)
+
+
+@router.post("/portfolios/{portfolio_id}/rebalance-preview", response_model=RebalanceResponse)
+def rebalance(portfolio_id: str, payload: RebalanceRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return rebalance_preview(db, current_user, portfolio_id, payload)
+
+
 @router.post("/portfolios/{portfolio_id}/scenario-runs", response_model=ScenarioResponse, status_code=201)
 def scenario(portfolio_id: str, payload: ScenarioRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return run_scenario(db, current_user, portfolio_id, payload)
 
 
+@router.get("/portfolios/{portfolio_id}/scenario-runs")
+def scenario_history(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return list_scenario_runs(db, current_user, portfolio_id)
+
+
 @router.post("/portfolios/{portfolio_id}/monitoring/rules", response_model=MonitoringRuleResponse, status_code=status.HTTP_201_CREATED)
 def monitoring_rule(portfolio_id: str, payload: MonitoringRuleCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return create_monitoring_rule(db, current_user, portfolio_id, payload.rule_type, payload.threshold)
+    return create_monitoring_rule(db, current_user, portfolio_id, payload.rule_type, payload.threshold, payload.deduplication_window_minutes)
 
 
 @router.get("/recommendations", response_model=list[RecommendationResponse])

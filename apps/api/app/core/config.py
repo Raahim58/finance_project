@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     market_data_mode: str = "mock"
     market_data_refresh_seconds: int = 300
     source_artifact_root: str = "./data/artifacts"
+    embedding_dimensions: int = 384
+    assistant_max_tool_iterations: int = 6
+    assistant_max_retrieved_chunks: int = 8
+    assistant_timeout_seconds: int = 30
     market_data_default_symbols: Annotated[list[str], NoDecode] = Field(default_factory=list)
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:3000"]

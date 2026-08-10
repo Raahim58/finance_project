@@ -15,13 +15,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <header className="border-b border-line bg-white">
           <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-4">
             <Link href="/" className="text-base font-semibold text-ink">
-              PSX AI Portfolio Agent
+              PSX Quant Workstation
             </Link>
             <nav className="flex gap-4 text-sm text-muted">
               <Link href="/dashboard">Dashboard</Link>
-              <Link href="/market">Market</Link>
-              <Link href="/portfolio">Portfolio</Link>
-              <Link href="/documents">Documents</Link>
+              <Link href="/portfolios">Portfolios</Link>
+              <Link href="/markets">Markets</Link>
+              <Link href="/research">Research</Link>
+              <Link href="/assistant">Assistant</Link>
               <Link href="/settings">Settings</Link>
               <Link href="/login">Login</Link>
             </nav>

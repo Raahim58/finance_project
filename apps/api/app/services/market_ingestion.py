@@ -155,6 +155,8 @@ def get_active_company_symbols(db: Session) -> list[str]:
 
 
 def upsert_company_from_price_row(db: Session, row: LatestPriceRow) -> Company:
+    from app.models.workstation import Instrument
+
     exchange = ensure_psx_exchange(db)
     company = db.scalar(select(Company).where(Company.symbol == row.symbol))
     if not company:
@@ -169,7 +171,6 @@ def upsert_company_from_price_row(db: Session, row: LatestPriceRow) -> Company:
         )
         db.add(company)
         db.flush()
-        return company
 
     if row.name:
         company.name = row.name
@@ -181,6 +182,13 @@ def upsert_company_from_price_row(db: Session, row: LatestPriceRow) -> Company:
         company.sector = "Unknown"
     company.exchange_id = exchange.id
     company.is_active = True
+    db.flush()
+    instrument = db.scalar(select(Instrument).where(Instrument.company_id == company.id))
+    if instrument is None:
+        db.add(Instrument(company_id=company.id, symbol=company.symbol, name=company.name, instrument_type="equity", currency="PKR", country="PK", sector=company.sector))
+    else:
+        instrument.name = company.name
+        instrument.sector = company.sector
     db.flush()
     return company
 
@@ -403,22 +411,25 @@ def compute_market_stats(
         total_volume = sum(price.volume for price in prices)
         total_value = sum((price.value for price in prices), Decimal("0"))
         avg_change_percent = sum((price.change_percent for price in prices), Decimal("0")) / Decimal(len(prices))
-        index_value = money(45_000 + (avg_change_percent * Decimal("85")) + Decimal(len(prices) * 10))
-        index_change = money(avg_change_percent * Decimal("85"))
-
-        db.add(
-            MarketSnapshot(
-                snapshot_date=trade_date,
-                index_name="KSE-100 Mock" if source == "mock" else "KSE-100",
-                index_value=index_value,
-                index_change=index_change,
-                index_change_percent=percent(avg_change_percent),
-                total_volume=total_volume,
-                total_value=money(total_value),
-                source=source,
+        # A constituent average is demo data, not an observed index. Never label it
+        # as KSE-100 for a live source; real snapshots are inserted only by an
+        # index provider carrying its own artifact/provenance.
+        if source == "mock":
+            index_value = money(45_000 + (avg_change_percent * Decimal("85")) + Decimal(len(prices) * 10))
+            index_change = money(avg_change_percent * Decimal("85"))
+            db.add(
+                MarketSnapshot(
+                    snapshot_date=trade_date,
+                    index_name="KSE-100 Mock",
+                    index_value=index_value,
+                    index_change=index_change,
+                    index_change_percent=percent(avg_change_percent),
+                    total_volume=total_volume,
+                    total_value=money(total_value),
+                    source=source,
+                )
             )
-        )
-        derived_count += 1
+            derived_count += 1
 
         sector_names = {
             row[0]

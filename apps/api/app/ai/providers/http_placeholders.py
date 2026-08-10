@@ -16,8 +16,8 @@ class HeaderOnlyProvider(LLMProvider):
         model: str | None = None,
     ) -> LLMProviderResult:
         raise NotImplementedError(
-            f"{self.name} network calls are not enabled in Phase 1. "
-            "The provider contract is ready for a later adapter implementation."
+            f"{self.name} network calls are not enabled in this deployment. "
+            "The grounded assistant will use its deterministic evidence response."
         )
 
 

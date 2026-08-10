@@ -21,6 +21,9 @@ class IPSDraft(BaseModel):
     starting_capital: float | None = Field(default=None, gt=0)
     target_value: float | None = Field(default=None, gt=0)
     horizon_years: float | None = Field(default=None, gt=0)
+    annual_contribution: float = Field(default=0, ge=0)
+    goal: str | None = Field(default=None, max_length=500)
+    benchmark_symbol: str | None = Field(default=None, max_length=30)
 
 
 class IPSVersionResponse(BaseModel):
@@ -32,11 +35,24 @@ class IPSVersionResponse(BaseModel):
     confirmed_at: datetime | None
 
 
+class IPSComplianceResponse(BaseModel):
+    portfolio_id: str
+    ips_version_id: str | None
+    compliant: bool
+    violations: list[dict[str, object]]
+    evaluated_at: datetime
+
+
 class OptimizerRequest(BaseModel):
-    objective: Literal["minimum_variance", "target_return_minimum_variance"] = "minimum_variance"
+    objective: Literal["minimum_variance", "target_return_minimum_variance", "target_volatility_maximum_return", "target_beta", "max_sharpe", "risk_parity", "risk_budget"] = "minimum_variance"
     expected_return_method: Literal["capm", "historical_shrunk", "user_model"] | None = None
     expected_return_assumptions: dict[str, float] | None = None
     target_return: float | None = None
+    target_volatility: float | None = Field(default=None, gt=0)
+    target_beta: float | None = None
+    beta_assumptions: dict[str, float] | None = None
+    risk_budgets: dict[str, float] | None = None
+    risk_free_rate: float = 0.0
     start_date: date | None = None
     end_date: date | None = None
     covariance_shrinkage: float = Field(default=0.20, ge=0, le=1)
@@ -48,7 +64,7 @@ class OptimizerRequest(BaseModel):
     def validate_method(self):
         if self.objective == "minimum_variance" and self.expected_return_method is not None:
             return self
-        if self.objective != "minimum_variance" and self.expected_return_method is None:
+        if self.objective in {"target_return_minimum_variance", "target_volatility_maximum_return", "max_sharpe"} and self.expected_return_method is None:
             raise ValueError("Expected-return methodology is required for a return-targeted objective")
         if self.expected_return_method == "user_model" and not self.expected_return_assumptions:
             raise ValueError("user_model requires explicit symbol assumptions")
@@ -75,13 +91,33 @@ class PortfolioQuantResponse(BaseModel):
     sample_size: int
     annualization: int
     covariance_shrinkage: float
-    portfolio: dict[str, float | int]
+    portfolio: dict[str, object]
+    covariance: list[list[float]] = Field(default_factory=list)
+    correlation: list[list[float]] = Field(default_factory=list)
+    risk_contributions: dict[str, float] = Field(default_factory=dict)
+    run_id: str | None = None
     warnings: list[str]
 
 
 class ScenarioRequest(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     shocks: dict[str, float] = Field(min_length=1)
+    sector_shocks: dict[str, float] = Field(default_factory=dict)
+    factor_shocks: dict[str, float] = Field(default_factory=dict)
+
+
+class RebalanceRequest(BaseModel):
+    target_weights: dict[str, float] = Field(min_length=1)
+    minimum_trade_value: float = Field(default=0, ge=0)
+    fee_rate: float = Field(default=0, ge=0)
+
+
+class RebalanceResponse(BaseModel):
+    portfolio_id: str
+    data_cutoff: date | None
+    trades: list[dict[str, object]]
+    residual_cash: float
+    warnings: list[str]
 
 
 class ScenarioResponse(BaseModel):
@@ -97,8 +133,9 @@ class ScenarioResponse(BaseModel):
 
 
 class MonitoringRuleCreate(BaseModel):
-    rule_type: Literal["position_weight", "stale_data", "drawdown"]
+    rule_type: Literal["position_weight", "concentration", "stale_data", "drawdown", "volatility", "var", "liquidity", "event", "ingestion_failure"]
     threshold: dict[str, object]
+    deduplication_window_minutes: int = Field(default=1440, ge=1, le=525600)
 
 
 class MonitoringRuleResponse(BaseModel):
@@ -107,6 +144,7 @@ class MonitoringRuleResponse(BaseModel):
     rule_type: str
     threshold: dict[str, object]
     enabled: bool
+    deduplication_window_minutes: int = 1440
 
 
 class RecommendationResponse(BaseModel):

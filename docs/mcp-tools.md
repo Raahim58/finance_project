@@ -1,16 +1,19 @@
-# MCP-Style Tools
+# Assistant Tool Registry
 
-The app will use an internal MCP-style tool registry before any external MCP server is added.
+The old persona and MCP-design files have been consolidated into one runtime boundary under `apps/api/app/tools/`. There is no external MCP server dependency.
 
-Tool records should include:
+The registry exposes allowlisted, typed wrappers for portfolio summaries/compliance, portfolio quant and risk, market freshness, and ownership-filtered research/document search. Definitions include `name`, `version`, Pydantic input model, permission scope, read-only flag, confirmation requirement, timeout, cost class, and handler. Unknown names are rejected; arbitrary SQL, dynamic imports, files, general network calls, secrets, broker automation, and order placement are not tools.
 
-- `name`
-- `description`
-- `input_schema`
-- `output_schema`
-- `permissions`
-- `is_read_only`
-- `requires_confirmation`
-- `handler`
+The assistant flow is:
 
-Phase 1 does not execute tools yet. Later phases must keep broker/order-intent tools behind explicit confirmation and must never automate broker websites with stored passwords.
+```text
+authorize user/portfolio
+  -> resolve data cutoff and freshness
+  -> invoke bounded deterministic tools
+  -> retrieve scoped document passages
+  -> assemble calculated evidence and citations
+  -> validate numerical grounding
+  -> answer or explicitly report missing data
+```
+
+Tool traces are persisted with assistant messages and exposed to the UI. Any future state-changing tool must use a separate permission and explicit confirmation; the current registry is read-only.

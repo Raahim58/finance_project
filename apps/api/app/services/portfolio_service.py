@@ -1,6 +1,7 @@
 from collections import defaultdict
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal, ROUND_HALF_UP
+import json
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -9,14 +10,29 @@ from sqlalchemy.orm import Session
 from app.models.market import Company, MarketPrice
 from app.models.portfolio import Portfolio, PortfolioHolding, PortfolioTransaction
 from app.models.user import User
+from app.models.workstation import AllocationItem, AllocationSet, PortfolioIPS, PortfolioIPSVersion
+from app.services.ledger_service import (
+    cash_balance,
+    ensure_cash_account,
+    instrument_for_symbol,
+    rebuild_holding_projection,
+    record_holding_adjustment,
+    replay_positions,
+    reverse_transaction,
+)
 from app.services.portfolio_providers import describe_portfolio_source, get_portfolio_provider
 from app.schemas.portfolio import (
+    AllocationItemResponse,
+    AllocationSetCreate,
+    AllocationSetResponse,
+    CashBalanceResponse,
     CompanyExposureResponse,
     HoldingCreate,
     HoldingResponse,
     HoldingSummary,
     HoldingUpdate,
     PortfolioCreate,
+    PortfolioDuplicateRequest,
     PortfolioExposureResponse,
     PortfolioPerformancePoint,
     PortfolioResponse,
@@ -24,6 +40,7 @@ from app.schemas.portfolio import (
     PortfolioRiskFlagsResponse,
     PortfolioSummaryResponse,
     PortfolioUpdate,
+    PositionResponse,
     SectorExposureResponse,
     TransactionCreate,
     TransactionResponse,
@@ -48,6 +65,13 @@ def serialize_portfolio(portfolio: Portfolio) -> PortfolioResponse:
         source_mode=source_mode,
         provider_name=provider_name,
         last_synced_at=portfolio.last_synced_at,
+        description=portfolio.description,
+        goal_summary=portfolio.goal_summary,
+        is_default=portfolio.is_default,
+        archived_at=portfolio.archived_at,
+        history_start=portfolio.history_start,
+        history_complete=portfolio.history_complete,
+        selected_ips_version_id=portfolio.selected_ips_version_id,
         created_at=portfolio.created_at,
         updated_at=portfolio.updated_at,
     )
@@ -79,6 +103,12 @@ def serialize_transaction(transaction: PortfolioTransaction) -> TransactionRespo
         transaction_date=transaction.transaction_date,
         notes=transaction.notes,
         source=transaction.source,
+        currency=transaction.currency,
+        fees=transaction.fees,
+        taxes=transaction.taxes,
+        settlement_date=transaction.settlement_date,
+        external_id=transaction.external_id,
+        reversal_of_id=transaction.reversal_of_id,
         created_at=transaction.created_at,
     )
 
@@ -156,8 +186,13 @@ def create_portfolio(db: Session, user: User, payload: PortfolioCreate) -> Portf
         base_currency=payload.base_currency.upper(),
         source_mode=provider.source_mode,
         provider_name=provider.name,
+        description=payload.description,
+        goal_summary=payload.goal_summary,
+        is_default=(db.scalar(select(func.count(Portfolio.id)).where(Portfolio.user_id == user.id)) or 0) == 0,
     )
     db.add(portfolio)
+    db.flush()
+    ensure_cash_account(db, portfolio)
     db.commit()
     db.refresh(portfolio)
     return serialize_portfolio(portfolio)
@@ -179,45 +214,75 @@ def update_portfolio(
     elif "provider_name" in data and data["provider_name"] is not None:
         provider = get_portfolio_provider(portfolio.source_mode, data["provider_name"])
         portfolio.provider_name = provider.name
+    for field in ("description", "goal_summary"):
+        if field in data:
+            setattr(portfolio, field, data[field])
     db.add(portfolio)
     db.commit()
     db.refresh(portfolio)
     return serialize_portfolio(portfolio)
 
 
-def delete_portfolio(db: Session, user: User, portfolio_id: str) -> None:
+def delete_portfolio(db: Session, user: User, portfolio_id: str, *, confirmed: bool = False) -> None:
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    if not confirmed:
+        raise HTTPException(status_code=409, detail="Permanent deletion requires confirm=true")
     db.delete(portfolio)
     db.commit()
 
 
+def archive_portfolio(db: Session, user: User, portfolio_id: str) -> PortfolioResponse:
+    portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    portfolio.archived_at = datetime.now(UTC)
+    portfolio.is_default = False
+    db.commit(); db.refresh(portfolio)
+    return serialize_portfolio(portfolio)
+
+
+def restore_portfolio(db: Session, user: User, portfolio_id: str) -> PortfolioResponse:
+    portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    portfolio.archived_at = None
+    db.commit(); db.refresh(portfolio)
+    return serialize_portfolio(portfolio)
+
+
+def select_default_portfolio(db: Session, user: User, portfolio_id: str) -> PortfolioResponse:
+    portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    if portfolio.archived_at:
+        raise HTTPException(status_code=409, detail="Archived portfolios cannot be selected as default")
+    for row in db.scalars(select(Portfolio).where(Portfolio.user_id == user.id)):
+        row.is_default = row.id == portfolio.id
+    db.commit(); db.refresh(portfolio)
+    return serialize_portfolio(portfolio)
+
+
+def duplicate_portfolio(db: Session, user: User, portfolio_id: str, payload: PortfolioDuplicateRequest) -> PortfolioResponse:
+    source = get_portfolio_or_404(db, user, portfolio_id)
+    duplicate = Portfolio(user_id=user.id, name=payload.name, base_currency=source.base_currency, source_mode="manual", provider_name="ManualPortfolioProvider", description=source.description, goal_summary=source.goal_summary)
+    db.add(duplicate); db.flush(); ensure_cash_account(db, duplicate)
+    latest_ips = db.scalar(select(PortfolioIPSVersion).where(PortfolioIPSVersion.portfolio_id == source.id, PortfolioIPSVersion.status == "confirmed").order_by(PortfolioIPSVersion.version.desc()))
+    if latest_ips:
+        copied = PortfolioIPSVersion(portfolio_id=duplicate.id, version=1, status="confirmed", constraints_json=latest_ips.constraints_json, required_return=latest_ips.required_return, confirmed_at=datetime.now(UTC))
+        db.add(copied); db.flush()
+        db.add(PortfolioIPS(portfolio_id=duplicate.id, current_version_id=copied.id))
+        duplicate.selected_ips_version_id = copied.id
+    for allocation in db.scalars(select(AllocationSet).where(AllocationSet.portfolio_id == source.id, AllocationSet.kind.in_(["sandbox", "target"]))):
+        copied_set = AllocationSet(portfolio_id=duplicate.id, kind=allocation.kind, version=allocation.version, status=allocation.status, assumptions_json=allocation.assumptions_json, base_value=allocation.base_value, created_by_user_id=user.id)
+        db.add(copied_set); db.flush()
+        for item in db.scalars(select(AllocationItem).where(AllocationItem.allocation_set_id == allocation.id)):
+            db.add(AllocationItem(allocation_set_id=copied_set.id, symbol=item.symbol, instrument_id=item.instrument_id, is_cash=item.is_cash, target_weight=item.target_weight, target_amount=item.target_amount, target_quantity=item.target_quantity, locked=item.locked))
+    if payload.include_positions:
+        for holding in db.scalars(select(PortfolioHolding).where(PortfolioHolding.portfolio_id == source.id)):
+            record_holding_adjustment(db, duplicate, symbol=holding.symbol, desired_quantity=holding.quantity, average_cost=holding.average_cost, notes=f"Opening balance duplicated from portfolio {source.id}")
+    db.commit(); db.refresh(duplicate)
+    return serialize_portfolio(duplicate)
+
+
 def add_holding(db: Session, user: User, portfolio_id: str, payload: HoldingCreate) -> HoldingResponse:
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
-    company = get_company_by_symbol_or_404(db, payload.symbol)
-    existing = db.scalar(
-        select(PortfolioHolding).where(
-            PortfolioHolding.portfolio_id == portfolio.id,
-            func.upper(PortfolioHolding.symbol) == company.symbol.upper(),
-        )
-    )
-    if existing:
-        existing.quantity = payload.quantity
-        existing.average_cost = payload.average_cost
-        db.add(existing)
-        db.commit()
-        db.refresh(existing)
-        return serialize_holding(existing)
-
-    holding = PortfolioHolding(
-        portfolio_id=portfolio.id,
-        company_id=company.id,
-        symbol=company.symbol,
-        quantity=payload.quantity,
-        average_cost=payload.average_cost,
-    )
-    db.add(holding)
+    transaction = record_holding_adjustment(db, portfolio, symbol=payload.symbol, desired_quantity=payload.quantity, average_cost=payload.average_cost, notes="Holding opening balance")
     db.commit()
-    db.refresh(holding)
+    holding = db.scalar(select(PortfolioHolding).where(PortfolioHolding.portfolio_id == portfolio.id, PortfolioHolding.instrument_id == transaction.instrument_id))
     return serialize_holding(holding)
 
 
@@ -233,20 +298,17 @@ def list_holdings(db: Session, user: User, portfolio_id: str) -> list[HoldingRes
 
 def update_holding(db: Session, user: User, holding_id: str, payload: HoldingUpdate) -> HoldingResponse:
     holding = get_holding_or_404(db, user, holding_id)
-    data = payload.model_dump(exclude_unset=True)
-    if "quantity" in data and data["quantity"] is not None:
-        holding.quantity = data["quantity"]
-    if "average_cost" in data and data["average_cost"] is not None:
-        holding.average_cost = data["average_cost"]
-    db.add(holding)
+    portfolio = get_portfolio_or_404(db, user, holding.portfolio_id)
+    record_holding_adjustment(db, portfolio, symbol=holding.symbol, desired_quantity=payload.quantity or holding.quantity, average_cost=payload.average_cost if payload.average_cost is not None else holding.average_cost, notes="Auditable holding adjustment")
     db.commit()
-    db.refresh(holding)
-    return serialize_holding(holding)
+    updated = db.scalar(select(PortfolioHolding).where(PortfolioHolding.portfolio_id == portfolio.id, PortfolioHolding.symbol == holding.symbol))
+    return serialize_holding(updated)
 
 
 def delete_holding(db: Session, user: User, holding_id: str) -> None:
     holding = get_holding_or_404(db, user, holding_id)
-    db.delete(holding)
+    portfolio = get_portfolio_or_404(db, user, holding.portfolio_id)
+    record_holding_adjustment(db, portfolio, symbol=holding.symbol, desired_quantity=Decimal("0"), average_cost=holding.average_cost, notes="Auditable holding removal")
     db.commit()
 
 
@@ -254,12 +316,14 @@ def add_transaction(
     db: Session, user: User, portfolio_id: str, payload: TransactionCreate
 ) -> TransactionResponse:
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
-    company = db.scalar(
-        select(Company).where(func.upper(Company.symbol) == payload.symbol.upper(), Company.is_active.is_(True))
-    )
+    instrument = None if payload.symbol.upper() == "CASH" else instrument_for_symbol(db, payload.symbol)
+    company = db.get(Company, instrument.company_id) if instrument and instrument.company_id else None
+    if payload.transaction_type in {"buy", "sell", "dividend", "corporate_action"} and instrument is None:
+        raise HTTPException(status_code=422, detail="This transaction type requires an instrument")
     transaction = PortfolioTransaction(
         portfolio_id=portfolio.id,
         company_id=company.id if company else None,
+        instrument_id=instrument.id if instrument else None,
         symbol=company.symbol if company else payload.symbol.upper(),
         transaction_type=payload.transaction_type,
         quantity=payload.quantity,
@@ -268,8 +332,16 @@ def add_transaction(
         transaction_date=payload.transaction_date,
         notes=payload.notes,
         source=payload.source,
+        currency=payload.currency.upper(),
+        fees=payload.fees,
+        taxes=payload.taxes,
+        settlement_date=payload.settlement_date,
+        external_id=payload.external_id,
     )
     db.add(transaction)
+    ensure_cash_account(db, portfolio, payload.currency)
+    db.flush()
+    rebuild_holding_projection(db, portfolio)
     db.commit()
     db.refresh(transaction)
     return serialize_transaction(transaction)
@@ -290,9 +362,11 @@ def update_transaction(
 ) -> TransactionResponse:
     transaction = get_transaction_or_404(db, user, transaction_id)
     data = payload.model_dump(exclude_unset=True)
+    immutable = set(data) - {"notes", "external_id", "settlement_date"}
+    if immutable:
+        raise HTTPException(status_code=409, detail="Financial transaction fields are immutable; reverse and replace the transaction")
     for key, value in data.items():
-        if value is not None:
-            setattr(transaction, key, value)
+        setattr(transaction, key, value)
     db.add(transaction)
     db.commit()
     db.refresh(transaction)
@@ -301,7 +375,7 @@ def update_transaction(
 
 def delete_transaction(db: Session, user: User, transaction_id: str) -> None:
     transaction = get_transaction_or_404(db, user, transaction_id)
-    db.delete(transaction)
+    reverse_transaction(db, transaction, notes="Reversed by user request")
     db.commit()
 
 
@@ -347,7 +421,8 @@ def _holding_summaries(db: Session, portfolio: Portfolio) -> list[HoldingSummary
 def get_portfolio_summary(db: Session, user: User, portfolio_id: str) -> PortfolioSummaryResponse:
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     holdings = _holding_summaries(db, portfolio)
-    total_value = money(sum((holding.market_value for holding in holdings), Decimal("0")))
+    cash = cash_balance(db, portfolio.id, portfolio.base_currency)
+    total_value = money(sum((holding.market_value for holding in holdings), Decimal("0")) + cash)
     cost_basis = money(sum((holding.cost_basis for holding in holdings), Decimal("0")))
     unrealized = money(total_value - cost_basis)
     day_change = money(
@@ -362,7 +437,7 @@ def get_portfolio_summary(db: Session, user: User, portfolio_id: str) -> Portfol
         unrealized_gain_loss_percent=percent((unrealized / cost_basis) * Decimal("100")) if cost_basis else None,
         day_change=day_change,
         day_change_percent=percent((day_change / previous_value) * Decimal("100")) if previous_value else None,
-        cash_balance=Decimal("0.0000"),
+        cash_balance=money(cash),
         holdings=holdings,
         data_freshness_date=max(
             (holding.latest_price_date for holding in holdings if holding.latest_price_date is not None),
@@ -402,8 +477,7 @@ def get_portfolio_performance(
     db: Session, user: User, portfolio_id: str, limit: int = 90
 ) -> list[PortfolioPerformancePoint]:
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
-    holdings = db.scalars(select(PortfolioHolding).where(PortfolioHolding.portfolio_id == portfolio.id)).all()
-    if not holdings:
+    if not db.scalar(select(func.count(PortfolioTransaction.id)).where(PortfolioTransaction.portfolio_id == portfolio.id)):
         return []
 
     dates = db.scalars(
@@ -412,11 +486,11 @@ def get_portfolio_performance(
     points: list[PortfolioPerformancePoint] = []
     previous_total: Decimal | None = None
     for value_date in reversed(dates):
-        total = Decimal("0")
-        for holding in holdings:
-            price = price_for_symbol_on_or_before(db, holding.symbol, value_date)
+        total = cash_balance(db, portfolio.id, portfolio.base_currency, value_date)
+        for position in replay_positions(db, portfolio.id, value_date).values():
+            price = price_for_symbol_on_or_before(db, position.symbol, value_date)
             if price:
-                total += holding.quantity * price.close
+                total += position.quantity * price.close
         total = money(total)
         day_change = money(total - previous_total) if previous_total is not None else Decimal("0.0000")
         points.append(
@@ -431,6 +505,49 @@ def get_portfolio_performance(
         )
         previous_total = total
     return points
+
+
+def get_positions(db: Session, user: User, portfolio_id: str) -> list[PositionResponse]:
+    portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    return [PositionResponse(instrument_id=row.instrument_id, symbol=row.symbol, quantity=row.quantity, average_cost=row.average_cost) for row in replay_positions(db, portfolio.id).values()]
+
+
+def get_cash(db: Session, user: User, portfolio_id: str) -> CashBalanceResponse:
+    portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    ensure_cash_account(db, portfolio)
+    return CashBalanceResponse(currency=portfolio.base_currency, balance=money(cash_balance(db, portfolio.id, portfolio.base_currency)))
+
+
+def _serialize_allocation(db: Session, row: AllocationSet) -> AllocationSetResponse:
+    items = list(db.scalars(select(AllocationItem).where(AllocationItem.allocation_set_id == row.id).order_by(AllocationItem.symbol)))
+    return AllocationSetResponse(
+        id=row.id, portfolio_id=row.portfolio_id, kind=row.kind, version=row.version,
+        status=row.status, base_value=row.base_value, assumptions=json.loads(row.assumptions_json),
+        items=[AllocationItemResponse(id=item.id, symbol=item.symbol, instrument_id=item.instrument_id, target_weight=item.target_weight, target_amount=item.target_amount, target_quantity=item.target_quantity, locked=item.locked, is_cash=item.is_cash) for item in items],
+        created_at=row.created_at,
+    )
+
+
+def create_allocation_set(db: Session, user: User, portfolio_id: str, payload: AllocationSetCreate) -> AllocationSetResponse:
+    portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    if abs(sum((item.target_weight for item in payload.items), Decimal("0")) - Decimal("1")) > Decimal("0.000001"):
+        raise HTTPException(status_code=422, detail="Allocation weights must sum to one")
+    version = (db.scalar(select(func.max(AllocationSet.version)).where(AllocationSet.portfolio_id == portfolio.id, AllocationSet.kind == payload.kind)) or 0) + 1
+    row = AllocationSet(portfolio_id=portfolio.id, kind=payload.kind, version=version, status="draft" if payload.kind == "sandbox" else "active", assumptions_json=json.dumps(payload.assumptions, sort_keys=True), base_value=payload.base_value, created_by_user_id=user.id)
+    db.add(row); db.flush()
+    for item in payload.items:
+        instrument = None if item.is_cash else instrument_for_symbol(db, item.symbol)
+        amount = payload.base_value * item.target_weight if payload.base_value is not None else None
+        latest = latest_price_for_symbol(db, item.symbol) if instrument else None
+        quantity = amount / latest.close if amount is not None and latest and latest.close else None
+        db.add(AllocationItem(allocation_set_id=row.id, symbol="CASH" if item.is_cash else instrument.symbol, instrument_id=instrument.id if instrument else None, is_cash=item.is_cash, target_weight=item.target_weight, target_amount=amount, target_quantity=quantity, locked=item.locked))
+    db.commit(); db.refresh(row)
+    return _serialize_allocation(db, row)
+
+
+def list_allocation_sets(db: Session, user: User, portfolio_id: str) -> list[AllocationSetResponse]:
+    portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    return [_serialize_allocation(db, row) for row in db.scalars(select(AllocationSet).where(AllocationSet.portfolio_id == portfolio.id).order_by(AllocationSet.created_at.desc()))]
 
 
 def get_portfolio_risk_flags(db: Session, user: User, portfolio_id: str) -> PortfolioRiskFlagsResponse:

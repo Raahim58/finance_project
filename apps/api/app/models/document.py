@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from sqlalchemy import Date, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 
 from app.db.session import Base
 
@@ -18,6 +19,9 @@ class Document(Base):
     owner_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     portfolio_id: Mapped[str | None] = mapped_column(ForeignKey("portfolios.id"), nullable=True, index=True)
     visibility: Mapped[str] = mapped_column(String(20), default="public", nullable=False, index=True)
+    extraction_version: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    parser_version: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    artifact_id: Mapped[str | None] = mapped_column(ForeignKey("source_artifacts.id"), nullable=True, index=True)
     company_id: Mapped[str | None] = mapped_column(ForeignKey("companies.id"), nullable=True, index=True)
     symbol: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
     sector: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
@@ -69,6 +73,7 @@ class DocumentChunk(Base):
     chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
     token_count: Mapped[int] = mapped_column(nullable=False)
     embedding_json: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_vector: Mapped[list[float] | str | None] = mapped_column(Vector(384).with_variant(Text(), "sqlite"), nullable=True)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     page_number: Mapped[int | None] = mapped_column(nullable=True)

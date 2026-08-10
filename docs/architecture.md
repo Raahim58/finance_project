@@ -1,129 +1,43 @@
 # Architecture
 
-`psx-ai-portfolio-agent` is a monorepo with a Next.js frontend and FastAPI backend.
-
-## Current Phases
-
-Phase 0 creates the repository shape, local services, docs, and skeleton apps.
-
-Phase 1 implements:
-
-- Email/password authentication
-- Backend-issued JWT access tokens
-- User preferences
-- Encrypted bring-your-own LLM API key storage
-- Provider-agnostic LLM interface
-- Mock provider for tests
-
-Phase 2 implements:
-
-- PSX exchange/company tables
-- Mock market price ingestion
-- Market snapshots and sector daily stats
-- Read-only market APIs
-- Frontend market dashboard
-- Frontend company detail/history page with a lightweight chart
-
-Phase 3 implements:
-
-- User-owned portfolios
-- Holdings and transaction records
-- Portfolio summary, exposure, performance, and risk-flag APIs
-- Valuation and PnL calculated from stored holdings and latest market prices
-- Frontend portfolio dashboard
-
-Phase 4 implements:
-
-- Document metadata, pages, chunks, and citation tables
-- Text/Markdown upload and ingestion
-- Optional PDF parsing when `pypdf` is installed
-- Deterministic chunking and local hash embeddings stored as JSON
-- RAG search with structured filters, lexical evidence overlap, scores, chunks, and citations
-- Frontend document upload/search page
-
-## System Shape
+The workstation is a modular monolith: Next.js 16/React 19 calls a FastAPI application backed by SQLAlchemy 2 and Alembic. PostgreSQL with pgvector is the production target; SQLite is the deterministic local/test fallback.
 
 ```text
-apps/web  ->  apps/api  ->  database
-                 |
-                 -> LLM provider registry
-                 -> encrypted user provider keys
-                 -> market data services
-                 -> market scheduler and provider adapters
-                 -> portfolio services
-                 -> portfolio provider adapters
-                 -> document/RAG services
+Next.js workstation
+        |
+FastAPI routes + shared ownership checks
+        |
+services: ledger | quant | optimizer | research/RAG | scenarios | monitoring
+        |
+structured database queries + immutable source/document evidence
+        |
+typed tool registry -> bounded assistant orchestrator
 ```
 
-Structured numerical market and portfolio data lives in database tables. RAG is used only for unstructured company/report text. The architecture is live/current-data oriented even when the local development mode uses mock ingestion.
+## Data boundaries
 
-## Workstation Extensions
+Exact market prices, rankings, portfolio values, P&L, risk, optimizer weights, and scenarios come from structured rows and deterministic calculations. RAG is only for unstructured document text. A private document query always includes owner and optional portfolio scope; public documents are shared read-only.
 
-Migrations `0006`–`0009` add generic instruments/provenance, immutable profile and IPS versions, allocation states, optimizer audit runs, scenario audit runs, recommendations, and monitoring rules. Ordinary dashboard analytics are calculated and cacheable; they are not persisted merely because they were displayed.
+Enabled ingestion follows `source -> immutable artifact -> versioned parser -> validation -> canonical observation/fact/event`. Conflicting observations are retained. A selected canonical observation is identified separately, with source priority and quality metadata. Development mock data is labeled and cannot create a synthetic live KSE-100 value.
 
-Expected returns are pluggable from the first optimizer API:
+## Portfolio state
 
-- `capm`, available only with aligned benchmark returns and an effective-dated risk-free observation
-- `historical_shrunk`
-- explicit `user_model` assumptions
+Transactions are the audit ledger. Buys, sells, deposits, withdrawals, fees, taxes, dividends, opening balances, adjustments, and reversals drive cash and positions. Holdings are a current projection, not an independent source of historical truth. Legacy holdings receive a dated migration baseline and pre-baseline history is marked incomplete.
 
-Constrained minimum variance is the default and requires no expected-return forecast. CAPM is treated as a required-return benchmark, not an automatic forecast. Optimizer, scenario, and recommendation outputs are immutable/auditable and never mutate holdings or place orders.
+Investor profiles and portfolio IPS records use editable drafts and immutable confirmed versions. Monitoring, compliance, and optimization only use a selected confirmed IPS. Allocation sets represent sandbox, target, or immutable optimized proposals; none mutate holdings.
 
-## Market Data Flow
+## Quant and scenarios
 
-```text
-python -m app.jobs.scheduler
-        -> MARKET_DATA_MODE=mock|dps|yahoo|auto
-        -> latest market fetch
-        -> companies, market_prices
-        -> market_snapshots, sector_daily_stats
-        -> market_ingestion_runs
-        -> /market APIs + /market/freshness
-        -> /market and /companies/[symbol]
-```
+Pure modules under `app/domain/quant` implement returns, covariance/correlation, regression, drawdown, risk/performance metrics, VaR/ES, and risk contributions. CVXPY runs convex optimizers and SciPy runs deterministic multi-start risk parity/budget methods. Inputs, cutoff, estimator, solver, diagnostics, and result summaries are persisted. Unsupported IPS constraints are reported instead of silently removed.
 
-The scheduler is the canonical ingestion entrypoint. `mock` is development-only. Verified direct DPS is primary, Yahoo is a labeled backup, and `auto` records both the attempted provider and the provider actually used. Every enabled DPS run retains immutable raw artifacts and parser provenance. Exact prices and rankings are always read from the database, not generated by the frontend or LLM.
+Scenario arithmetic is deterministic. Direct instrument shocks override mappings; sector and factor mappings apply only when there is no direct shock, preventing double counting. Historical replay labels current-holdings replay as counterfactual.
 
-## Portfolio Data Flow
+## Assistant and monitoring
 
-```text
-user auth
-  -> /portfolios APIs
-  -> source_mode + provider_name
-  -> portfolio_holdings + portfolio_transactions
-  -> latest market_prices
-  -> summary, exposure, performance, risk flags
-  -> /portfolio
-```
+`app/tools` is the only assistant execution boundary. Each definition declares version, validated input, scope, read-only/confirmation policy, timeout, cost class, and handler. The model receives no SQL, filesystem, dynamic import, arbitrary network, credential, or trade-execution capability.
 
-Portfolio calculations are server-side and user-scoped. Manual entry remains the MVP fallback, but the backend now carries provider/source metadata so future official broker sync can coexist with manual portfolios.
+The orchestrator bounds iterations, retrieved chunks, and request time; gathers ownership-scoped calculations and citations; and falls back to an evidence-based deterministic answer when a provider response is ungrounded. Monitoring jobs persist runs and deduplicate alerts by rule/window. Recommendations require a user decision and never auto-apply.
 
-Current provider abstraction:
+## Scheduling and future boundaries
 
-- `ManualPortfolioProvider`
-- `MockBrokerPortfolioProvider`
-- `ExternalBrokerPortfolioProvider` placeholder
-
-## RAG Data Flow
-
-```text
-upload or ingest local file
-  -> documents + document_pages
-  -> deterministic chunks + local embeddings
-  -> citations per chunk
-  -> /rag/search
-  -> /documents
-```
-
-Phase 4 uses a SQLite/PostgreSQL-friendly local embedding placeholder. Retrieval first applies structured filters, then ranks chunks that have lexical overlap with the query, and returns citations separately. pgvector and external embedding providers are deferred.
-
-## Phase 5 Inputs
-
-When Phase 5 agent orchestration lands, the agent must read from:
-
-- latest market data in the database
-- `/market/freshness` status, including stale warnings
-- user portfolio holdings and valuation context
-- portfolio `source_mode` and `provider_name`
-- RAG citations from company documents
-- sector and policy data when those phases are implemented
+The current in-process scheduler invokes ingestion and monitoring services using stable run keys. Redis may later improve caching/locking but is not a correctness dependency. The service/tool interfaces can later move to workers or expose selected read-only tools over MCP without changing finance logic. Broker automation, trade execution, derivatives, and external MCP runtime are intentionally absent.

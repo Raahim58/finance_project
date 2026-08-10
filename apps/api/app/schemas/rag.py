@@ -73,6 +73,7 @@ class RagSearchRequest(BaseModel):
     document_types: list[str] | None = None
     date_from: date | None = None
     date_to: date | None = None
+    portfolio_id: str | None = None
     limit: int = Field(default=5, ge=1, le=25)
 
 

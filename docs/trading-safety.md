@@ -1,15 +1,7 @@
 # Trading Safety
 
-The app must not store broker usernames or passwords.
+The workstation does not store broker usernames/passwords, automate broker websites/apps, or place orders. Selenium, Playwright browser control, screen automation, and password scraping are forbidden for broker access.
 
-The app must not automate broker websites or apps through Selenium, Playwright, browser control, or screen automation.
+Optimizer allocations and rebalance previews are immutable/read-only proposals. They may be reviewed or exported manually, but never change holdings or create a live order. Recommendation acceptance only records the user decision; it does not execute the recommendation.
 
-Later phases may create safe order intents:
-
-- Draft order preview
-- Simulated portfolio impact
-- Explicit user confirmation
-- WhatsApp or broker message draft for manual review
-- Future official broker API abstraction if an authorized API is supplied
-
-The app must not place live trades in Phase 0 or Phase 1.
+A future official broker API could support a separately permissioned order-intent workflow, but every write-like operation would require explicit user confirmation. Broker-password automation and autonomous trade execution remain permanently out of scope.

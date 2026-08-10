@@ -1,18 +1,9 @@
 # Security
 
-Phase 1 security controls:
+- Passwords are hashed before storage and JWT access tokens protect user routes.
+- LLM API keys are encrypted at rest, never returned after save, decrypted only server-side immediately before a provider call, and never logged in full.
+- Shared ownership checks scope every portfolio, holding, transaction, allocation, IPS, analysis, scenario, monitoring, assistant, and private-document operation.
+- Assistant tools are allowlisted/read-only and expose no arbitrary SQL, filesystem, network, secrets, or trade execution.
+- Permanent portfolio deletion requires explicit confirmation; transaction deletion creates a reversal instead of erasing financial history.
 
-- Passwords are hashed before storage.
-- JWT access tokens protect user-specific routes.
-- LLM API keys are encrypted at rest with `ENCRYPTION_KEY`.
-- Full LLM API keys are never returned to the frontend.
-- Full LLM API keys must never be logged.
-- `.env` files are ignored by git.
-
-Known MVP limitations:
-
-- Token revocation is not implemented yet.
-- Rate limiting is not implemented yet.
-- Frontend stores the access token in `localStorage` for local MVP simplicity.
-
-Before production, use secure cookie sessions or an auth provider, add rate limiting, rotate secrets, and add audit logging for sensitive workflows.
+Current deployment limitations: token revocation and application-level rate limiting are not implemented, and the local frontend stores its access token in `localStorage`. Before public deployment, use secure cookie sessions or a managed identity provider, rate limiting, secret rotation, HTTPS, database backups, restricted artifact storage, and sensitive-workflow audit logging.

@@ -116,6 +116,13 @@ export type Portfolio = {
   source_mode: string;
   provider_name: string;
   last_synced_at?: string | null;
+  description?: string | null;
+  goal_summary?: string | null;
+  is_default: boolean;
+  archived_at?: string | null;
+  history_start?: string | null;
+  history_complete: boolean;
+  selected_ips_version_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -243,6 +250,32 @@ export type RagSearchResponse = {
   chunks: RagChunk[];
   citations: RagCitation[];
   scores: number[];
+};
+
+export type PortfolioQuant = {
+  data_cutoff: string;
+  symbols: string[];
+  sample_size: number;
+  annualization: number;
+  covariance_shrinkage: number;
+  portfolio: Record<string, unknown>;
+  covariance: number[][];
+  correlation: number[][];
+  risk_contributions: Record<string, number>;
+  warnings: string[];
+  run_id?: string | null;
+};
+
+export type AssistantResult = {
+  conversation_id: string;
+  message_id: string;
+  answer: string;
+  uncertainty: string[];
+  calculated_evidence: Array<Record<string, unknown>>;
+  source_citations: Array<Record<string, unknown>>;
+  freshness_warnings: string[];
+  tool_trace: Array<Record<string, unknown>>;
+  created_at: string;
 };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -396,10 +429,47 @@ export function searchRag(payload: {
   symbols?: string[];
   sectors?: string[];
   document_types?: string[];
+  portfolio_id?: string;
   limit?: number;
 }) {
   return request<RagSearchResponse>("/rag/search", {
     method: "POST",
     body: JSON.stringify(payload)
   });
+}
+
+export function getPortfolioQuant(portfolioId: string) {
+  return request<PortfolioQuant>(`/portfolios/${encodeURIComponent(portfolioId)}/quant`);
+}
+
+export function getIpsCompliance(portfolioId: string) {
+  return request<{ compliant: boolean; violations: Array<Record<string, unknown>> }>(`/portfolios/${encodeURIComponent(portfolioId)}/ips/compliance`);
+}
+
+export function createIpsVersion(portfolioId: string, payload: Record<string, unknown>, confirm = false) {
+  return request<Record<string, unknown>>(`/portfolios/${encodeURIComponent(portfolioId)}/ips/${confirm ? "confirm" : "draft"}`, { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function createAllocation(portfolioId: string, payload: Record<string, unknown>) {
+  return request<Record<string, unknown>>(`/portfolios/${encodeURIComponent(portfolioId)}/allocations`, { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function runScenario(portfolioId: string, payload: Record<string, unknown>) {
+  return request<Record<string, unknown>>(`/portfolios/${encodeURIComponent(portfolioId)}/scenario-runs`, { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function sendAssistantMessage(question: string, portfolioId?: string) {
+  return request<AssistantResult>("/assistant/messages", { method: "POST", body: JSON.stringify({ question, portfolio_id: portfolioId || null }) });
+}
+
+export function getAlerts(portfolioId?: string) {
+  return request<Array<Record<string, unknown>>>(`/monitoring/alerts${portfolioId ? `?portfolio_id=${encodeURIComponent(portfolioId)}` : ""}`);
+}
+
+export function getRecommendations() {
+  return request<Array<Record<string, unknown>>>("/recommendations");
+}
+
+export function searchInstruments(query = "") {
+  return request<Array<{ id: string; symbol: string; name: string; sector?: string | null }>>(`/instruments?query=${encodeURIComponent(query)}`);
 }

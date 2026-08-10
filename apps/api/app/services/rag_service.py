@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.models.document import Citation, Document, DocumentChunk, DocumentPage
 from app.models.market import Company
 from app.models.user import User
+from app.core.config import settings
 from app.schemas.rag import (
     CitationResponse,
     DocumentIngestRequest,
@@ -23,7 +24,7 @@ from app.schemas.rag import (
 )
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._%-]*")
-EMBEDDING_DIMENSIONS = 64
+EMBEDDING_DIMENSIONS = settings.embedding_dimensions
 CHUNK_TOKENS = 180
 CHUNK_OVERLAP = 40
 
@@ -208,6 +209,8 @@ def create_document_from_pages(
         published_date=published_date,
         parsed_at=datetime.now(UTC),
         status="parsed",
+        extraction_version="text-pages-v1",
+        parser_version="pypdf-v1" if any(page.page_number > 1 for page in pages) else "plain-text-v1",
     )
     db.add(document)
     db.flush()
@@ -237,6 +240,7 @@ def create_document_from_pages(
                 "source_url": source_url,
                 "page_number": page_number,
             }
+            vector = embed_text(chunk_text)
             chunk = DocumentChunk(
                 document_id=document.id,
                 company_id=company.id if company else None,
@@ -244,7 +248,8 @@ def create_document_from_pages(
                 chunk_index=chunk_index,
                 chunk_text=chunk_text,
                 token_count=len(tokenize(chunk_text)),
-                embedding_json=json.dumps(embed_text(chunk_text)),
+                embedding_json=json.dumps(vector),
+                embedding_vector=vector if db.bind and db.bind.dialect.name == "postgresql" else json.dumps(vector),
                 metadata_json=json.dumps(metadata),
                 source_url=source_url,
                 page_number=page_number,
@@ -364,6 +369,11 @@ def get_document(db: Session, user: User, document_id: str) -> DocumentResponse:
 
 
 def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> RagSearchResponse:
+    if payload.portfolio_id:
+        if user is None:
+            raise HTTPException(status_code=401, detail="Portfolio-scoped retrieval requires authentication")
+        from app.services.portfolio_service import get_portfolio_or_404
+        get_portfolio_or_404(db, user, payload.portfolio_id)
     query = (
         select(DocumentChunk, Document, Citation)
         .join(Document, Document.id == DocumentChunk.document_id)
@@ -381,12 +391,17 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         query = query.where(Document.published_date >= payload.date_from)
     if payload.date_to:
         query = query.where(Document.published_date <= payload.date_to)
+    if payload.portfolio_id:
+        query = query.where(or_(Document.portfolio_id == payload.portfolio_id, Document.visibility == "public"))
+
+    query_vector = embed_text(payload.query)
+    if db.bind and db.bind.dialect.name == "postgresql":
+        query = query.where(DocumentChunk.embedding_vector.is_not(None)).order_by(DocumentChunk.embedding_vector.cosine_distance(query_vector)).limit(payload.limit * 8)
 
     rows = db.execute(query).all()
     if not rows:
         return RagSearchResponse(chunks=[], citations=[], scores=[])
 
-    query_vector = embed_text(payload.query)
     query_tokens = set(tokenize(payload.query))
     ranked: list[tuple[float, DocumentChunk, Citation]] = []
     for chunk, _document, citation in rows:

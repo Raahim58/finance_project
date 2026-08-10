@@ -1,23 +1,7 @@
-# RAG Design
+# Document Retrieval
 
-Phase 4 implements the first local RAG pipeline.
+Documents carry owner, visibility (`public` or `private`), optional portfolio, artifact, extraction version, and parser version. Retrieval combines structured filtering and semantic/lexical ranking, and returns citation metadata containing the real document title, URL, page, and bounded snippet.
 
-- Use deterministic chunking.
-- Preserve document metadata: symbol, sector, document type, fiscal year, quarter, URL, page number.
-- Return citation objects separately from answer text.
-- Use structured filters before vector search.
-- Use keyword fallback when vector search is unavailable.
-- State missing data instead of inventing claims.
+PostgreSQL uses a configured 384-dimensional pgvector column and cosine index. SQLite keeps a deterministic JSON-vector fallback for tests. Embeddings are reproducible placeholders and can be replaced by a versioned provider without changing citation or visibility rules.
 
-Exact prices, holdings, and calculated financial values must come from database queries, not vector retrieval.
-
-## Current Implementation
-
-- Tables: `documents`, `document_pages`, `document_chunks`, `citations`
-- Text/Markdown upload and local-file ingestion are supported.
-- PDF parsing is attempted only when optional dependency `pypdf` is installed.
-- Chunks use deterministic token windows with overlap.
-- Embeddings are local hash vectors stored as JSON so SQLite tests and PostgreSQL runs behave consistently.
-- Retrieval applies structured filters first and returns only chunks with lexical overlap to avoid unrelated false-positive citations.
-
-pgvector, external embedding APIs, rerankers, and AI-assisted table extraction are deferred.
+RAG is exclusively for unstructured document text. Prices, financial facts, macro observations, holdings, portfolio values, P&L, and quant metrics come from structured database queries. Search never fabricates source metadata, and a private document is visible only to its owner and, where linked, its portfolio scope.

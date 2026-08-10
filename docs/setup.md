@@ -11,143 +11,78 @@ cp ../../.env.example .env
 python -m app.core.keys
 ```
 
-Copy the generated Fernet key into `ENCRYPTION_KEY`.
+Put the generated Fernet key in `ENCRYPTION_KEY`. User LLM keys are encrypted at rest, never returned after save, and decrypted server-side only for an LLM request.
 
-Set market ingestion mode in `.env`:
-
-```bash
-MARKET_DATA_MODE=auto
-MARKET_DATA_REFRESH_SECONDS=300
-SOURCE_ARTIFACT_ROOT=./data/artifacts
-```
-
-Supported market modes:
-
-- `mock` for local development and deterministic tests
-- `dps` for verified direct PSX DPS ingestion
-- `yahoo` for direct Yahoo Finance ingestion using `.KA` symbol mapping
-- `auto` to try DPS first and fall back to Yahoo if needed
-- `psxdata` for temporary compatibility/comparison only
-
-Run tests:
+Start production-style dependencies and migrate:
 
 ```bash
 cd ../..
-apps/api/.venv/bin/python -m pytest
+docker compose up -d
+cd apps/api
+alembic upgrade head
 ```
 
-Run API locally:
+SQLite can be used without Docker:
 
 ```bash
-cd apps/api
-source .venv/bin/activate
+DATABASE_URL=sqlite+pysqlite:///./psx_ai_local.db alembic upgrade head
+```
+
+Seed deterministic development market data:
+
+```bash
+python -m app.seed.demo
+```
+
+Run the API and scheduler:
+
+```bash
 uvicorn app.main:app --reload
-```
-
-Seed Phase 2 mock market data:
-
-```bash
-cd apps/api
-source .venv/bin/activate
-python -m app.jobs.ingest_psx_mock --days 365
-```
-
-Run the market scheduler once:
-
-```bash
-cd apps/api
-source .venv/bin/activate
 python -m app.jobs.scheduler --once
-```
-
-Run the market scheduler continuously:
-
-```bash
-cd apps/api
-source .venv/bin/activate
 python -m app.jobs.scheduler
 ```
 
-## Database
-
-Start PostgreSQL and Redis:
-
-```bash
-docker compose up -d
-```
-
-Run migrations:
-
-```bash
-cd apps/api
-source .venv/bin/activate
-alembic upgrade head
-```
-
-The backend defaults to SQLite for local skeleton runs if `DATABASE_URL` is not set.
-
-Recompute Phase 2 derived stats if needed:
-
-```bash
-cd apps/api
-source .venv/bin/activate
-python -m app.jobs.compute_market_stats
-```
-
-`MARKET_DATA_MODE=mock` is only for local development. For current data, prefer `dps` or `auto`. Raw artifacts are content-addressed under `SOURCE_ARTIFACT_ROOT`. `vendor` remains disabled until a real contract is verified.
-
-Migration and verification commands:
-
-```bash
-cd apps/api
-alembic upgrade head
-pytest -q app/tests
-```
-
-The four workstation migrations deliberately persist audit/reproduction-sensitive optimizer, scenario, and recommendation state. Routine dashboard analytics remain calculated/cached.
-
-Ingest a Phase 4 local text/Markdown document:
-
-```bash
-cd apps/api
-source .venv/bin/activate
-python -m app.jobs.ingest_document --file ./sample.txt --symbol MEBL --type annual_report
-```
-
-Run a Phase 4 retrieval smoke test:
-
-```bash
-cd apps/api
-source .venv/bin/activate
-python -m app.jobs.test_retrieval --query "deposit growth" --symbol MEBL
-```
-
-PDF parsing is supported only when the optional `pypdf` package is installed in the backend environment.
+`MARKET_DATA_MODE=mock` is development-only. `dps` uses the verified direct DPS adapter; `auto` tries DPS and uses Yahoo only as a labeled fallback. NCCPL remains a manual CSV import because ordinary retrieval is blocked; no anti-bot bypass is implemented.
 
 ## Frontend
 
 ```bash
 cd apps/web
 npm install
+npm run generate:api
+npm run typecheck
+npm test
+npm run build
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+`generate:api` expects the API at `NEXT_PUBLIC_API_BASE_URL`/`http://localhost:8000` and checks `lib/generated/api.d.ts` into the repository. Main routes are `/dashboard`, `/portfolios`, `/portfolios/[id]/*`, `/markets`, `/research`, `/companies/[symbol]`, `/documents`, `/assistant`, and `/settings`.
 
-Phase 2 pages:
+## Verification
 
-- `http://localhost:3000/market`
-- `http://localhost:3000/companies/MEBL`
+```bash
+cd apps/api
+DATABASE_URL=sqlite:////tmp/psx-tests.sqlite pytest -q
+DATABASE_URL=sqlite:////tmp/psx-migration.sqlite alembic upgrade head
 
-Phase 3 page:
+cd ../web
+npm run typecheck
+npm test
+npm run build
+```
 
-- `http://localhost:3000/portfolio`
+Provider parser tests use bounded fixtures and never hit live services. Live contract smoke tests are opt-in and should remain low-rate. See [migrations](migrations.md) for populated-legacy and downgrade checks.
 
-Create an account first, then add a portfolio and holdings. Symbols must exist in the market company table, so seed Phase 2 mock market data before using the portfolio page.
-Manual portfolio entry is the MVP fallback. Future real portfolio sync should go through official broker APIs or approved partnerships.
+## Documents and RAG
 
-Phase 4 page:
+```bash
+cd apps/api
+python -m app.jobs.ingest_document --file ./sample.pdf --symbol MEBL --type annual_report
+python -m app.jobs.test_retrieval --query "deposit growth" --symbol MEBL
+```
 
-- `http://localhost:3000/documents`
+PostgreSQL stores 384-dimensional vectors with an indexed cosine search; SQLite stores the same deterministic vectors as JSON and scans only for tests/local use. Private uploads must be queried through their owner/portfolio scope.
 
-Create an account first to upload documents. Search is read-only and returns chunks with citation metadata.
+## Safety assumptions
+
+No broker password storage, browser automation, or trade placement exists. Rebalance output is only a proposal. Market prices and exact portfolio values come from database queries, while document retrieval supplies narrative evidence only.

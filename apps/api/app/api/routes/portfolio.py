@@ -1,20 +1,25 @@
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.portfolio import (
+    AllocationSetCreate,
+    AllocationSetResponse,
+    CashBalanceResponse,
     HoldingCreate,
     HoldingResponse,
     HoldingUpdate,
     PortfolioCreate,
+    PortfolioDuplicateRequest,
     PortfolioExposureResponse,
     PortfolioPerformancePoint,
     PortfolioResponse,
     PortfolioRiskFlagsResponse,
     PortfolioSummaryResponse,
     PortfolioUpdate,
+    PositionResponse,
     TransactionCreate,
     TransactionResponse,
     TransactionUpdate,
@@ -22,18 +27,26 @@ from app.schemas.portfolio import (
 from app.services.portfolio_service import (
     add_holding,
     add_transaction,
+    archive_portfolio,
+    create_allocation_set,
     create_portfolio,
     delete_holding,
     delete_portfolio,
     delete_transaction,
+    duplicate_portfolio,
+    get_cash,
     get_portfolio_exposure,
     get_portfolio_or_404,
     get_portfolio_performance,
     get_portfolio_risk_flags,
     get_portfolio_summary,
+    get_positions,
+    list_allocation_sets,
     list_holdings,
     list_portfolios,
     list_transactions,
+    restore_portfolio,
+    select_default_portfolio,
     serialize_portfolio,
     update_holding,
     update_portfolio,
@@ -59,6 +72,20 @@ def post_portfolio(
     return create_portfolio(db, current_user, payload)
 
 
+@router.get("/compare")
+def compare_portfolios(
+    portfolio_ids: list[str] = Query(..., min_length=2, max_length=10),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return {
+        "portfolios": [
+            get_portfolio_summary(db, current_user, portfolio_id).model_dump(mode="json")
+            for portfolio_id in portfolio_ids
+        ]
+    }
+
+
 @router.get("/{portfolio_id}", response_model=PortfolioResponse)
 def get_portfolio(
     portfolio_id: str,
@@ -81,11 +108,52 @@ def patch_portfolio(
 @router.delete("/{portfolio_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_portfolio(
     portfolio_id: str,
+    confirm: bool = Query(default=False),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
-    delete_portfolio(db, current_user, portfolio_id)
+    delete_portfolio(db, current_user, portfolio_id, confirmed=confirm)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{portfolio_id}/duplicate", response_model=PortfolioResponse, status_code=201)
+def duplicate(portfolio_id: str, payload: PortfolioDuplicateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return duplicate_portfolio(db, current_user, portfolio_id, payload)
+
+
+@router.post("/{portfolio_id}/archive", response_model=PortfolioResponse)
+def archive(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return archive_portfolio(db, current_user, portfolio_id)
+
+
+@router.post("/{portfolio_id}/restore", response_model=PortfolioResponse)
+def restore(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return restore_portfolio(db, current_user, portfolio_id)
+
+
+@router.post("/{portfolio_id}/select-default", response_model=PortfolioResponse)
+def select_default(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return select_default_portfolio(db, current_user, portfolio_id)
+
+
+@router.get("/{portfolio_id}/positions", response_model=list[PositionResponse])
+def positions(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return get_positions(db, current_user, portfolio_id)
+
+
+@router.get("/{portfolio_id}/cash", response_model=CashBalanceResponse)
+def cash(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return get_cash(db, current_user, portfolio_id)
+
+
+@router.get("/{portfolio_id}/allocations", response_model=list[AllocationSetResponse])
+def allocations(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return list_allocation_sets(db, current_user, portfolio_id)
+
+
+@router.post("/{portfolio_id}/allocations", response_model=AllocationSetResponse, status_code=201)
+def create_allocation(portfolio_id: str, payload: AllocationSetCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return create_allocation_set(db, current_user, portfolio_id, payload)
 
 
 @router.get("/{portfolio_id}/summary", response_model=PortfolioSummaryResponse)
@@ -201,3 +269,14 @@ def remove_transaction(
 ) -> Response:
     delete_transaction(db, current_user, transaction_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+    AllocationSetCreate,
+    AllocationSetResponse,
+    CashBalanceResponse,
+    archive_portfolio,
+    create_allocation_set,
+    duplicate_portfolio,
+    get_cash,
+    get_positions,
+    list_allocation_sets,
+    restore_portfolio,
+    select_default_portfolio,

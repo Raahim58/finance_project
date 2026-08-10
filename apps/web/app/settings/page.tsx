@@ -47,7 +47,7 @@ export default function SettingsPage() {
     <section className="mx-auto grid max-w-5xl gap-6 px-5 py-8">
       <div>
         <h1 className="text-2xl font-semibold text-ink">Settings</h1>
-        <p className="mt-2 text-sm text-muted">Manage Phase 1 preferences and BYOK LLM access.</p>
+        <p className="mt-2 text-sm text-muted">Manage preferences and encrypted BYOK LLM access.</p>
       </div>
       {message ? <p className="rounded-md border border-line bg-white px-4 py-3 text-sm text-ink">{message}</p> : null}
       <div className="grid gap-6 lg:grid-cols-2">

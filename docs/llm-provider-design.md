@@ -1,21 +1,5 @@
-# LLM Provider Design
+# LLM Provider and Assistant Design
 
-The backend exposes an `LLMProvider` interface with:
+The provider registry supports a deterministic mock provider and encrypted key records for OpenAI, Anthropic, Gemini, and OpenRouter. External HTTP provider calls remain deployment adapters; when unavailable, the orchestrator returns its deterministic evidence synthesis rather than fabricating an LLM answer.
 
-- `name`
-- `validate_key()`
-- `chat()`
-- `stream_chat()`
-- `supports_tool_calling`
-- `supports_json_mode`
-- `max_context_tokens`
-- `default_model`
-
-Implemented in Phase 1:
-
-- `MockProvider`
-- Anthropic, OpenAI, Gemini, and OpenRouter adapter placeholders
-- Provider registry
-- Encrypted key storage model and API
-
-User keys are encrypted at rest and only masked values are returned to the frontend.
+The assistant itself is implemented independently of provider choice. It authorizes scope, invokes only typed internal tools, collects database provenance and document citations, enforces iteration/chunk/time limits, validates numerical grounding, and persists the tool/run trace. Full keys remain encrypted at rest, are never returned to the frontend, and are only decrypted server-side immediately before a configured provider call.
