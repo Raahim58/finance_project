@@ -10,7 +10,7 @@ const percent=(value:unknown)=>value==null?"Not available":`${(Number(value)*100
 
 export default function MonitoringPage(){
   const [rows,setRows]=useState<Array<Record<string,unknown>>>([]);const [portfolios,setPortfolios]=useState<Portfolio[]>([]);const [portfolio,setPortfolio]=useState("");const [loading,setLoading]=useState(true);const [error,setError]=useState("");
-  useEffect(()=>{void getPortfolios().then(setPortfolios).catch(()=>{})},[]);
+  useEffect(()=>{void getPortfolios().then(setPortfolios).catch((reason:unknown)=>setError(reason instanceof Error?`Portfolio filter request failed: ${reason.message}`:"Portfolio filter request failed"))},[]);
   useEffect(()=>{setLoading(true);void getAlerts(portfolio||undefined).then(setRows).catch((e:Error)=>setError(e.message)).finally(()=>setLoading(false))},[portfolio]);
   async function acknowledge(id:string){try{await acknowledgeAlert(id);setRows(r=>r.filter(x=>String(x.id)!==id))}catch(e){setError(e instanceof Error?e.message:"Could not acknowledge alert")}}
   const groups=useMemo(()=>Object.groupBy(rows,r=>val(r,"severity")||"info"),[rows]);const order=["critical","high","medium","warning","low","info"];

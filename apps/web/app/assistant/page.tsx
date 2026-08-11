@@ -6,7 +6,7 @@ import { AssistantResult,Portfolio,getPortfolios,sendAssistantMessage } from "@/
 
 export default function AssistantPage(){
   const [portfolios,setPortfolios]=useState<Portfolio[]>([]);const [portfolioId,setPortfolioId]=useState("");const [question,setQuestion]=useState("");const [result,setResult]=useState<AssistantResult|null>(null);const [loading,setLoading]=useState(false);const [error,setError]=useState("");
-  useEffect(()=>{void getPortfolios().then(rows=>{setPortfolios(rows);setPortfolioId(rows.find(r=>r.is_default)?.id??rows[0]?.id??"")}).catch(()=>{})},[]);
+  useEffect(()=>{void getPortfolios().then(rows=>{setPortfolios(rows);setPortfolioId(rows.find(r=>r.is_default)?.id??rows[0]?.id??"")}).catch((reason:unknown)=>setError(reason instanceof Error?`Portfolio scope request failed: ${reason.message}`:"Portfolio scope request failed"))},[]);
   async function ask(e:FormEvent){e.preventDefault();setLoading(true);setError("");try{setResult(await sendAssistantMessage(question,portfolioId||undefined))}catch(err){setError(err instanceof Error?err.message:"Assistant failed")}finally{setLoading(false)}}
   return <div className="page-wrap">
     <header className="page-heading"><div><p className="eyebrow">Grounded decision support</p><h1 className="page-title">Research assistant</h1><p className="page-subtitle">A serious analysis surface that keeps conclusions, evidence, uncertainty and audit trace distinct.</p></div><span className="badge badge-good">Evidence required</span></header>

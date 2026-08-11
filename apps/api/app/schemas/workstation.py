@@ -380,5 +380,7 @@ class RecommendationResponse(BaseModel):
     freshness: dict[str, object] = Field(default_factory=dict)
     message: str
     status: str
+    linked_allocation: dict[str, object] | None = None
+    lifecycle: list[str] = Field(default_factory=list)
     links: dict[str, str] = Field(default_factory=dict)
     created_at: datetime

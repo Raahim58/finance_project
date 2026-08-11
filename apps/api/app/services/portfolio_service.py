@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.market import Company
 from app.models.portfolio import Portfolio, PortfolioHolding, PortfolioTransaction
 from app.models.user import User
-from app.models.workstation import AllocationItem, AllocationSet, PortfolioIPS, PortfolioIPSVersion
+from app.models.workstation import AllocationItem, AllocationSet, PortfolioIPS, PortfolioIPSVersion, Recommendation
 from app.services.ledger_service import (
     cash_balance,
     cash_balance_from_transactions,
@@ -589,6 +589,12 @@ def create_allocation_set(db: Session, user: User, portfolio_id: str, payload: A
     if abs(sum((item.target_weight for item in payload.items), Decimal("0")) - Decimal("1")) > Decimal("0.000001"):
         raise HTTPException(status_code=422, detail="Allocation weights must sum to one")
     version = (db.scalar(select(func.max(AllocationSet.version)).where(AllocationSet.portfolio_id == portfolio.id, AllocationSet.kind == payload.kind)) or 0) + 1
+    recommendation = None
+    recommendation_id = payload.assumptions.get("recommendation_id")
+    if recommendation_id is not None:
+        recommendation = db.scalar(select(Recommendation).where(Recommendation.id == str(recommendation_id), Recommendation.user_id == user.id, Recommendation.portfolio_id == portfolio.id))
+        if recommendation is None:
+            raise HTTPException(status_code=404, detail="Linked recommendation was not found for this portfolio")
     row = AllocationSet(portfolio_id=portfolio.id, kind=payload.kind, version=version, status="draft" if payload.kind == "sandbox" else "active", assumptions_json=json.dumps(payload.assumptions, sort_keys=True), base_value=payload.base_value, created_by_user_id=user.id)
     db.add(row); db.flush()
     for item in payload.items:
@@ -597,6 +603,8 @@ def create_allocation_set(db: Session, user: User, portfolio_id: str, payload: A
         latest = latest_price_for_symbol(db, item.symbol) if instrument else None
         quantity = amount / latest.close if amount is not None and latest and latest.close else None
         db.add(AllocationItem(allocation_set_id=row.id, symbol="CASH" if item.is_cash else instrument.symbol, instrument_id=instrument.id if instrument else None, is_cash=item.is_cash, target_weight=item.target_weight, target_amount=amount, target_quantity=quantity, locked=item.locked))
+    if recommendation is not None:
+        recommendation.status = "reviewed"
     db.commit(); db.refresh(row)
     return _serialize_allocation(db, row)
 

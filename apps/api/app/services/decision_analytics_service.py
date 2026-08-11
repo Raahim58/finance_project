@@ -335,7 +335,7 @@ def _portfolio_metrics(asset_returns: np.ndarray, weights: np.ndarray, expected:
 
 
 def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: PortfolioComparisonRequest):
-    portfolio, symbols, days, returns, covariance, expected, constraints, _benchmark, risk_free = _market_inputs(db, user, portfolio_id)
+    portfolio, symbols, days, returns, covariance, expected, constraints, benchmark_symbol, risk_free = _market_inputs(db, user, portfolio_id)
     proposed = {key.upper(): float(value) for key, value in payload.target_weights.items()}
     if any(value < 0 for value in proposed.values()) or abs(sum(proposed.values()) - 1) > 1e-6:
         raise HTTPException(status_code=422, detail="Proposed weights must be non-negative and sum to one")
@@ -362,6 +362,11 @@ def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: Portf
     proposed_metrics = _portfolio_metrics(returns, proposed_risky, adjusted_expected, covariance, annual_rf, None, proposed["CASH"])
     current_metrics["expected_return"] = float(np.append(current_risky, current["CASH"]) @ current_expected)
     proposed_metrics["expected_return"] = float(np.append(proposed_risky, proposed["CASH"]) @ proposed_expected)
+    benchmark_returns = _benchmark_returns(db, benchmark_symbol, days)
+    if benchmark_returns is not None and float(np.var(benchmark_returns, ddof=1)) > 0:
+        betas = np.asarray([float(np.cov(returns[:, index], benchmark_returns, ddof=1)[0, 1] / np.var(benchmark_returns, ddof=1)) for index in range(len(symbols))])
+        current_metrics["beta"] = float(current_risky @ betas)
+        proposed_metrics["beta"] = float(proposed_risky @ betas)
     if annual_rf is not None:
         current_metrics["sharpe"] = (current_metrics["expected_return"] - annual_rf) / current_metrics["volatility"] if current_metrics["volatility"] else None
         proposed_metrics["sharpe"] = (proposed_metrics["expected_return"] - annual_rf) / proposed_metrics["volatility"] if proposed_metrics["volatility"] else None
@@ -381,6 +386,7 @@ def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: Portf
         "return_shortfall": ("Excess / shortfall vs required", "decimal", "higher"),
         "volatility": ("Volatility", "decimal", "lower"),
         "sharpe": ("Sharpe ratio", "ratio", "higher"),
+        "beta": ("Portfolio beta", "ratio", "neutral"),
         "var_95": ("Historical VaR 95", "decimal", "lower"),
         "es_95": ("Historical ES 95", "decimal", "lower"),
         "concentration": ("Concentration HHI", "ratio", "lower"),

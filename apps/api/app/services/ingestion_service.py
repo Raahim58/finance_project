@@ -19,6 +19,7 @@ from app.models.workstation import (
     EventSource,
     IngestionRun,
     Instrument,
+    FinancialFact,
     MacroObservation,
     MacroSeries,
     SourceArtifact,
@@ -184,6 +185,7 @@ def _report_document_type(report_type: str) -> tuple[str, str | None]:
 
 
 def _refresh_psx_financials(db: Session, symbols: list[str] | None = None, limit: int | None = None) -> dict[str, int]:
+    from app.providers.fundamentals.extraction import extract_facts, parse_period_end
     from app.providers.fundamentals.psx_financials import PsxFinancialsProvider
     from app.services.rag_service import create_document_from_pages, parse_pdf
 
@@ -211,7 +213,15 @@ def _refresh_psx_financials(db: Session, symbols: list[str] | None = None, limit
                 pages = parse_pdf(content)
                 document_type, quarter = _report_document_type(item.report_type)
                 year_match = next((token for token in item.period_ended.replace("/", "-").split("-") if token.isdigit() and len(token) == 4), None)
-                create_document_from_pages(db, pages, title=f"{symbol} {item.report_type} — {item.period_ended}", document_type=document_type, symbol=symbol, fiscal_year=int(year_match) if year_match else None, quarter=quarter, source_name="PSX Financials", source_url=item.report_url, published_date=item.posting_date, visibility="public", artifact_id=artifact.id, commit=False)
+                document = create_document_from_pages(db, pages, title=f"{symbol} {item.report_type} — {item.period_ended}", document_type=document_type, symbol=symbol, fiscal_year=int(year_match) if year_match else None, quarter=quarter, source_name="PSX Financials", source_url=item.report_url, published_date=item.posting_date, visibility="public", artifact_id=artifact.id, commit=False)
+                period_end = parse_period_end(item.period_ended)
+                instrument = db.scalar(select(Instrument).where(Instrument.symbol == symbol))
+                if period_end and instrument:
+                    extracted, _ = extract_facts(pages, period_end)
+                    for fact in extracted:
+                        exists = db.scalar(select(FinancialFact.id).where(FinancialFact.instrument_id == instrument.id, FinancialFact.taxonomy_key == fact.taxonomy_key, FinancialFact.period_end == fact.period_end, FinancialFact.document_id == document.id))
+                        if not exists:
+                            db.add(FinancialFact(instrument_id=instrument.id, taxonomy_key=fact.taxonomy_key, period_type="annual" if document_type == "annual_report" else "interim", period_end=fact.period_end, filing_date=item.posting_date, value=fact.value, unit=fact.unit, currency=fact.currency, consolidated=True, document_id=document.id, page_number=fact.page_number))
                 db.commit()
                 accepted += 1; remaining -= 1
             except Exception:

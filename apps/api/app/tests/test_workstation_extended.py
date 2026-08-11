@@ -56,6 +56,31 @@ def test_ips_allocations_lifecycle_and_monitoring_are_owned(client):
     assert second["alerts_created"] == []
 
 
+def test_monitoring_warning_recommendation_and_linked_sandbox_agree(client):
+    headers = auth(client, "semantic-consistency@example.com"); portfolio_id = portfolio(client, headers)
+    client.post(f"/portfolios/{portfolio_id}/holdings", headers=headers, json={"symbol": "MEBL", "quantity": "10", "average_cost": "100"})
+    ips = client.post(f"/portfolios/{portfolio_id}/ips/confirm", headers=headers, json={"constraints": {"max_instrument_weight": 1.0, "min_cash_weight": 0.0}})
+    assert ips.status_code == 201
+    compliance = client.get(f"/portfolios/{portfolio_id}/ips/compliance", headers=headers).json()
+    assert compliance["status"] == "PASS"
+    client.post(f"/portfolios/{portfolio_id}/monitoring/rules", headers=headers, json={"rule_type": "concentration", "threshold": {"maximum": 0.5}})
+    run = client.post(f"/monitoring/runs/{portfolio_id}", headers=headers).json()
+    assert len(run["alerts_created"]) == 1
+    alert = client.get(f"/monitoring/alerts?portfolio_id={portfolio_id}", headers=headers).json()[0]
+    assert alert["classification"] == "monitoring_warning"
+    assert alert["related_ips_limit"] == 1.0
+    recommendation = client.get("/recommendations", headers=headers).json()[0]
+    assert recommendation["evidence"]["classification"] == "monitoring_warning"
+    assert recommendation["linked_allocation"] is None
+    sandbox = client.post(f"/portfolios/{portfolio_id}/allocations", headers=headers, json={"kind": "sandbox", "base_value": 1000, "assumptions": {"recommendation_id": recommendation["id"]}, "items": [{"symbol": "MEBL", "target_weight": 1.0}]})
+    assert sandbox.status_code == 201
+    updated = client.get("/recommendations", headers=headers).json()[0]
+    assert updated["status"] == "reviewed"
+    assert updated["linked_allocation"]["id"] == sandbox.json()["id"]
+    resolved = client.patch(f"/recommendations/{recommendation['id']}?decision=resolved", headers=headers)
+    assert resolved.json() == {"id": recommendation["id"], "status": "resolved", "holdings_mutated": False}
+
+
 def test_assistant_is_grounded_and_tool_registry_is_allowlisted(client):
     headers = auth(client, "assistant@example.com"); portfolio_id = portfolio(client, headers)
     response = client.post("/assistant/messages", headers=headers, json={"question": "What is my portfolio value and should I rebalance?", "portfolio_id": portfolio_id})

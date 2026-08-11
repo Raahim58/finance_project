@@ -10,7 +10,8 @@ from app.models.user import User
 from app.models.workstation import DataSource
 from app.schemas.research import EventStudyRequest, HistoricalReplayRequest, InstrumentResponse, ScenarioDefinitionCreate, ScenarioDefinitionResponse
 from app.services.research_service import company_overview, instrument_detail, list_events, list_macro_series, macro_releases, market_series, run_event_study, search_instruments
-from app.services.scenario_service import create_definition, historical_replay, list_definitions
+from app.services.scenario_service import create_definition, historical_replay, list_definitions, list_scenario_templates
+from app.services.regime_service import macro_regime
 
 router = APIRouter()
 
@@ -61,6 +62,11 @@ def releases(series_id: str | None = None, db: Session = Depends(get_db)):
     return macro_releases(db, series_id)
 
 
+@router.get("/macro/regime")
+def regime(portfolio_id: str | None = None, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return macro_regime(db, current_user, portfolio_id)
+
+
 @router.get("/companies/{instrument_id}/overview")
 def overview(instrument_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return company_overview(db, current_user, instrument_id)
@@ -99,6 +105,11 @@ def event_study(payload: EventStudyRequest, _: User = Depends(get_current_user),
 @router.get("/portfolios/{portfolio_id}/scenarios", response_model=list[ScenarioDefinitionResponse])
 def scenarios(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return list_definitions(db, current_user, portfolio_id)
+
+
+@router.get("/scenario-templates")
+def scenario_templates(_: User = Depends(get_current_user)):
+    return list_scenario_templates()
 
 
 @router.post("/portfolios/{portfolio_id}/scenarios", response_model=ScenarioDefinitionResponse, status_code=201)

@@ -594,6 +594,10 @@ export function runScenario(portfolioId: string, payload: Record<string, unknown
 }
 
 export function getScenarioRuns(portfolioId: string) { return request<ScenarioResult[]>(`/portfolios/${encodeURIComponent(portfolioId)}/scenario-runs`); }
+export type ScenarioTemplate={id:string;name:string;description:string;version:string;sector_shocks:Record<string,number>;factor_shocks:Record<string,number>;fallback_security_shock?:number;required_mappings:string[]};
+export function getScenarioTemplates(){return request<ScenarioTemplate[]>("/scenario-templates");}
+export type MacroRegime={regime:string;method:string;method_note:string;dimensions:Record<string,Record<string,unknown>>;stress_signals:string[];suggested_scenario_ids:string[];portfolio_relevance?:Record<string,unknown>|null};
+export function getMacroRegime(portfolioId?:string){return request<MacroRegime>(`/macro/regime${portfolioId?`?portfolio_id=${encodeURIComponent(portfolioId)}`:""}`);}
 export function runHistoricalReplay(portfolioId:string,startDate:string,endDate:string,useCurrentHoldings=true){return request<HistoricalReplay>(`/portfolios/${encodeURIComponent(portfolioId)}/scenarios/historical-replay`,{method:"POST",body:JSON.stringify({start_date:startDate,end_date:endDate,use_current_holdings:useCurrentHoldings})});}
 
 export function sendAssistantMessage(question: string, portfolioId?: string) {
@@ -608,7 +612,7 @@ export function getRecommendations() {
   return request<Array<Record<string, unknown>>>("/recommendations");
 }
 
-export function decideRecommendation(recommendationId: string, decision: "accepted" | "reviewed" | "dismissed") {
+export function decideRecommendation(recommendationId: string, decision: "accepted" | "reviewed" | "dismissed" | "rejected" | "superseded" | "resolved") {
   return request<{ id: string; status: string }>(`/recommendations/${encodeURIComponent(recommendationId)}?decision=${decision}`, { method: "PATCH" });
 }
 

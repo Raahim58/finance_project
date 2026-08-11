@@ -15,6 +15,20 @@ from app.services.portfolio_service import get_portfolio_or_404
 from app.services.canonical_market_service import price_series
 
 
+SCENARIO_TEMPLATE_VERSION = "2026.1"
+SCENARIO_TEMPLATES = [
+    {"id": "psx_drawdown", "name": "Broad PSX drawdown", "description": "Deterministic broad equity selloff.", "version": SCENARIO_TEMPLATE_VERSION, "sector_shocks": {}, "factor_shocks": {"market": -0.15}, "fallback_security_shock": -0.15, "required_mappings": ["market beta or fallback"]},
+    {"id": "rate_shock", "name": "Rates +200 bps", "description": "Rate-sensitive sector stress; values are scenario assumptions, not forecasts.", "version": SCENARIO_TEMPLATE_VERSION, "sector_shocks": {"Banking": 0.04, "Cement": -0.10, "Power": -0.06, "Technology": -0.04}, "factor_shocks": {"rates": 0.02}, "required_mappings": ["sector"]},
+    {"id": "pkr_depreciation", "name": "PKR depreciation 15%", "description": "Illustrative importer/exporter sensitivity mapping.", "version": SCENARIO_TEMPLATE_VERSION, "sector_shocks": {"Oil & Gas Marketing": -0.12, "Technology": 0.08, "Textile": 0.07, "Food & Personal Care": -0.06}, "factor_shocks": {"pkr": -0.15}, "required_mappings": ["sector or FX beta"]},
+    {"id": "oil_spike", "name": "Oil price +25%", "description": "Illustrative upstream benefit and downstream pressure.", "version": SCENARIO_TEMPLATE_VERSION, "sector_shocks": {"Oil & Gas": 0.12, "Oil & Gas Marketing": -0.08, "Power": -0.05}, "factor_shocks": {"oil": 0.25}, "required_mappings": ["sector or oil beta"]},
+    {"id": "banking_stress", "name": "Banking stress", "description": "Deterministic banking-sector drawdown.", "version": SCENARIO_TEMPLATE_VERSION, "sector_shocks": {"Banking": -0.18}, "factor_shocks": {}, "required_mappings": ["sector"]},
+]
+
+
+def list_scenario_templates() -> list[dict[str, object]]:
+    return SCENARIO_TEMPLATES
+
+
 def serialize_definition(db: Session, row: ScenarioDefinition) -> ScenarioDefinitionResponse:
     shocks = list(db.scalars(select(ScenarioShock).where(ScenarioShock.scenario_definition_id == row.id)))
     return ScenarioDefinitionResponse(id=row.id, portfolio_id=row.portfolio_id, name=row.name, scenario_type=row.scenario_type, description=row.description, assumptions=json.loads(row.assumptions_json), shocks=[{"id": shock.id, "target_type": shock.target_type, "target_key": shock.target_key, "shock_value": shock.shock_value, "unit": shock.unit} for shock in shocks], created_at=row.created_at)

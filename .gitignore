@@ -11,6 +11,9 @@ dist/
 build/
 coverage/
 htmlcov/
+.playwright-mcp/
+apps/web/test-results/
+apps/web/playwright-report/
 *.db
 *.sqlite
 *.sqlite3

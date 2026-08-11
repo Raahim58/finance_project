@@ -78,9 +78,9 @@ def _risk_level_from_score(score: float) -> str:
 def assess_risk_profile(data: dict[str, object]) -> dict[str, object]:
     """Reconcile capacity and willingness without claiming psychometric precision."""
     diagnostics: list[str] = []
-    capacity = str(data.get("risk_capacity") or "").lower() or None
-    if capacity not in _RISK_ORDER:
-        capacity = None
+    capacity = None
+    has_financial_inputs = any(data.get(key) is not None for key in ("horizon_years", "expense_coverage_months", "portfolio_income_dependence", "drawdown_capacity"))
+    if has_financial_inputs:
         horizon = data.get("horizon_years")
         coverage = data.get("expense_coverage_months")
         income_dependence = str(data.get("portfolio_income_dependence") or "").lower()
@@ -99,6 +99,8 @@ def assess_risk_profile(data: dict[str, object]) -> dict[str, object]:
             diagnostics.append("Capacity is a rule-based estimate from the financial inputs provided.")
         else:
             diagnostics.append("Risk capacity is unavailable because financial resilience inputs are incomplete.")
+    else:
+        diagnostics.append("Risk capacity is unavailable because financial resilience inputs are incomplete.")
 
     willingness = str(data.get("risk_willingness") or "").lower() or None
     answers = data.get("willingness_answers")
@@ -141,6 +143,11 @@ def save_profile_version(db: Session, user: User, payload: VersionDraft, confirm
         numeric = [float(value) for value in answers if isinstance(value, (int, float))]
         data["willingness_score"] = sum(numeric) / len(numeric) if numeric else None
     data["risk_assessment"] = assess_risk_profile(data)
+    assessment = data["risk_assessment"]
+    confirmed = assessment.get("confirmed_tolerance")
+    reconciled = assessment.get("reconciled_tolerance")
+    if confirm and confirmed and reconciled and _RISK_ORDER[str(confirmed)] > _RISK_ORDER[str(reconciled)]:
+        raise HTTPException(status_code=422, detail="Confirmed risk tolerance cannot exceed the more restrictive calculated capacity and willingness.")
     version = (db.scalar(select(func.max(InvestorFinancialProfileVersion.version)).where(InvestorFinancialProfileVersion.user_id == user.id)) or 0) + 1
     row = InvestorFinancialProfileVersion(
         user_id=user.id, version=version, status="confirmed" if confirm else "draft",
@@ -804,7 +811,11 @@ def run_scenario(db: Session, user: User, portfolio_id: str, payload: ScenarioRe
         context="stressed",
     )
     compliance["stressed_weights"] = stressed_weights
-    result = {"portfolio_value": total, "stressed_portfolio_value": stressed_total, "pnl": pnl, "pnl_percent": pnl / total if total else 0, "positions": positions, "sector_contributions": sector_contributions, "compliance": compliance, "assumptions": ["Direct instrument shocks override sector/factor mappings to avoid double counting.", "Sector and factor shocks are additive when no direct shock exists.", "Cash is held constant under the configured shocks.", "No liquidity, tax, fee, or second-order effects are modeled."]}
+    assumptions = ["Direct instrument shocks override sector/factor mappings to avoid double counting.", "Sector and factor shocks are additive when no direct shock exists.", "Cash is held constant under the configured shocks.", "No liquidity, tax, fee, or second-order effects are modeled."]
+    unmapped = [str(position["symbol"]) for position in positions if not position["mapping_sources"] and (payload.sector_shocks or payload.factor_shocks)]
+    if unmapped:
+        assumptions.append(f"Missing mapping diagnostics: {', '.join(unmapped)} received no sector or factor mapping and therefore a zero shock.")
+    result = {"portfolio_value": total, "stressed_portfolio_value": stressed_total, "pnl": pnl, "pnl_percent": pnl / total if total else 0, "positions": positions, "sector_contributions": sector_contributions, "compliance": compliance, "assumptions": assumptions}
     all_shocks = {"instruments": payload.shocks, "sectors": payload.sector_shocks, "factors": payload.factor_shocks}
     row = ScenarioRun(portfolio_id=portfolio.id, name=payload.name, shocks_json=_json(all_shocks), result_json=_json(result), data_cutoff=cutoff, assumptions_json=_json({"scenario_type": payload.scenario_type, "mapping_order": ["instrument", "sector", "factor"]}), status="completed")
     db.add(row); db.commit(); db.refresh(row)
@@ -820,6 +831,12 @@ def create_monitoring_rule(db: Session, user: User, portfolio_id: str, rule_type
 
 def list_recommendations(db: Session, user: User):
     rows = db.scalars(select(Recommendation).where(Recommendation.user_id == user.id).order_by(Recommendation.created_at.desc())).all()
+    allocations = db.scalars(select(AllocationSet).where(AllocationSet.created_by_user_id == user.id).order_by(AllocationSet.created_at.desc())).all()
+    linked_allocations: dict[str, AllocationSet] = {}
+    for allocation in allocations:
+        recommendation_id = _load(allocation.assumptions_json).get("recommendation_id")
+        if recommendation_id and str(recommendation_id) not in linked_allocations:
+            linked_allocations[str(recommendation_id)] = allocation
     results = []
     for row in rows:
         evidence = _load(row.evidence_json)
@@ -833,6 +850,7 @@ def list_recommendations(db: Session, user: User):
             ips_limit = constraints.get("max_instrument_weight")
             evidence.update({"rule_type": rule_type, "rule_threshold": assumptions.get("threshold", {"maximum": evidence.get("limit")}), "current_value": current_value, "related_ips_limit": ips_limit, "ips_version_id": version.id if version else None, "classification": "mandate_breach" if current_value is not None and ips_limit is not None and current_value > float(ips_limit) else "monitoring_warning"})
         trigger_label = "IPS mandate breach" if row.trigger.startswith("ips:") else rule_type.replace("_", " ").title()
+        linked = linked_allocations.get(row.id)
         results.append({
             "id": row.id,
             "portfolio_id": row.portfolio_id,
@@ -846,7 +864,9 @@ def list_recommendations(db: Session, user: User):
             "freshness": _load(row.freshness_json),
             "message": row.message,
             "status": row.status,
-            "links": {"monitoring": "/monitoring", "risk": f"/portfolios/{row.portfolio_id}/risk", "build": f"/portfolios/{row.portfolio_id}/build"},
+            "linked_allocation": {"id": linked.id, "kind": linked.kind, "version": linked.version, "status": linked.status} if linked else None,
+            "lifecycle": ["open", "reviewed", "resolved"],
+            "links": {"monitoring": "/monitoring", "risk": f"/portfolios/{row.portfolio_id}/risk", "build": f"/portfolios/{row.portfolio_id}/build?recommendation={row.id}"},
             "created_at": row.created_at,
         })
     return results
