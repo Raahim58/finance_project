@@ -7,7 +7,7 @@ Next.js workstation
         |
 FastAPI routes + shared ownership checks
         |
-services: ledger | quant | optimizer | research/RAG | scenarios | monitoring
+services: ledger | assumptions | allocation-state analytics | optimizer | compliance | research/RAG | scenarios | monitoring
         |
 structured database queries + immutable source/document evidence
         |
@@ -31,6 +31,13 @@ Investor profiles and portfolio IPS records use editable drafts and immutable co
 Pure modules under `app/domain/quant` implement returns, covariance/correlation, regression, drawdown, risk/performance metrics, VaR/ES, and risk contributions. CVXPY runs convex optimizers and SciPy runs deterministic multi-start risk parity/budget methods. Inputs, cutoff, estimator, solver, diagnostics, and result summaries are persisted. Unsupported IPS constraints are reported instead of silently removed.
 
 Scenario arithmetic is deterministic. Direct instrument shocks override mappings; sector and factor mappings apply only when there is no direct shock, preventing double counting. Historical replay labels current-holdings replay as counterfactual.
+
+The presentation boundary exposes chart-ready capital-market assumptions,
+efficient-frontier markers, CAPM/SML points, dated rolling risk, empirical return
+distributions, capital-versus-risk contribution, and current-versus-proposed
+comparisons. The same covariance and expected-return assumptions are disclosed on
+both sides of a comparison. Cash has zero modeled covariance and only receives an
+expected return when an observed effective-dated risk-free series is available.
 
 ## Assistant and monitoring
 

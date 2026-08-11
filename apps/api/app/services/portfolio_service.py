@@ -446,6 +446,7 @@ def get_portfolio_summary(db: Session, user: User, portfolio_id: str) -> Portfol
         sum((holding.day_change for holding in holdings if holding.day_change is not None), Decimal("0"))
     )
     previous_value = total_value - day_change
+    unpriced = [holding.symbol for holding in holdings if holding.latest_price is None]
     return PortfolioSummaryResponse(
         portfolio=serialize_portfolio(portfolio),
         total_value=total_value,
@@ -458,11 +459,18 @@ def get_portfolio_summary(db: Session, user: User, portfolio_id: str) -> Portfol
         day_change_percent=percent((day_change / previous_value) * Decimal("100")) if previous_value else None,
         cash_balance=money(cash),
         holdings=holdings,
-        data_freshness_date=max(
+        data_freshness_date=min(
             (holding.latest_price_date for holding in holdings if holding.latest_price_date is not None),
             default=None,
         ),
         data_source=next((holding.data_source for holding in holdings if holding.data_source), None),
+        valuation_complete=not unpriced,
+        unpriced_symbols=unpriced,
+        valuation_note=(
+            None
+            if not unpriced
+            else "Portfolio total is a partial valuation because one or more holdings lack a canonical market price."
+        ),
     )
 
 

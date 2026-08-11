@@ -25,7 +25,7 @@ pip install -r requirements-dev.txt
 cp ../../.env.example .env
 python -m app.core.keys
 alembic upgrade head
-python -m app.seed.demo
+DEMO_USER_PASSWORD='choose-a-local-password' python -m app.seed.demo
 uvicorn app.main:app --reload
 ```
 

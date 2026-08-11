@@ -198,6 +198,9 @@ class PortfolioSummaryResponse(BaseModel):
     holdings: list[HoldingSummary]
     data_freshness_date: date | None
     data_source: str | None
+    valuation_complete: bool = True
+    unpriced_symbols: list[str] = Field(default_factory=list)
+    valuation_note: str | None = None
 
 
 class SectorExposureResponse(BaseModel):

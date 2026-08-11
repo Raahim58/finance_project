@@ -1,2 +1,6 @@
-import { WorkspacePage } from "@/components/WorkspacePage";
-export default function Page() { return <WorkspacePage mode="stress" />; }
+import { redirect } from "next/navigation";
+
+export default async function LegacyStressPage({params}:{params:Promise<{portfolioId:string}>}) {
+  const {portfolioId}=await params;
+  redirect(`/portfolios/${portfolioId}/scenarios`);
+}

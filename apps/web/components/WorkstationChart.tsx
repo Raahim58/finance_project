@@ -21,3 +21,32 @@ export function DonutChart({labels,values,height=250}:{labels:string[];values:nu
   const colors=["#17324d","#2d6385","#4e8994","#76a99d","#bd9d62","#9b6857","#81909b"];
   return <ReactECharts notMerge lazyUpdate style={{height,width:"100%"}} option={{color:colors,tooltip:{trigger:"item",formatter:"{b}: {d}%"},legend:{type:"scroll",orient:"vertical",right:0,top:"middle",textStyle:{fontSize:10,color:"#526170"}},series:[{type:"pie",radius:["52%","78%"],center:["36%","50%"],avoidLabelOverlap:true,label:{show:false},data:labels.map((name,i)=>({name,value:values[i]}))}]}}/>;
 }
+
+export function ScatterChart({
+  points,
+  height=320,
+  xName,
+  yName,
+  percentAxes=false,
+  xPercent,
+  yPercent,
+  seriesName="Series",
+}:{
+  points:Array<{x:number;y:number;name?:string}>;
+  height?:number;
+  xName:string;
+  yName:string;
+  percentAxes?:boolean;
+  xPercent?:boolean;
+  yPercent?:boolean;
+  seriesName?:string;
+}) {
+  if(!points.length) return <div className="empty-state" style={{height}}><strong>Series unavailable</strong><span>The model did not return chart-ready observations.</span></div>;
+  const format=(value:number,asPercent:boolean)=>asPercent?`${(value*100).toFixed(1)}%`:value.toFixed(2);
+  const xp=xPercent??percentAxes,yp=yPercent??percentAxes;
+  return <ReactECharts notMerge lazyUpdate style={{height,width:"100%"}} option={{animationDuration:300,grid:{left:58,right:20,top:22,bottom:48},tooltip:{trigger:"item",formatter:(p:{data:{value:number[];name?:string}})=>`${p.data.name??seriesName}<br/>${xName}: ${format(p.data.value[0],xp)}<br/>${yName}: ${format(p.data.value[1],yp)}`},xAxis:{...axis,type:"value",name:xName,nameLocation:"middle",nameGap:30,axisLabel:{...axis.axisLabel,formatter:(value:number)=>format(value,xp)}},yAxis:{...axis,type:"value",name:yName,nameGap:38,nameLocation:"middle",axisLabel:{...axis.axisLabel,formatter:(value:number)=>format(value,yp)}},series:[{name:seriesName,type:"scatter",symbolSize:9,itemStyle:{color:"#244e70"},data:points.map(p=>({name:p.name,value:[p.x,p.y]}))}]}}/>;
+}
+
+export function HistogramChart({bins,height=320}:{bins:Array<{lower:number;upper:number;count:number}>;height?:number}) {
+  return <BarChart height={height} labels={bins.map(bin=>`${(bin.lower*100).toFixed(1)}–${(bin.upper*100).toFixed(1)}%`)} values={bins.map(bin=>bin.count)} color="#4e8994"/>;
+}

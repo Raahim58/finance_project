@@ -5,6 +5,9 @@ import pytest
 
 from app.db.session import SessionLocal
 from app.models.user import User
+from app.models.portfolio import Portfolio, PortfolioTransaction
+from app.models.workstation import AllocationSet, InvestorFinancialProfileVersion, OptimizerRun, PortfolioIPSVersion, ScenarioRun
+from app.seed.demo import seed_workstation
 from app.services.market_ingestion import generate_mock_market_data
 from app.tools import build_tool_registry
 
@@ -65,3 +68,20 @@ def test_assistant_is_grounded_and_tool_registry_is_allowlisted(client):
         user = db.query(User).filter(User.email == "assistant@example.com").one()
         with pytest.raises(KeyError, match="not allowlisted"):
             build_tool_registry().invoke("sql.execute", db, user, {})
+
+
+def test_demo_seed_is_idempotent_and_populates_the_decision_workflow(monkeypatch):
+    monkeypatch.setenv("DEMO_USER_PASSWORD", "local-test-password")
+    first = seed_workstation()
+    second = seed_workstation()
+    assert first["portfolio_id"] == second["portfolio_id"]
+    assert first["mock_data"] is True
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.email == "portfolio.manager@example.com").one()
+        portfolio = db.query(Portfolio).filter(Portfolio.user_id == user.id).one()
+        assert db.query(InvestorFinancialProfileVersion).filter_by(user_id=user.id).count() == 1
+        assert db.query(PortfolioIPSVersion).filter_by(portfolio_id=portfolio.id, status="confirmed").count() == 1
+        assert db.query(PortfolioTransaction).filter_by(portfolio_id=portfolio.id).count() == 4
+        assert db.query(AllocationSet).filter_by(portfolio_id=portfolio.id, kind="target").count() == 1
+        assert db.query(OptimizerRun).filter_by(portfolio_id=portfolio.id).count() == 1
+        assert db.query(ScenarioRun).filter_by(portfolio_id=portfolio.id).count() == 1

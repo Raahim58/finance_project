@@ -43,12 +43,15 @@ def acknowledge(alert_id: str, current_user: User = Depends(get_current_user), d
 
 @router.patch("/recommendations/{recommendation_id}")
 def decide_recommendation(recommendation_id: str, decision: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if decision not in {"accepted", "dismissed"}:
+    if decision not in {"accepted", "reviewed", "dismissed"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="decision must be accepted or dismissed",
+            detail="decision must be reviewed or dismissed",
         )
     row = db.scalar(select(Recommendation).where(Recommendation.id == recommendation_id, Recommendation.user_id == current_user.id))
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recommendation not found")
-    row.status = decision; db.commit(); return {"id": row.id, "status": row.status}
+    # Compatibility: legacy "accepted" meant the user reviewed the item. It did
+    # not and still does not authorize a holding mutation or trade.
+    row.status = "reviewed" if decision in {"accepted", "reviewed"} else "dismissed"
+    db.commit(); return {"id": row.id, "status": row.status, "holdings_mutated": False}

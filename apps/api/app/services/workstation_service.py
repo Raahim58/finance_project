@@ -47,11 +47,76 @@ from app.services.canonical_market_service import latest_price, price_series
 
 
 def _json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _load(value: str) -> dict:
     return json.loads(value)
+
+
+_RISK_ORDER = {"low": 0, "moderate": 1, "high": 2}
+
+
+def _risk_level_from_score(score: float) -> str:
+    if score < 2.5:
+        return "low"
+    if score < 3.75:
+        return "moderate"
+    return "high"
+
+
+def assess_risk_profile(data: dict[str, object]) -> dict[str, object]:
+    """Reconcile capacity and willingness without claiming psychometric precision."""
+    diagnostics: list[str] = []
+    capacity = str(data.get("risk_capacity") or "").lower() or None
+    if capacity not in _RISK_ORDER:
+        capacity = None
+        horizon = data.get("horizon_years")
+        coverage = data.get("expense_coverage_months")
+        income_dependence = str(data.get("portfolio_income_dependence") or "").lower()
+        drawdown_ability = str(data.get("drawdown_capacity") or "").lower()
+        capacity_scores: list[float] = []
+        if isinstance(horizon, (int, float)):
+            capacity_scores.append(1 if horizon < 3 else 3 if horizon < 8 else 5)
+        if isinstance(coverage, (int, float)):
+            capacity_scores.append(1 if coverage < 3 else 3 if coverage < 12 else 5)
+        if income_dependence in {"high", "moderate", "low"}:
+            capacity_scores.append({"high": 1, "moderate": 3, "low": 5}[income_dependence])
+        if drawdown_ability in _RISK_ORDER:
+            capacity_scores.append({"low": 1, "moderate": 3, "high": 5}[drawdown_ability])
+        if capacity_scores:
+            capacity = _risk_level_from_score(sum(capacity_scores) / len(capacity_scores))
+            diagnostics.append("Capacity is a rule-based estimate from the financial inputs provided.")
+        else:
+            diagnostics.append("Risk capacity is unavailable because financial resilience inputs are incomplete.")
+
+    willingness = str(data.get("risk_willingness") or "").lower() or None
+    answers = data.get("willingness_answers")
+    numeric_answers = [float(value) for value in answers if isinstance(value, (int, float))] if isinstance(answers, list) else []
+    if numeric_answers:
+        willingness = _risk_level_from_score(sum(numeric_answers) / len(numeric_answers))
+        diagnostics.append("Willingness is a directional questionnaire result, not a scientific measurement.")
+    elif willingness not in _RISK_ORDER:
+        willingness = None
+        diagnostics.append("Risk willingness is unavailable because behavioural responses are incomplete.")
+
+    reconciled = None
+    if capacity and willingness:
+        reconciled = min((capacity, willingness), key=lambda value: _RISK_ORDER[value])
+        diagnostics.append("Reconciled tolerance is bounded by the more restrictive of capacity and willingness.")
+    confirmed = str(data.get("confirmed_overall_risk_tolerance") or data.get("overall_risk_tolerance") or "").lower() or None
+    if confirmed not in _RISK_ORDER:
+        confirmed = None
+    if confirmed and reconciled and _RISK_ORDER[confirmed] > _RISK_ORDER[reconciled]:
+        diagnostics.append("The confirmed tolerance exceeds the conservative reconciled assessment; review before using it in a mandate.")
+    return {
+        "capacity": capacity,
+        "willingness": willingness,
+        "reconciled_tolerance": reconciled,
+        "confirmed_tolerance": confirmed,
+        "available": bool(capacity and willingness),
+        "diagnostics": diagnostics,
+    }
 
 
 def save_profile_version(db: Session, user: User, payload: VersionDraft, confirm: bool = False):
@@ -65,6 +130,7 @@ def save_profile_version(db: Session, user: User, payload: VersionDraft, confirm
     if isinstance(answers, list) and answers:
         numeric = [float(value) for value in answers if isinstance(value, (int, float))]
         data["willingness_score"] = sum(numeric) / len(numeric) if numeric else None
+    data["risk_assessment"] = assess_risk_profile(data)
     version = (db.scalar(select(func.max(InvestorFinancialProfileVersion.version)).where(InvestorFinancialProfileVersion.user_id == user.id)) or 0) + 1
     row = InvestorFinancialProfileVersion(
         user_id=user.id, version=version, status="confirmed" if confirm else "draft",
@@ -120,6 +186,15 @@ def save_ips_version(db: Session, user: User, portfolio_id: str, payload: IPSDra
             else: high = midpoint
         required_return = (low + high) / 2
     constraints = dict(payload.constraints)
+    objective_inputs = {
+        "starting_capital": payload.starting_capital,
+        "target_value": payload.target_value,
+        "horizon_years": horizon_years,
+        "annual_contribution": payload.annual_contribution,
+        "valuation_date": valuation_date.isoformat(),
+        "target_date": payload.target_date.isoformat() if payload.target_date else None,
+    }
+    constraints["objective_inputs"] = {key: value for key, value in objective_inputs.items() if value is not None}
     if payload.goal: constraints["goal"] = payload.goal
     if payload.benchmark_symbol: constraints["benchmark_symbol"] = payload.benchmark_symbol.upper()
     typed_constraints = {
@@ -165,13 +240,25 @@ def save_ips_version(db: Session, user: User, portfolio_id: str, payload: IPSDra
         portfolio.selected_ips_version_id = row.id
     header.updated_at = datetime.now(UTC)
     db.commit(); db.refresh(row)
-    return {"id": row.id, "version": row.version, "status": row.status, "constraints": constraints, "required_return": float(row.required_return) if row.required_return is not None else None, "confirmed_at": row.confirmed_at}
+    analysis = {
+        "available": row.required_return is not None,
+        "annual_rate": float(row.required_return) if row.required_return is not None else None,
+        "calculation_type": constraints.get("required_return_method", {}).get("method") if isinstance(constraints.get("required_return_method"), dict) else None,
+        "assumptions": constraints.get("objective_inputs", {}),
+        "diagnostics": [] if row.required_return is not None else ["Starting capital, target value, and a positive horizon are required to calculate the required return."],
+    }
+    return {"id": row.id, "version": row.version, "status": row.status, "constraints": constraints, "required_return": float(row.required_return) if row.required_return is not None else None, "required_return_analysis": analysis, "confirmed_at": row.confirmed_at}
 
 
 def list_ips_versions(db: Session, user: User, portfolio_id: str):
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     rows = db.scalars(select(PortfolioIPSVersion).where(PortfolioIPSVersion.portfolio_id == portfolio.id).order_by(PortfolioIPSVersion.version.desc())).all()
-    return [{"id": r.id, "version": r.version, "status": r.status, "constraints": _load(r.constraints_json), "required_return": float(r.required_return) if r.required_return is not None else None, "confirmed_at": r.confirmed_at} for r in rows]
+    results = []
+    for row in rows:
+        constraints = _load(row.constraints_json)
+        available = row.required_return is not None
+        results.append({"id": row.id, "version": row.version, "status": row.status, "constraints": constraints, "required_return": float(row.required_return) if available else None, "required_return_analysis": {"available": available, "annual_rate": float(row.required_return) if available else None, "calculation_type": constraints.get("required_return_method", {}).get("method") if isinstance(constraints.get("required_return_method"), dict) else None, "assumptions": constraints.get("objective_inputs", {}), "diagnostics": [] if available else ["Starting capital, target value, and a positive horizon are required to calculate the required return."]}, "confirmed_at": row.confirmed_at})
+    return results
 
 
 def ips_compliance(db: Session, user: User, portfolio_id: str):
@@ -182,6 +269,8 @@ def ips_compliance(db: Session, user: User, portfolio_id: str):
     constraints = _load(version.constraints_json)
     summary = get_portfolio_summary(db, user, portfolio.id)
     violations = []
+    if not summary.valuation_complete:
+        violations.append({"code": "incomplete_valuation", "symbols": summary.unpriced_symbols, "message": summary.valuation_note, "severity": "availability"})
     total = float(summary.total_value)
     max_instrument = constraints.get("max_instrument_weight")
     excluded = {str(value).upper() for value in constraints.get("excluded_instruments", [])}
@@ -191,17 +280,17 @@ def ips_compliance(db: Session, user: User, portfolio_id: str):
         weight = float(holding.market_value) / total if total else 0
         sector_values[holding.sector] = sector_values.get(holding.sector, 0) + weight
         if max_instrument is not None and weight > float(max_instrument):
-            violations.append({"code": "max_instrument_weight", "symbol": holding.symbol, "actual": weight, "limit": float(max_instrument)})
+            violations.append({"code": "max_instrument_weight", "symbol": holding.symbol, "actual": weight, "limit": float(max_instrument), "breach": weight - float(max_instrument), "severity": "hard"})
         if holding.symbol.upper() in excluded or (allowed and holding.symbol.upper() not in allowed):
-            violations.append({"code": "instrument_not_allowed", "symbol": holding.symbol})
+            violations.append({"code": "instrument_not_allowed", "symbol": holding.symbol, "actual": weight, "limit": 0.0, "breach": weight, "severity": "hard"})
     max_sector = constraints.get("max_sector_weight")
     if max_sector is not None:
         for sector, weight in sector_values.items():
-            if weight > float(max_sector): violations.append({"code": "max_sector_weight", "sector": sector, "actual": weight, "limit": float(max_sector)})
+            if weight > float(max_sector): violations.append({"code": "max_sector_weight", "sector": sector, "actual": weight, "limit": float(max_sector), "breach": weight - float(max_sector), "severity": "hard"})
     min_cash = constraints.get("min_cash_weight")
     cash_weight = float(summary.cash_balance) / total if total else 0
     if min_cash is not None and cash_weight < float(min_cash):
-        violations.append({"code": "min_cash_weight", "actual": cash_weight, "limit": float(min_cash)})
+        violations.append({"code": "min_cash_weight", "actual": cash_weight, "limit": float(min_cash), "breach": float(min_cash) - cash_weight, "severity": "hard"})
     return {"portfolio_id": portfolio.id, "ips_version_id": version.id, "compliant": not violations, "violations": violations, "evaluated_at": datetime.now(UTC)}
 
 
@@ -328,11 +417,12 @@ def portfolio_quant(db: Session, user: User, portfolio_id: str, shrinkage: float
     correlation = correlation_matrix(returns)
     summary = get_portfolio_summary(db, user, portfolio_id)
     market_values = {row.symbol: float(row.market_value) for row in summary.holdings}
-    total = sum(market_values.values())
+    total = float(summary.total_value)
     weights = np.array([market_values[s] / total for s in symbols]) if total else np.full(len(symbols), 1 / len(symbols))
+    cash_weight = float(summary.cash_balance) / total if total else 0.0
     performance = get_portfolio_performance(db, user, portfolio.id, limit=5000)
     portfolio_returns_by_date = {
-        point.trade_date: float(point.day_change_percent) / 100
+        point.value_date: float(point.day_change_percent) / 100
         for point in performance
         if point.day_change_percent is not None
     }
@@ -342,8 +432,10 @@ def portfolio_quant(db: Session, user: User, portfolio_id: str, shrinkage: float
         metrics["history_method"] = "ledger_time_weighted_return"
     else:
         metrics = {"available": False, "reason": "At least 30 cash-flow-adjusted ledger return observations are required", "sample_size": len(portfolio_returns)}
-    metrics["concentration_hhi"] = float(weights @ weights)
+    metrics["concentration_hhi"] = float(weights @ weights + cash_weight**2)
     metrics["variance"] = float(weights @ covariance @ weights)
+    metrics["cash_weight"] = cash_weight
+    metrics["risk_model_cash_assumption"] = "Cash has zero covariance; observed ledger returns remain the performance basis."
     metrics["return_basis"] = "ledger_time_weighted_price_and_recorded_cash_income"
     # Corporate-action coverage is not yet complete enough to make an adjusted
     # total-return claim. Recorded ledger actions are honored, but absence is not
@@ -366,7 +458,17 @@ def portfolio_quant(db: Session, user: User, portfolio_id: str, shrinkage: float
     else:
         benchmark = {"available": False, "reason": "No benchmark is configured in the confirmed IPS or portfolio"}
     contributions = risk_contributions(weights, covariance)
-    fingerprint_data = {"portfolio_id": portfolio.id, "holding_version": [(row.symbol, str(row.quantity), str(row.average_cost)) for row in summary.holdings], "data_cutoff": days[-1].isoformat(), "shrinkage": shrinkage, "history_start": portfolio.history_start.isoformat() if portfolio.history_start else None}
+    fingerprint_data = {
+        "portfolio_id": portfolio.id,
+        "holding_version": [(row.symbol, str(row.quantity), str(row.average_cost)) for row in summary.holdings],
+        "performance_tail": [(day.isoformat(), value) for day, value in list(portfolio_returns_by_date.items())[-10:]],
+        "performance_count": len(portfolio_returns_by_date),
+        "cash_balance": str(summary.cash_balance),
+        "data_cutoff": days[-1].isoformat(),
+        "benchmark": benchmark,
+        "shrinkage": shrinkage,
+        "history_start": portfolio.history_start.isoformat() if portfolio.history_start else None,
+    }
     fingerprint = sha256(_json(fingerprint_data).encode()).hexdigest()
     run = db.scalar(select(AnalysisRun).where(AnalysisRun.input_fingerprint == fingerprint))
     result_data = {"data_cutoff": days[-1].isoformat(), "symbols": symbols, "sample_size": len(days) - 1, "annualization": 252, "covariance_shrinkage": shrinkage, "portfolio": metrics, "benchmark": benchmark, "rolling": {"window": 60, "portfolio_volatility": _rolling_metrics(portfolio_returns)}, "covariance": covariance.tolist(), "correlation": correlation.tolist(), "risk_contributions": dict(zip(symbols, [float(value) for value in contributions["percentage"]], strict=True)), "warnings": [] if portfolio.history_complete else ["Performance before the migration/opening-balance baseline is unavailable."]}
@@ -417,7 +519,7 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
             estimate = estimate_expected_returns(payload.expected_return_method, returns, assumptions=assumptions, shrinkage=payload.expected_return_shrinkage)
     ips_version = db.get(PortfolioIPSVersion, portfolio.selected_ips_version_id) if portfolio.selected_ips_version_id else None
     constraints = _load(ips_version.constraints_json) if ips_version else constraints
-    informational = {"goal", "benchmark_symbol", "risk_free_series_key", "long_only", "loss_budget", "horizon_years", "notes", "risk_capacity", "risk_willingness", "overall_risk_tolerance", "tax_notes", "required_return_method"}
+    informational = {"goal", "benchmark_symbol", "risk_free_series_key", "long_only", "loss_budget", "horizon_years", "notes", "risk_capacity", "risk_willingness", "overall_risk_tolerance", "tax_notes", "required_return_method", "objective_inputs"}
     supported = {
         "max_instrument_weight", "excluded_instruments", "allowed_instruments", "min_cash_weight",
         "max_sector_weight", "allowed_asset_types", "allowed_currencies", "shariah_only",
@@ -503,6 +605,7 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
     result_data = result.to_dict()
     row = OptimizerRun(portfolio_id=portfolio.id, objective=payload.objective, expected_return_method=payload.expected_return_method, ips_version_id=ips_version.id if ips_version else None, data_cutoff=days[-1], bounds_json=_json({"lower": lower, "upper": upper}), solver=str(result.diagnostics.get("solver")) if result.diagnostics.get("solver") else None, seed=0, input_json=_json(payload.model_dump(mode="json")), result_json=_json({**result_data, "symbols": symbols}), status=result.status, diagnostics_json=_json(result.diagnostics))
     db.add(row); db.flush()
+    proposal = None
     if result.status == "optimal":
         instruments = instruments_by_symbol
         proposal_version = (db.scalar(select(func.max(AllocationSet.version)).where(AllocationSet.portfolio_id == portfolio.id, AllocationSet.kind == "optimized")) or 0) + 1
@@ -515,7 +618,7 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
                 db.add(OptimizerAllocation(optimizer_run_id=row.id, instrument_id=instruments[symbol].id, weight=Decimal(str(weight))))
                 db.add(AllocationItem(allocation_set_id=proposal.id, symbol=symbol, instrument_id=instruments[symbol].id, is_cash=False, target_weight=Decimal(str(weight)), locked=False))
     db.commit(); db.refresh(row)
-    return {"id": row.id, "status": result.status, "objective": payload.objective, "expected_return_method": payload.expected_return_method, "data_cutoff": days[-1], "symbols": symbols, "weights": dict(zip(symbols, result.weights, strict=True)) if result.weights else {}, "expected_return": result.expected_return, "volatility": result.volatility, "diagnostics": result.diagnostics, "assumptions": assumptions_data}
+    return {"id": row.id, "status": result.status, "objective": payload.objective, "expected_return_method": payload.expected_return_method, "data_cutoff": days[-1], "symbols": symbols, "weights": dict(zip(symbols, result.weights, strict=True)) if result.weights else {}, "expected_return": result.expected_return, "volatility": result.volatility, "diagnostics": result.diagnostics, "assumptions": assumptions_data, "allocation_set_id": proposal.id if proposal else None}
 
 
 def security_quant(db: Session, instrument_id: str):
@@ -628,16 +731,34 @@ def run_scenario(db: Session, user: User, portfolio_id: str, payload: ScenarioRe
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     summary = get_portfolio_summary(db, user, portfolio_id)
     positions, pnl = [], 0.0
+    sector_contributions: dict[str, float] = {}
     for holding in summary.holdings:
         value = float(holding.market_value)
         instrument = db.scalar(select(Instrument).where(Instrument.symbol == holding.symbol))
         shock, mapping_sources = resolve_shock(instrument, {key.upper(): value for key, value in payload.shocks.items()}, payload.sector_shocks, payload.factor_shocks) if instrument else (payload.shocks.get(holding.symbol, 0.0), [])
         position_pnl = value * shock; pnl += position_pnl
+        sector = holding.sector or "Unknown"
+        sector_contributions[sector] = sector_contributions.get(sector, 0.0) + position_pnl
         positions.append({"symbol": holding.symbol, "sector": holding.sector, "value": value, "shock": shock, "pnl": position_pnl, "mapping_sources": mapping_sources})
     total = float(summary.total_value); cutoff = summary.data_freshness_date or date.today()
-    result = {"portfolio_value": total, "pnl": pnl, "pnl_percent": pnl / total if total else 0, "positions": positions, "assumptions": ["Direct instrument shocks override sector/factor mappings to avoid double counting.", "Sector and factor shocks are additive when no direct shock exists.", "No liquidity, tax, fee, or second-order effects are modeled."]}
+    stressed_total = total + pnl
+    stressed_weights = {
+        row["symbol"]: (float(row["value"]) + float(row["pnl"])) / stressed_total if stressed_total else 0.0
+        for row in positions
+    }
+    stressed_weights["CASH"] = float(summary.cash_balance) / stressed_total if stressed_total else 0.0
+    constraints = _selected_ips_constraints(db, portfolio)
+    violations = []
+    maximum = constraints.get("max_instrument_weight")
+    if maximum is not None:
+        violations.extend({"code": "max_instrument_weight", "symbol": symbol, "actual": weight, "limit": float(maximum), "breach": weight - float(maximum), "severity": "hard"} for symbol, weight in stressed_weights.items() if symbol != "CASH" and weight > float(maximum) + 1e-8)
+    minimum_cash = constraints.get("min_cash_weight")
+    if minimum_cash is not None and stressed_weights["CASH"] + 1e-8 < float(minimum_cash):
+        violations.append({"code": "min_cash_weight", "actual": stressed_weights["CASH"], "limit": float(minimum_cash), "breach": float(minimum_cash) - stressed_weights["CASH"], "severity": "hard"})
+    compliance = {"ips_version_id": portfolio.selected_ips_version_id, "compliant": not violations, "violations": violations, "stressed_weights": stressed_weights}
+    result = {"portfolio_value": total, "stressed_portfolio_value": stressed_total, "pnl": pnl, "pnl_percent": pnl / total if total else 0, "positions": positions, "sector_contributions": sector_contributions, "compliance": compliance, "assumptions": ["Direct instrument shocks override sector/factor mappings to avoid double counting.", "Sector and factor shocks are additive when no direct shock exists.", "Cash is held constant under the configured shocks.", "No liquidity, tax, fee, or second-order effects are modeled."]}
     all_shocks = {"instruments": payload.shocks, "sectors": payload.sector_shocks, "factors": payload.factor_shocks}
-    row = ScenarioRun(portfolio_id=portfolio.id, name=payload.name, shocks_json=_json(all_shocks), result_json=_json(result), data_cutoff=cutoff, assumptions_json=_json({"mapping_order": ["instrument", "sector", "factor"]}), status="completed")
+    row = ScenarioRun(portfolio_id=portfolio.id, name=payload.name, shocks_json=_json(all_shocks), result_json=_json(result), data_cutoff=cutoff, assumptions_json=_json({"scenario_type": payload.scenario_type, "mapping_order": ["instrument", "sector", "factor"]}), status="completed")
     db.add(row); db.commit(); db.refresh(row)
     return {"id": row.id, "name": row.name, "data_cutoff": cutoff, "shocks": payload.shocks, **result}
 
@@ -651,7 +772,7 @@ def create_monitoring_rule(db: Session, user: User, portfolio_id: str, rule_type
 
 def list_recommendations(db: Session, user: User):
     rows = db.scalars(select(Recommendation).where(Recommendation.user_id == user.id).order_by(Recommendation.created_at.desc())).all()
-    return [{"id": r.id, "portfolio_id": r.portfolio_id, "trigger": r.trigger, "evidence": _load(r.evidence_json), "message": r.message, "status": r.status, "created_at": r.created_at} for r in rows]
+    return [{"id": r.id, "portfolio_id": r.portfolio_id, "trigger": r.trigger, "evidence": _load(r.evidence_json), "ips_violation": json.loads(r.ips_violation_json), "assumptions": _load(r.assumptions_json), "expected_effect": _load(r.expected_effect_json), "uncertainty": _load(r.uncertainty_json), "freshness": _load(r.freshness_json), "message": r.message, "status": r.status, "created_at": r.created_at} for r in rows]
 
 
 def list_optimizer_runs(db: Session, user: User, portfolio_id: str):
@@ -687,18 +808,28 @@ def list_scenario_runs(db: Session, user: User, portfolio_id: str):
         .where(ScenarioRun.portfolio_id == portfolio.id)
         .order_by(ScenarioRun.created_at.desc())
     ).all()
-    return [
-        {
-            "id": row.id,
-            "portfolio_id": row.portfolio_id,
-            "scenario_definition_id": row.scenario_definition_id,
-            "name": row.name,
-            "shocks": _load(row.shocks_json),
-            "result": _load(row.result_json),
-            "data_cutoff": row.data_cutoff,
-            "assumptions": _load(row.assumptions_json),
-            "status": row.status,
-            "created_at": row.created_at,
-        }
-        for row in rows
-    ]
+    history = []
+    for row in rows:
+        result = _load(row.result_json)
+        stored_shocks = _load(row.shocks_json)
+        direct_shocks = stored_shocks.get("instruments", stored_shocks) if isinstance(stored_shocks, dict) else {}
+        history.append(
+            {
+                "id": row.id,
+                "name": row.name,
+                "data_cutoff": row.data_cutoff,
+                "shocks": direct_shocks,
+                "portfolio_value": result.get("portfolio_value", 0.0),
+                "stressed_portfolio_value": result.get(
+                    "stressed_portfolio_value",
+                    result.get("portfolio_value", 0.0) + result.get("pnl", 0.0),
+                ),
+                "pnl": result.get("pnl", 0.0),
+                "pnl_percent": result.get("pnl_percent", 0.0),
+                "positions": result.get("positions", []),
+                "sector_contributions": result.get("sector_contributions", {}),
+                "compliance": result.get("compliance", {}),
+                "assumptions": result.get("assumptions", []),
+            }
+        )
+    return history

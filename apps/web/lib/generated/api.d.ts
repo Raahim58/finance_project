@@ -932,6 +932,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/portfolios/{portfolio_id}/assumptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Assumptions */
+        get: operations["assumptions_portfolios__portfolio_id__assumptions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/portfolios/{portfolio_id}/capm-sml": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Capm Sml */
+        get: operations["capm_sml_portfolios__portfolio_id__capm_sml_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/portfolios/{portfolio_id}/rolling-risk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Rolling Risk */
+        get: operations["rolling_risk_portfolios__portfolio_id__rolling_risk_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/portfolios/{portfolio_id}/return-distribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Return Distribution */
+        get: operations["return_distribution_portfolios__portfolio_id__return_distribution_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/portfolios/{portfolio_id}/comparison": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Comparison */
+        post: operations["comparison_portfolios__portfolio_id__comparison_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/portfolios/{portfolio_id}/risk-budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Risk Budget */
+        get: operations["risk_budget_portfolios__portfolio_id__risk_budget_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/portfolios/{portfolio_id}/risk": {
         parameters: {
             query?: never;
@@ -1257,6 +1359,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/research/event-study": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Event Study */
+        post: operations["event_study_research_event_study_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/portfolios/{portfolio_id}/scenarios": {
         parameters: {
             query?: never;
@@ -1320,6 +1439,40 @@ export interface paths {
         put?: never;
         /** Refresh */
         post: operations["refresh_ingestion_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ingestion/market-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Market History */
+        post: operations["market_history_ingestion_market_history_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ingestion/market-history/gaps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Market History Gaps */
+        get: operations["market_history_gaps_ingestion_market_history_gaps_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1619,6 +1772,25 @@ export interface components {
              */
             created_at: string;
         };
+        /** AssumptionSecurity */
+        AssumptionSecurity: {
+            /** Symbol */
+            symbol: string;
+            /** Expected Return */
+            expected_return?: number | null;
+            /** Expected Return Method */
+            expected_return_method?: string | null;
+            /** Volatility */
+            volatility?: number | null;
+            /** Beta */
+            beta?: number | null;
+            /** Capm Return */
+            capm_return?: number | null;
+            /** Realized Return */
+            realized_return?: number | null;
+            /** Diagnostics */
+            diagnostics?: string[];
+        };
         /** Body_nccpl_import_ingestion_nccpl_import_post */
         Body_nccpl_import_ingestion_nccpl_import_post: {
             /**
@@ -1662,6 +1834,88 @@ export interface components {
             visibility: string;
             /** Portfolio Id */
             portfolio_id?: string | null;
+        };
+        /** CapitalMarketAssumptionsResponse */
+        CapitalMarketAssumptionsResponse: {
+            /** Portfolio Id */
+            portfolio_id: string;
+            /**
+             * Data Cutoff
+             * Format: date
+             */
+            data_cutoff: string;
+            /**
+             * Sample Start
+             * Format: date
+             */
+            sample_start: string;
+            /** Sample Size */
+            sample_size: number;
+            /** Annualization */
+            annualization: number;
+            /** Estimator */
+            estimator: {
+                [key: string]: unknown;
+            };
+            /** Risk Free */
+            risk_free?: {
+                [key: string]: unknown;
+            } | null;
+            /** Benchmark */
+            benchmark: {
+                [key: string]: unknown;
+            };
+            /** Securities */
+            securities: components["schemas"]["AssumptionSecurity"][];
+            /** Covariance */
+            covariance: number[][];
+            /** Correlation */
+            correlation: number[][];
+            /** Provenance */
+            provenance: {
+                [key: string]: unknown;
+            }[];
+            /** Warnings */
+            warnings?: string[];
+        };
+        /** CapmPoint */
+        CapmPoint: {
+            /** Symbol */
+            symbol: string;
+            /** Beta */
+            beta: number;
+            /** Realized Return */
+            realized_return: number;
+            /** Capm Return */
+            capm_return: number;
+            /** Jensen Alpha */
+            jensen_alpha: number;
+        };
+        /** CapmSmlResponse */
+        CapmSmlResponse: {
+            /** Available */
+            available: boolean;
+            /** Portfolio Id */
+            portfolio_id: string;
+            /**
+             * Data Cutoff
+             * Format: date
+             */
+            data_cutoff: string;
+            /** Risk Free Rate */
+            risk_free_rate?: number | null;
+            /** Market Return */
+            market_return?: number | null;
+            /** Benchmark Symbol */
+            benchmark_symbol?: string | null;
+            /** Securities */
+            securities?: components["schemas"]["CapmPoint"][];
+            /** Sml */
+            sml?: {
+                [key: string]: number;
+            }[];
+            /** Diagnostics */
+            diagnostics?: string[];
         };
         /** CashBalanceResponse */
         CashBalanceResponse: {
@@ -1730,6 +1984,28 @@ export interface components {
             /** Is Active */
             is_active: boolean;
         };
+        /** ComparisonMetric */
+        ComparisonMetric: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Unit */
+            unit: string;
+            /** Current */
+            current?: number | null;
+            /** Proposed */
+            proposed?: number | null;
+            /** Delta */
+            delta?: number | null;
+            /**
+             * Preferred Direction
+             * @enum {string}
+             */
+            preferred_direction: "higher" | "lower" | "neutral";
+            /** Availability Note */
+            availability_note?: string | null;
+        };
         /** ConversationCreate */
         ConversationCreate: {
             /**
@@ -1739,6 +2015,25 @@ export interface components {
             title: string;
             /** Portfolio Id */
             portfolio_id?: string | null;
+        };
+        /** DatedContribution */
+        DatedContribution: {
+            /**
+             * Contribution Date
+             * Format: date
+             */
+            contribution_date: string;
+            /** Amount */
+            amount: number;
+        };
+        /** DistributionBin */
+        DistributionBin: {
+            /** Lower */
+            lower: number;
+            /** Upper */
+            upper: number;
+            /** Count */
+            count: number;
         };
         /** DocumentIngestRequest */
         DocumentIngestRequest: {
@@ -1815,6 +2110,59 @@ export interface components {
              */
             created_at: string;
         };
+        /** EfficientFrontierResponse */
+        EfficientFrontierResponse: {
+            /** Portfolio Id */
+            portfolio_id: string;
+            /**
+             * Data Cutoff
+             * Format: date
+             */
+            data_cutoff: string;
+            /** Estimator */
+            estimator: string;
+            /** Points */
+            points: components["schemas"]["FrontierPoint"][];
+            /** Markers */
+            markers: {
+                [key: string]: components["schemas"]["FrontierPoint"] | null;
+            };
+            /** Assumptions */
+            assumptions: {
+                [key: string]: unknown;
+            };
+            /** Warnings */
+            warnings?: string[];
+        };
+        /** EventStudyRequest */
+        EventStudyRequest: {
+            /** Instrument Id */
+            instrument_id: string;
+            /** Benchmark Instrument Id */
+            benchmark_instrument_id: string;
+            /** Event Dates */
+            event_dates: string[];
+            /**
+             * Estimation Window
+             * @default 120
+             */
+            estimation_window: number;
+            /**
+             * Estimation Gap
+             * @default 20
+             */
+            estimation_gap: number;
+            /**
+             * Pre Sessions
+             * @default 5
+             */
+            pre_sessions: number;
+            /**
+             * Post Sessions
+             * @default 5
+             */
+            post_sessions: number;
+        };
         /** ExchangeResponse */
         ExchangeResponse: {
             /** Code */
@@ -1823,6 +2171,17 @@ export interface components {
             name: string;
             /** Timezone */
             timezone: string;
+        };
+        /** FrontierPoint */
+        FrontierPoint: {
+            /** Expected Return */
+            expected_return: number;
+            /** Volatility */
+            volatility: number;
+            /** Weights */
+            weights: {
+                [key: string]: number;
+            };
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1913,6 +2272,12 @@ export interface components {
             day_change_percent: string | null;
             /** Data Source */
             data_source: string | null;
+            /** Artifact Id */
+            artifact_id?: string | null;
+            /** Quality Status */
+            quality_status?: string | null;
+            /** Adjustment State */
+            adjustment_state?: string | null;
         };
         /** HoldingUpdate */
         HoldingUpdate: {
@@ -1960,6 +2325,41 @@ export interface components {
             goal?: string | null;
             /** Benchmark Symbol */
             benchmark_symbol?: string | null;
+            /** Valuation Date */
+            valuation_date?: string | null;
+            /** Target Date */
+            target_date?: string | null;
+            /** Dated Contributions */
+            dated_contributions?: components["schemas"]["DatedContribution"][];
+            /** Inflation Rate */
+            inflation_rate?: number | null;
+            /**
+             * Target Value Is Real
+             * @default false
+             */
+            target_value_is_real: boolean;
+            /** Risk Capacity */
+            risk_capacity?: ("low" | "moderate" | "high") | null;
+            /** Risk Willingness */
+            risk_willingness?: ("low" | "moderate" | "high") | null;
+            /** Overall Risk Tolerance */
+            overall_risk_tolerance?: ("low" | "moderate" | "high") | null;
+            /** Loss Budget */
+            loss_budget?: number | null;
+            /** Liquidity Requirement */
+            liquidity_requirement?: number | null;
+            /** Allowed Asset Types */
+            allowed_asset_types?: string[] | null;
+            /** Allowed Currencies */
+            allowed_currencies?: string[] | null;
+            /** Shariah Only */
+            shariah_only?: boolean | null;
+            /** Leverage Allowed */
+            leverage_allowed?: boolean | null;
+            /** Derivatives Allowed */
+            derivatives_allowed?: boolean | null;
+            /** Tax Notes */
+            tax_notes?: string | null;
         };
         /** IPSVersionResponse */
         IPSVersionResponse: {
@@ -1975,6 +2375,10 @@ export interface components {
             };
             /** Required Return */
             required_return: number | null;
+            /** Required Return Analysis */
+            required_return_analysis?: {
+                [key: string]: unknown;
+            };
             /** Confirmed At */
             confirmed_at: string | null;
         };
@@ -2123,11 +2527,8 @@ export interface components {
             source: string;
             /** Source Url */
             source_url?: string | null;
-            /**
-             * Ingested At
-             * Format: date-time
-             */
-            ingested_at: string;
+            /** Ingested At */
+            ingested_at: string | null;
         };
         /** MarketSnapshotResponse */
         MarketSnapshotResponse: {
@@ -2162,7 +2563,7 @@ export interface components {
              * Rule Type
              * @enum {string}
              */
-            rule_type: "position_weight" | "concentration" | "stale_data" | "drawdown" | "volatility" | "var" | "liquidity" | "event" | "ingestion_failure";
+            rule_type: "position_weight" | "concentration" | "stale_data" | "drawdown" | "volatility" | "var" | "liquidity" | "event" | "ingestion_failure" | "beta_shift" | "correlation_shift" | "risk_budget" | "scenario_breach";
             /** Threshold */
             threshold: {
                 [key: string]: unknown;
@@ -2226,6 +2627,10 @@ export interface components {
              * @default 0
              */
             risk_free_rate: number;
+            /** Benchmark Symbol */
+            benchmark_symbol?: string | null;
+            /** Risk Free Series Key */
+            risk_free_series_key?: string | null;
             /** Start Date */
             start_date?: string | null;
             /** End Date */
@@ -2250,6 +2655,13 @@ export interface components {
              * @default 1
              */
             maximum_weight: number;
+            /**
+             * Include Cash
+             * @default false
+             */
+            include_cash: boolean;
+            /** Minimum Cash Weight */
+            minimum_cash_weight?: number | null;
         };
         /** OptimizerResponse */
         OptimizerResponse: {
@@ -2284,6 +2696,68 @@ export interface components {
             assumptions: {
                 [key: string]: unknown;
             };
+            /** Allocation Set Id */
+            allocation_set_id?: string | null;
+        };
+        /** PortfolioComparisonRequest */
+        PortfolioComparisonRequest: {
+            /** Target Weights */
+            target_weights: {
+                [key: string]: number;
+            };
+            /**
+             * Label
+             * @default Proposed portfolio
+             */
+            label: string;
+        };
+        /** PortfolioComparisonResponse */
+        PortfolioComparisonResponse: {
+            /** Portfolio Id */
+            portfolio_id: string;
+            /** Label */
+            label: string;
+            /**
+             * Data Cutoff
+             * Format: date
+             */
+            data_cutoff: string;
+            /** Assumptions */
+            assumptions: {
+                [key: string]: unknown;
+            };
+            /** Current Weights */
+            current_weights: {
+                [key: string]: number;
+            };
+            /** Proposed Weights */
+            proposed_weights: {
+                [key: string]: number;
+            };
+            /** Metrics */
+            metrics: components["schemas"]["ComparisonMetric"][];
+            /** Current Risk Contributions */
+            current_risk_contributions: {
+                [key: string]: number;
+            };
+            /** Proposed Risk Contributions */
+            proposed_risk_contributions: {
+                [key: string]: number;
+            };
+            /** Current Compliance */
+            current_compliance: {
+                [key: string]: unknown;
+            };
+            /** Proposed Compliance */
+            proposed_compliance: {
+                [key: string]: unknown;
+            };
+            /** Trade Offs */
+            trade_offs: {
+                [key: string]: unknown;
+            }[];
+            /** Warnings */
+            warnings?: string[];
         };
         /** PortfolioCreate */
         PortfolioCreate: {
@@ -2337,10 +2811,16 @@ export interface components {
             value_date: string;
             /** Total Value */
             total_value: string;
+            /** External Cash Flow */
+            external_cash_flow: string;
+            /** Value Change */
+            value_change: string;
             /** Day Change */
             day_change: string;
             /** Day Change Percent */
             day_change_percent: string | null;
+            /** Cumulative Twr Percent */
+            cumulative_twr_percent: string | null;
         };
         /** PortfolioQuantResponse */
         PortfolioQuantResponse: {
@@ -2359,6 +2839,14 @@ export interface components {
             covariance_shrinkage: number;
             /** Portfolio */
             portfolio: {
+                [key: string]: unknown;
+            };
+            /** Benchmark */
+            benchmark?: {
+                [key: string]: unknown;
+            };
+            /** Rolling */
+            rolling?: {
                 [key: string]: unknown;
             };
             /** Covariance */
@@ -2440,6 +2928,10 @@ export interface components {
             unrealized_gain_loss: string;
             /** Unrealized Gain Loss Percent */
             unrealized_gain_loss_percent: string | null;
+            /** Net External Contributions */
+            net_external_contributions: string;
+            /** Total Gain Loss */
+            total_gain_loss: string;
             /** Day Change */
             day_change: string;
             /** Day Change Percent */
@@ -2452,6 +2944,15 @@ export interface components {
             data_freshness_date: string | null;
             /** Data Source */
             data_source: string | null;
+            /**
+             * Valuation Complete
+             * @default true
+             */
+            valuation_complete: boolean;
+            /** Unpriced Symbols */
+            unpriced_symbols?: string[];
+            /** Valuation Note */
+            valuation_note?: string | null;
         };
         /** PortfolioUpdate */
         PortfolioUpdate: {
@@ -2611,6 +3112,18 @@ export interface components {
              * @default 0
              */
             fee_rate: number;
+            /**
+             * Tax Rate
+             * @default 0
+             */
+            tax_rate: number;
+            /**
+             * Allow Sells
+             * @default true
+             */
+            allow_sells: boolean;
+            /** Locked Symbols */
+            locked_symbols?: string[];
         };
         /** RebalanceResponse */
         RebalanceResponse: {
@@ -2626,6 +3139,14 @@ export interface components {
             residual_cash: number;
             /** Warnings */
             warnings: string[];
+            /** Post Trade Validation */
+            post_trade_validation?: {
+                [key: string]: unknown;
+            };
+            /** Risk Impact */
+            risk_impact?: {
+                [key: string]: unknown;
+            };
         };
         /** RecommendationResponse */
         RecommendationResponse: {
@@ -2639,6 +3160,24 @@ export interface components {
             evidence: {
                 [key: string]: unknown;
             };
+            /** Ips Violation */
+            ips_violation?: unknown;
+            /** Assumptions */
+            assumptions?: {
+                [key: string]: unknown;
+            };
+            /** Expected Effect */
+            expected_effect?: {
+                [key: string]: unknown;
+            };
+            /** Uncertainty */
+            uncertainty?: {
+                [key: string]: unknown;
+            };
+            /** Freshness */
+            freshness?: {
+                [key: string]: unknown;
+            };
             /** Message */
             message: string;
             /** Status */
@@ -2648,6 +3187,89 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** ReturnDistributionResponse */
+        ReturnDistributionResponse: {
+            /** Portfolio Id */
+            portfolio_id: string;
+            /** Sample Size */
+            sample_size: number;
+            /** Bins */
+            bins: components["schemas"]["DistributionBin"][];
+            /** Var 95 */
+            var_95?: number | null;
+            /** Es 95 */
+            es_95?: number | null;
+            /** Var 99 */
+            var_99?: number | null;
+            /** Es 99 */
+            es_99?: number | null;
+            /** Skewness */
+            skewness?: number | null;
+            /** Excess Kurtosis */
+            excess_kurtosis?: number | null;
+            /** Diagnostics */
+            diagnostics?: string[];
+        };
+        /** RiskBudgetItem */
+        RiskBudgetItem: {
+            /** Symbol */
+            symbol: string;
+            /** Capital Weight */
+            capital_weight: number;
+            /** Component Risk */
+            component_risk: number;
+            /** Percentage Risk */
+            percentage_risk: number;
+            /** Target Risk */
+            target_risk?: number | null;
+            /** Residual */
+            residual?: number | null;
+        };
+        /** RiskBudgetResponse */
+        RiskBudgetResponse: {
+            /** Portfolio Id */
+            portfolio_id: string;
+            /**
+             * Data Cutoff
+             * Format: date
+             */
+            data_cutoff: string;
+            /** Items */
+            items: components["schemas"]["RiskBudgetItem"][];
+            /** Total Percentage Risk */
+            total_percentage_risk: number;
+            /** Residual Error */
+            residual_error?: number | null;
+            /** Diagnostics */
+            diagnostics?: string[];
+        };
+        /** RollingRiskPoint */
+        RollingRiskPoint: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Volatility */
+            volatility: number;
+            /** Sharpe */
+            sharpe?: number | null;
+            /** Drawdown */
+            drawdown: number;
+            /** Beta */
+            beta?: number | null;
+        };
+        /** RollingRiskResponse */
+        RollingRiskResponse: {
+            /** Portfolio Id */
+            portfolio_id: string;
+            /** Window */
+            window: number;
+            /** Points */
+            points: components["schemas"]["RollingRiskPoint"][];
+            /** Diagnostics */
+            diagnostics?: string[];
         };
         /** ScenarioDefinitionCreate */
         ScenarioDefinitionCreate: {
@@ -2697,8 +3319,14 @@ export interface components {
         ScenarioRequest: {
             /** Name */
             name: string;
+            /**
+             * Scenario Type
+             * @default hypothetical
+             * @enum {string}
+             */
+            scenario_type: "sensitivity" | "hypothetical";
             /** Shocks */
-            shocks: {
+            shocks?: {
                 [key: string]: number;
             };
             /** Sector Shocks */
@@ -2727,6 +3355,8 @@ export interface components {
             };
             /** Portfolio Value */
             portfolio_value: number;
+            /** Stressed Portfolio Value */
+            stressed_portfolio_value: number;
             /** Pnl */
             pnl: number;
             /** Pnl Percent */
@@ -2735,6 +3365,14 @@ export interface components {
             positions: {
                 [key: string]: unknown;
             }[];
+            /** Sector Contributions */
+            sector_contributions?: {
+                [key: string]: number;
+            };
+            /** Compliance */
+            compliance?: {
+                [key: string]: unknown;
+            };
             /** Assumptions */
             assumptions: string[];
         };
@@ -4909,7 +5547,201 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["EfficientFrontierResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assumptions_portfolios__portfolio_id__assumptions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                portfolio_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapitalMarketAssumptionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    capm_sml_portfolios__portfolio_id__capm_sml_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                portfolio_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapmSmlResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rolling_risk_portfolios__portfolio_id__rolling_risk_get: {
+        parameters: {
+            query?: {
+                window?: number;
+            };
+            header?: never;
+            path: {
+                portfolio_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RollingRiskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    return_distribution_portfolios__portfolio_id__return_distribution_get: {
+        parameters: {
+            query?: {
+                bins?: number;
+            };
+            header?: never;
+            path: {
+                portfolio_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReturnDistributionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    comparison_portfolios__portfolio_id__comparison_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                portfolio_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PortfolioComparisonRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PortfolioComparisonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    risk_budget_portfolios__portfolio_id__risk_budget_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                portfolio_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskBudgetResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5103,7 +5935,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ScenarioResponse"][];
                 };
             };
             /** @description Validation Error */
@@ -5563,6 +6395,39 @@ export interface operations {
             };
         };
     };
+    event_study_research_event_study_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EventStudyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     scenarios_portfolios__portfolio_id__scenarios_get: {
         parameters: {
             query?: never;
@@ -5700,6 +6565,73 @@ export interface operations {
             query: {
                 provider: string;
                 run_key?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    market_history_ingestion_market_history_post: {
+        parameters: {
+            query: {
+                symbols: string[];
+                start: string;
+                end?: string;
+                provider?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    market_history_gaps_ingestion_market_history_gaps_get: {
+        parameters: {
+            query: {
+                symbol: string;
+                start: string;
+                end: string;
             };
             header?: never;
             path?: never;

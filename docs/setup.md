@@ -28,11 +28,17 @@ SQLite can be used without Docker:
 DATABASE_URL=sqlite+pysqlite:///./psx_ai_local.db alembic upgrade head
 ```
 
-Seed deterministic development market data:
+Seed the deterministic development workstation (mock market data, demo investor
+profile, confirmed IPS, ledger-backed portfolio, target/optimized proposals,
+scenario, monitoring rule, and recommendation):
 
 ```bash
-python -m app.seed.demo
+DEMO_USER_PASSWORD='choose-a-local-password' python -m app.seed.demo
 ```
+
+The demo login is `portfolio.manager@example.com`. The command is idempotent and
+never seeds an LLM key. Every seeded market observation and workflow assumption is
+labeled development/demo data.
 
 Run the API and scheduler:
 
@@ -57,7 +63,7 @@ npm run build
 npm run dev
 ```
 
-`generate:api` expects the API at `http://localhost:8000` and checks `lib/generated/api.d.ts` into the repository. Main routes are `/dashboard`, `/portfolios`, `/portfolios/[id]/*`, `/markets`, `/research`, `/companies/[symbol]`, `/documents`, `/assistant`, and `/settings`.
+`generate:api` expects the API at `http://localhost:8000` and checks `lib/generated/api.d.ts` into the repository. Main portfolio routes are `overview`, `build`, `quant`, `risk`, `scenarios`, `research`, `activity`, and `ips`; legacy `stress` and `settings` wrappers remain compatible.
 
 Browser requests default to the same-origin `/api` path. Next.js proxies that path to
 `API_INTERNAL_BASE_URL` (default `http://127.0.0.1:8000`), so an HTTPS development

@@ -16,6 +16,15 @@ class ProfileVersionResponse(BaseModel):
     confirmed_at: datetime | None
 
 
+class RiskAssessment(BaseModel):
+    capacity: Literal["low", "moderate", "high"] | None = None
+    willingness: Literal["low", "moderate", "high"] | None = None
+    reconciled_tolerance: Literal["low", "moderate", "high"] | None = None
+    confirmed_tolerance: Literal["low", "moderate", "high"] | None = None
+    available: bool
+    diagnostics: list[str] = Field(default_factory=list)
+
+
 class DatedContribution(BaseModel):
     contribution_date: date
     amount: float = Field(gt=0)
@@ -61,7 +70,16 @@ class IPSVersionResponse(BaseModel):
     status: str
     constraints: dict[str, object]
     required_return: float | None
+    required_return_analysis: dict[str, object] = Field(default_factory=dict)
     confirmed_at: datetime | None
+
+
+class RequiredReturnAnalysis(BaseModel):
+    available: bool
+    annual_rate: float | None = None
+    calculation_type: str | None = None
+    assumptions: dict[str, object] = Field(default_factory=dict)
+    diagnostics: list[str] = Field(default_factory=list)
 
 
 class IPSComplianceResponse(BaseModel):
@@ -70,6 +88,153 @@ class IPSComplianceResponse(BaseModel):
     compliant: bool
     violations: list[dict[str, object]]
     evaluated_at: datetime
+
+
+class AssumptionSecurity(BaseModel):
+    symbol: str
+    expected_return: float | None = None
+    expected_return_method: str | None = None
+    volatility: float | None = None
+    beta: float | None = None
+    capm_return: float | None = None
+    realized_return: float | None = None
+    diagnostics: list[str] = Field(default_factory=list)
+
+
+class CapitalMarketAssumptionsResponse(BaseModel):
+    portfolio_id: str
+    data_cutoff: date
+    sample_start: date
+    sample_size: int
+    annualization: int
+    estimator: dict[str, object]
+    risk_free: dict[str, object] | None = None
+    benchmark: dict[str, object]
+    securities: list[AssumptionSecurity]
+    covariance: list[list[float]]
+    correlation: list[list[float]]
+    provenance: list[dict[str, object]]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class FrontierPoint(BaseModel):
+    expected_return: float
+    volatility: float
+    weights: dict[str, float]
+
+
+class EfficientFrontierResponse(BaseModel):
+    portfolio_id: str
+    data_cutoff: date
+    estimator: str
+    points: list[FrontierPoint]
+    markers: dict[str, FrontierPoint | None]
+    assumptions: dict[str, object]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CapmPoint(BaseModel):
+    symbol: str
+    beta: float
+    realized_return: float
+    capm_return: float
+    jensen_alpha: float
+
+
+class CapmSmlResponse(BaseModel):
+    available: bool
+    portfolio_id: str
+    data_cutoff: date
+    risk_free_rate: float | None = None
+    market_return: float | None = None
+    benchmark_symbol: str | None = None
+    securities: list[CapmPoint] = Field(default_factory=list)
+    sml: list[dict[str, float]] = Field(default_factory=list)
+    diagnostics: list[str] = Field(default_factory=list)
+
+
+class RollingRiskPoint(BaseModel):
+    date: date
+    volatility: float
+    sharpe: float | None = None
+    drawdown: float
+    beta: float | None = None
+
+
+class RollingRiskResponse(BaseModel):
+    portfolio_id: str
+    window: int
+    points: list[RollingRiskPoint]
+    diagnostics: list[str] = Field(default_factory=list)
+
+
+class DistributionBin(BaseModel):
+    lower: float
+    upper: float
+    count: int
+
+
+class ReturnDistributionResponse(BaseModel):
+    portfolio_id: str
+    sample_size: int
+    bins: list[DistributionBin]
+    var_95: float | None = None
+    es_95: float | None = None
+    var_99: float | None = None
+    es_99: float | None = None
+    skewness: float | None = None
+    excess_kurtosis: float | None = None
+    diagnostics: list[str] = Field(default_factory=list)
+
+
+class PortfolioComparisonRequest(BaseModel):
+    target_weights: dict[str, float] = Field(min_length=1)
+    label: str = Field(default="Proposed portfolio", max_length=160)
+
+
+class ComparisonMetric(BaseModel):
+    key: str
+    label: str
+    unit: str
+    current: float | None = None
+    proposed: float | None = None
+    delta: float | None = None
+    preferred_direction: Literal["higher", "lower", "neutral"]
+    availability_note: str | None = None
+
+
+class PortfolioComparisonResponse(BaseModel):
+    portfolio_id: str
+    label: str
+    data_cutoff: date
+    assumptions: dict[str, object]
+    current_weights: dict[str, float]
+    proposed_weights: dict[str, float]
+    metrics: list[ComparisonMetric]
+    current_risk_contributions: dict[str, float]
+    proposed_risk_contributions: dict[str, float]
+    current_compliance: dict[str, object]
+    proposed_compliance: dict[str, object]
+    trade_offs: list[dict[str, object]]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class RiskBudgetItem(BaseModel):
+    symbol: str
+    capital_weight: float
+    component_risk: float
+    percentage_risk: float
+    target_risk: float | None = None
+    residual: float | None = None
+
+
+class RiskBudgetResponse(BaseModel):
+    portfolio_id: str
+    data_cutoff: date
+    items: list[RiskBudgetItem]
+    total_percentage_risk: float
+    residual_error: float | None = None
+    diagnostics: list[str] = Field(default_factory=list)
 
 
 class OptimizerRequest(BaseModel):
@@ -116,6 +281,7 @@ class OptimizerResponse(BaseModel):
     volatility: float | None
     diagnostics: dict[str, object]
     assumptions: dict[str, object]
+    allocation_set_id: str | None = None
 
 
 class PortfolioQuantResponse(BaseModel):
@@ -136,9 +302,16 @@ class PortfolioQuantResponse(BaseModel):
 
 class ScenarioRequest(BaseModel):
     name: str = Field(min_length=1, max_length=160)
-    shocks: dict[str, float] = Field(min_length=1)
+    scenario_type: Literal["sensitivity", "hypothetical"] = "hypothetical"
+    shocks: dict[str, float] = Field(default_factory=dict)
     sector_shocks: dict[str, float] = Field(default_factory=dict)
     factor_shocks: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_shocks(self):
+        if not self.shocks and not self.sector_shocks and not self.factor_shocks:
+            raise ValueError("At least one instrument, sector, or factor shock is required")
+        return self
 
 
 class RebalanceRequest(BaseModel):
@@ -166,9 +339,12 @@ class ScenarioResponse(BaseModel):
     data_cutoff: date
     shocks: dict[str, float]
     portfolio_value: float
+    stressed_portfolio_value: float
     pnl: float
     pnl_percent: float
     positions: list[dict[str, object]]
+    sector_contributions: dict[str, float] = Field(default_factory=dict)
+    compliance: dict[str, object] = Field(default_factory=dict)
     assumptions: list[str]
 
 
@@ -192,6 +368,11 @@ class RecommendationResponse(BaseModel):
     portfolio_id: str
     trigger: str
     evidence: dict[str, object]
+    ips_violation: object = Field(default_factory=dict)
+    assumptions: dict[str, object] = Field(default_factory=dict)
+    expected_effect: dict[str, object] = Field(default_factory=dict)
+    uncertainty: dict[str, object] = Field(default_factory=dict)
+    freshness: dict[str, object] = Field(default_factory=dict)
     message: str
     status: str
     created_at: datetime

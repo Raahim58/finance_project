@@ -98,3 +98,88 @@ def test_workstation_routes_enforce_portfolio_ownership(client):
     portfolio_id = seeded_portfolio(client, owner)
     response = client.post(f"/portfolios/{portfolio_id}/scenario-runs", headers=other, json={"name": "No access", "shocks": {"MEBL": -0.1}})
     assert response.status_code == 404
+
+
+def test_profile_reconciles_capacity_and_willingness_conservatively(client):
+    headers = signup(client, "profile-reconciliation@example.com")
+    response = client.post(
+        "/profiles/financial/confirm",
+        headers=headers,
+        json={"data": {
+            "risk_capacity": "high",
+            "willingness_answers": [1, 2, 2],
+            "confirmed_overall_risk_tolerance": "low",
+            "horizon_years": 12,
+        }},
+    )
+    assert response.status_code == 201
+    assessment = response.json()["data"]["risk_assessment"]
+    assert assessment["capacity"] == "high"
+    assert assessment["willingness"] == "low"
+    assert assessment["reconciled_tolerance"] == "low"
+    assert assessment["confirmed_tolerance"] == "low"
+
+
+def test_chart_ready_analytics_comparison_and_risk_budget_are_owned(client):
+    headers = signup(client, "decision-analytics@example.com")
+    portfolio_id = seeded_portfolio(client, headers)
+    ips = client.post(
+        f"/portfolios/{portfolio_id}/ips/confirm",
+        headers=headers,
+        json={"constraints": {"max_instrument_weight": 0.8, "min_cash_weight": 0.0}},
+    )
+    assert ips.status_code == 201
+
+    assumptions = client.get(f"/portfolios/{portfolio_id}/assumptions", headers=headers)
+    assert assumptions.status_code == 200, assumptions.text
+    assert assumptions.json()["estimator"]["expected_return_method"] == "historical_shrunk"
+    assert len(assumptions.json()["securities"]) == 2
+
+    frontier = client.get(f"/portfolios/{portfolio_id}/frontier?points=8", headers=headers)
+    assert frontier.status_code == 200, frontier.text
+    assert frontier.json()["markers"]["current"]
+    assert frontier.json()["markers"]["global_minimum_variance"]
+
+    risk_budget = client.get(f"/portfolios/{portfolio_id}/risk-budget", headers=headers)
+    assert risk_budget.status_code == 200, risk_budget.text
+    assert sum(item["percentage_risk"] for item in risk_budget.json()["items"]) == pytest.approx(1)
+
+    summary = client.get(f"/portfolios/{portfolio_id}/summary", headers=headers).json()
+    total = float(summary["total_value"])
+    weights = {item["symbol"]: float(item["market_value"]) / total for item in summary["holdings"]}
+    weights["CASH"] = float(summary["cash_balance"]) / total
+    comparison = client.post(
+        f"/portfolios/{portfolio_id}/comparison",
+        headers=headers,
+        json={"target_weights": weights, "label": "No-change proposal"},
+    )
+    assert comparison.status_code == 200, comparison.text
+    assert all(abs(item["delta"] or 0) < 1e-8 for item in comparison.json()["metrics"])
+    assert comparison.json()["current_weights"] == pytest.approx(comparison.json()["proposed_weights"])
+
+    other = signup(client, "decision-analytics-other@example.com")
+    assert client.get(f"/portfolios/{portfolio_id}/assumptions", headers=other).status_code == 404
+
+
+def test_scenario_returns_stressed_value_sector_contribution_and_compliance(client):
+    headers = signup(client, "scenario-impact@example.com")
+    portfolio_id = seeded_portfolio(client, headers)
+    client.post(
+        f"/portfolios/{portfolio_id}/ips/confirm",
+        headers=headers,
+        json={"constraints": {"max_instrument_weight": 0.8}},
+    )
+    response = client.post(
+        f"/portfolios/{portfolio_id}/scenario-runs",
+        headers=headers,
+        json={"name": "Combined stress", "scenario_type": "hypothetical", "shocks": {"MEBL": -0.1}, "sector_shocks": {"Technology & Communication": -0.2}},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["stressed_portfolio_value"] == pytest.approx(body["portfolio_value"] + body["pnl"])
+    assert sum(body["sector_contributions"].values()) == pytest.approx(body["pnl"])
+    assert "violations" in body["compliance"]
+    history = client.get(f"/portfolios/{portfolio_id}/scenario-runs", headers=headers)
+    assert history.status_code == 200
+    assert history.json()[0]["positions"] == body["positions"]
+    assert "result" not in history.json()[0]

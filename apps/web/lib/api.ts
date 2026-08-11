@@ -88,6 +88,15 @@ export type CompanyDetail = {
   latest_price?: MarketPrice | null;
 };
 
+export type CompanyResearch = {
+  instrument: { id:string; symbol:string; name:string; sector?:string|null };
+  market: Record<string,unknown>|null;
+  market_research: Record<string,unknown>;
+  fundamentals: Array<{taxonomy_key:string;period_type:string;period_end:string;filing_date?:string|null;value:string|number;unit:string;currency?:string|null;document_id?:string|null;page_number?:number|null}>;
+  derived_fundamentals: { latest?:Record<string,Record<string,unknown>>; growth?:Record<string,Record<string,unknown>>; ratios?:Record<string,Record<string,unknown>>; valuation?:Record<string,unknown> };
+  documents: Array<Record<string,unknown>>; events: Array<Record<string,unknown>>; portfolio_relevance:Array<Record<string,unknown>>;
+};
+
 export type MarketOverview = {
   snapshot?: MarketSnapshot | null;
   top_gainers: MarketPrice[];
@@ -168,6 +177,9 @@ export type PortfolioSummary = {
   holdings: HoldingSummary[];
   data_freshness_date?: string | null;
   data_source?: string | null;
+  valuation_complete: boolean;
+  unpriced_symbols: string[];
+  valuation_note?: string | null;
 };
 
 export type PortfolioPerformancePoint = {
@@ -291,11 +303,28 @@ export type PortfolioQuant = {
   run_id?: string | null;
 };
 
-export type ScenarioResult = {
-  id: string; name: string; data_cutoff: string; shocks: Record<string, number>;
-  portfolio_value: number; pnl: number; pnl_percent: number;
-  positions: Array<Record<string, unknown>>; assumptions: string[];
+export type IpsVersion = OpenApi["schemas"]["IPSVersionResponse"];
+export type CapitalMarketAssumptions = OpenApi["schemas"]["CapitalMarketAssumptionsResponse"];
+export type FrontierPoint = OpenApi["schemas"]["FrontierPoint"];
+export type EfficientFrontier = OpenApi["schemas"]["EfficientFrontierResponse"];
+export type CapmSml = OpenApi["schemas"]["CapmSmlResponse"];
+export type RollingRisk = OpenApi["schemas"]["RollingRiskResponse"];
+export type ReturnDistribution = OpenApi["schemas"]["ReturnDistributionResponse"];
+export type ComparisonMetric = OpenApi["schemas"]["ComparisonMetric"];
+export type PortfolioComparison = Omit<OpenApi["schemas"]["PortfolioComparisonResponse"],"current_compliance"|"proposed_compliance"|"trade_offs"> & {
+  current_compliance:{compliant:boolean;violations:Array<Record<string,unknown>>};
+  proposed_compliance:{compliant:boolean;violations:Array<Record<string,unknown>>};
+  trade_offs:Array<{metric:string;label:string;direction:string;delta:number}>;
 };
+export type RiskBudget = OpenApi["schemas"]["RiskBudgetResponse"];
+export type OptimizerResult = OpenApi["schemas"]["OptimizerResponse"];
+export type ScenarioResult = Omit<OpenApi["schemas"]["ScenarioResponse"],"positions"|"sector_contributions"|"compliance"> & {
+  positions:Array<Record<string,unknown>>;
+  sector_contributions:Record<string,number>;
+  compliance:{compliant?:boolean;violations?:Array<Record<string,unknown>>};
+};
+
+export type HistoricalReplay = { portfolio_id:string; start_date:string; end_date:string; counterfactual:boolean; assumption:string; start_value:number; end_value:number; pnl:number; return?:number|null; path:Array<{date:string;value:number}>; max_drawdown?:number|null; recovery_days?:number|null; sector_pnl_contribution:Record<string,number>; positions:Array<Record<string,unknown>>; total_return_available:boolean; total_return_unavailable_reason:string };
 
 export type AssistantResult = {
   conversation_id: string;
@@ -336,7 +365,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail ?? `Request failed: ${response.status}`);
+    const detail = body.detail;
+    throw new Error(typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `Request failed: ${response.status}`);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -500,6 +530,16 @@ export function getPortfolioQuant(portfolioId: string) {
   return request<PortfolioQuant>(`/portfolios/${encodeURIComponent(portfolioId)}/quant`);
 }
 
+export function getCapitalMarketAssumptions(portfolioId: string) { return request<CapitalMarketAssumptions>(`/portfolios/${encodeURIComponent(portfolioId)}/assumptions`); }
+export function getEfficientFrontier(portfolioId: string) { return request<EfficientFrontier>(`/portfolios/${encodeURIComponent(portfolioId)}/frontier`); }
+export function getCapmSml(portfolioId: string) { return request<CapmSml>(`/portfolios/${encodeURIComponent(portfolioId)}/capm-sml`); }
+export function getRollingRisk(portfolioId: string, window = 60) { return request<RollingRisk>(`/portfolios/${encodeURIComponent(portfolioId)}/rolling-risk?window=${window}`); }
+export function getReturnDistribution(portfolioId: string) { return request<ReturnDistribution>(`/portfolios/${encodeURIComponent(portfolioId)}/return-distribution`); }
+export function comparePortfolio(portfolioId: string, targetWeights: Record<string,number>, label = "Proposed portfolio") { return request<PortfolioComparison>(`/portfolios/${encodeURIComponent(portfolioId)}/comparison`, { method: "POST", body: JSON.stringify({ target_weights: targetWeights, label }) }); }
+export function getRiskBudget(portfolioId: string) { return request<RiskBudget>(`/portfolios/${encodeURIComponent(portfolioId)}/risk-budget`); }
+export function runOptimizer(portfolioId: string, payload: Record<string,unknown>) { return request<OptimizerResult>(`/portfolios/${encodeURIComponent(portfolioId)}/optimizer-runs`, { method: "POST", body: JSON.stringify(payload) }); }
+export function getOptimizerRuns(portfolioId: string) { return request<Array<Record<string,unknown>>>(`/portfolios/${encodeURIComponent(portfolioId)}/optimizer-runs`); }
+
 export function getIpsCompliance(portfolioId: string) {
   return request<{ compliant: boolean; violations: Array<Record<string, unknown>> }>(`/portfolios/${encodeURIComponent(portfolioId)}/ips/compliance`);
 }
@@ -507,6 +547,8 @@ export function getIpsCompliance(portfolioId: string) {
 export function createIpsVersion(portfolioId: string, payload: Record<string, unknown>, confirm = false) {
   return request<Record<string, unknown>>(`/portfolios/${encodeURIComponent(portfolioId)}/ips/${confirm ? "confirm" : "draft"}`, { method: "POST", body: JSON.stringify(payload) });
 }
+
+export function getIpsVersions(portfolioId: string) { return request<IpsVersion[]>(`/portfolios/${encodeURIComponent(portfolioId)}/ips/versions`); }
 
 export function createAllocation(portfolioId: string, payload: Record<string, unknown>) {
   return request<Record<string, unknown>>(`/portfolios/${encodeURIComponent(portfolioId)}/allocations`, { method: "POST", body: JSON.stringify(payload) });
@@ -517,6 +559,7 @@ export function runScenario(portfolioId: string, payload: Record<string, unknown
 }
 
 export function getScenarioRuns(portfolioId: string) { return request<ScenarioResult[]>(`/portfolios/${encodeURIComponent(portfolioId)}/scenario-runs`); }
+export function runHistoricalReplay(portfolioId:string,startDate:string,endDate:string,useCurrentHoldings=true){return request<HistoricalReplay>(`/portfolios/${encodeURIComponent(portfolioId)}/scenarios/historical-replay`,{method:"POST",body:JSON.stringify({start_date:startDate,end_date:endDate,use_current_holdings:useCurrentHoldings})});}
 
 export function sendAssistantMessage(question: string, portfolioId?: string) {
   return request<AssistantResult>("/assistant/messages", { method: "POST", body: JSON.stringify({ question, portfolio_id: portfolioId || null }) });
@@ -530,7 +573,7 @@ export function getRecommendations() {
   return request<Array<Record<string, unknown>>>("/recommendations");
 }
 
-export function decideRecommendation(recommendationId: string, decision: "accepted" | "dismissed") {
+export function decideRecommendation(recommendationId: string, decision: "accepted" | "reviewed" | "dismissed") {
   return request<{ id: string; status: string }>(`/recommendations/${encodeURIComponent(recommendationId)}?decision=${decision}`, { method: "PATCH" });
 }
 
@@ -545,3 +588,6 @@ export function saveFinancialProfile(data: Record<string, unknown>, confirm = tr
 export function searchInstruments(query = "") {
   return request<Array<{ id: string; symbol: string; name: string; sector?: string | null }>>(`/instruments?query=${encodeURIComponent(query)}`);
 }
+
+export async function getCompanyResearch(symbol:string){const matches=await searchInstruments(symbol);const instrument=matches.find(item=>item.symbol.toUpperCase()===symbol.toUpperCase());if(!instrument)throw new Error("Instrument not found");return request<CompanyResearch>(`/companies/${encodeURIComponent(instrument.id)}/overview`);}
+import type { components as OpenApi } from "@/lib/generated/api";

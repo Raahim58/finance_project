@@ -5,6 +5,9 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.workstation import (
+    CapitalMarketAssumptionsResponse,
+    CapmSmlResponse,
+    EfficientFrontierResponse,
     IPSDraft,
     IPSComplianceResponse,
     IPSVersionResponse,
@@ -13,13 +16,27 @@ from app.schemas.workstation import (
     OptimizerRequest,
     OptimizerResponse,
     PortfolioQuantResponse,
+    PortfolioComparisonRequest,
+    PortfolioComparisonResponse,
     ProfileVersionResponse,
     RecommendationResponse,
     RebalanceRequest,
     RebalanceResponse,
+    ReturnDistributionResponse,
+    RiskBudgetResponse,
+    RollingRiskResponse,
     ScenarioRequest,
     ScenarioResponse,
     VersionDraft,
+)
+from app.services.decision_analytics_service import (
+    capital_market_assumptions,
+    capm_sml_analysis,
+    compare_portfolio,
+    efficient_frontier_analysis,
+    return_distribution_analysis,
+    risk_budget_analysis,
+    rolling_risk_analysis,
 )
 from app.services.workstation_service import (
     create_monitoring_rule,
@@ -87,9 +104,39 @@ def quant_security(instrument_id: str, db: Session = Depends(get_db)):
     return security_quant(db, instrument_id)
 
 
-@router.get("/portfolios/{portfolio_id}/frontier")
+@router.get("/portfolios/{portfolio_id}/frontier", response_model=EfficientFrontierResponse)
 def frontier(portfolio_id: str, points: int = Query(default=20, ge=5, le=100), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return efficient_frontier(db, current_user, portfolio_id, points)
+    return efficient_frontier_analysis(db, current_user, portfolio_id, points)
+
+
+@router.get("/portfolios/{portfolio_id}/assumptions", response_model=CapitalMarketAssumptionsResponse)
+def assumptions(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return capital_market_assumptions(db, current_user, portfolio_id)
+
+
+@router.get("/portfolios/{portfolio_id}/capm-sml", response_model=CapmSmlResponse)
+def capm_sml(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return capm_sml_analysis(db, current_user, portfolio_id)
+
+
+@router.get("/portfolios/{portfolio_id}/rolling-risk", response_model=RollingRiskResponse)
+def rolling_risk(portfolio_id: str, window: int = Query(default=60, ge=20, le=252), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return rolling_risk_analysis(db, current_user, portfolio_id, window)
+
+
+@router.get("/portfolios/{portfolio_id}/return-distribution", response_model=ReturnDistributionResponse)
+def return_distribution(portfolio_id: str, bins: int = Query(default=18, ge=5, le=50), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return return_distribution_analysis(db, current_user, portfolio_id, bins)
+
+
+@router.post("/portfolios/{portfolio_id}/comparison", response_model=PortfolioComparisonResponse)
+def comparison(portfolio_id: str, payload: PortfolioComparisonRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return compare_portfolio(db, current_user, portfolio_id, payload)
+
+
+@router.get("/portfolios/{portfolio_id}/risk-budget", response_model=RiskBudgetResponse)
+def risk_budget(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return risk_budget_analysis(db, current_user, portfolio_id)
 
 
 @router.get("/portfolios/{portfolio_id}/risk", response_model=PortfolioQuantResponse)
@@ -123,7 +170,7 @@ def scenario(portfolio_id: str, payload: ScenarioRequest, current_user: User = D
     return run_scenario(db, current_user, portfolio_id, payload)
 
 
-@router.get("/portfolios/{portfolio_id}/scenario-runs")
+@router.get("/portfolios/{portfolio_id}/scenario-runs", response_model=list[ScenarioResponse])
 def scenario_history(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return list_scenario_runs(db, current_user, portfolio_id)
 
