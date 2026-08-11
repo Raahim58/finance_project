@@ -1,18 +1,12 @@
 import Link from "next/link";
 
 import { AuthForm } from "@/components/AuthForm";
+import { AuthLayout } from "@/components/AuthLayout";
 
 export default function SignupPage() {
   return (
-    <section className="mx-auto grid min-h-screen max-w-md content-center gap-5 px-5 py-12">
-      <div>
-        <p className="eyebrow">PSX Workstation</p><h1 className="page-title mt-2">Create account</h1>
-        <p className="mt-2 text-sm text-muted">Start with a guided investor mandate, then build your portfolio.</p>
-      </div>
+    <AuthLayout title="Create your workspace." description="Start with a guided investor profile, then define and govern each portfolio mandate." footer={<><span>Already have an account? </span><Link className="font-semibold text-accent" href="/login">Sign in</Link></>}>
       <AuthForm mode="signup" />
-      <Link className="text-sm text-accent" href="/login">
-        Already have an account?
-      </Link>
-    </section>
+    </AuthLayout>
   );
 }

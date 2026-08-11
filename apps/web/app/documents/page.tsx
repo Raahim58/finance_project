@@ -1,180 +1,26 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-
+import { Icon } from "@/components/Icon";
 import { ApiDocument, RagSearchResponse, getDocuments, searchRag, uploadDocument } from "@/lib/api";
 
 export default function DocumentsPage() {
-  const [documents, setDocuments] = useState<ApiDocument[]>([]);
-  const [searchResults, setSearchResults] = useState<RagSearchResponse | null>(null);
-  const [title, setTitle] = useState("Demo annual report snippet");
-  const [documentType, setDocumentType] = useState("annual_report");
-  const [symbol, setSymbol] = useState("MEBL");
-  const [sourceName, setSourceName] = useState("manual");
-  const [query, setQuery] = useState("deposit growth");
-  const [file, setFile] = useState<File | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  async function loadDocuments() {
-    const rows = await getDocuments();
-    setDocuments(rows);
-  }
-
-  useEffect(() => {
-    void loadDocuments()
-      .catch((error: Error) => setMessage(error.message))
-      .finally(() => setLoading(false));
-  }, []);
-
-  async function onUpload(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!file) {
-      setMessage("Select a text, Markdown, or PDF file first.");
-      return;
-    }
-    const formData = new FormData();
-    formData.set("file", file);
-    formData.set("title", title);
-    formData.set("document_type", documentType);
-    formData.set("symbol", symbol.toUpperCase());
-    formData.set("source_name", sourceName);
-    try {
-      const created = await uploadDocument(formData);
-      setDocuments([created, ...documents]);
-      setMessage("Document uploaded, parsed, chunked, embedded, and cited.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Upload failed");
-    }
-  }
-
-  async function onSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    try {
-      const result = await searchRag({
-        query,
-        symbols: symbol ? [symbol.toUpperCase()] : undefined,
-        document_types: documentType ? [documentType] : undefined,
-        limit: 5
-      });
-      setSearchResults(result);
-      setMessage(result.chunks.length ? null : "No matching cited context found.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Search failed");
-    }
-  }
-
-  if (loading) {
-    return <section className="page-wrap text-sm text-muted">Loading documents...</section>;
-  }
-
-  return (
-    <section className="page-wrap grid gap-4">
-      <header className="page-heading">
-        <div><p className="eyebrow">Evidence operations</p><h1 className="page-title">Document library</h1>
-        <p className="page-subtitle">
-          Upload documents, preserve metadata, and search cited chunks. RAG is for unstructured text only.
-        </p></div>
-      </header>
-
-      {message ? <p className="notice">{message}</p> : null}
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <form onSubmit={onUpload} className="panel grid gap-4 p-5">
-          <h2 className="text-base font-semibold text-ink">Upload document</h2>
-          <label className="grid gap-2 text-sm text-ink">
-            File
-            <input
-              className="field"
-              type="file"
-              accept=".txt,.md,.pdf,text/plain,application/pdf"
-              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-            />
-          </label>
-          <label className="grid gap-2 text-sm text-ink">
-            Title
-            <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} />
-          </label>
-          <div className="grid gap-3 md:grid-cols-3">
-            <label className="grid gap-2 text-sm text-ink">
-              Type
-              <input className="field" value={documentType} onChange={(event) => setDocumentType(event.target.value)} />
-            </label>
-            <label className="grid gap-2 text-sm text-ink">
-              Symbol
-              <input className="field uppercase" value={symbol} onChange={(event) => setSymbol(event.target.value)} />
-            </label>
-            <label className="grid gap-2 text-sm text-ink">
-              Source
-              <input className="field" value={sourceName} onChange={(event) => setSourceName(event.target.value)} />
-            </label>
-          </div>
-          <button className="btn btn-primary" type="submit">
-            Upload
-          </button>
-        </form>
-
-        <form onSubmit={onSearch} className="panel grid content-start gap-4 p-5">
-          <h2 className="text-base font-semibold text-ink">Search cited context</h2>
-          <label className="grid gap-2 text-sm text-ink">
-            Query
-            <input className="field" value={query} onChange={(event) => setQuery(event.target.value)} />
-          </label>
-          <div className="grid gap-3 md:grid-cols-2">
-            <label className="grid gap-2 text-sm text-ink">
-              Symbol filter
-              <input className="field uppercase" value={symbol} onChange={(event) => setSymbol(event.target.value)} />
-            </label>
-            <label className="grid gap-2 text-sm text-ink">
-              Type filter
-              <input className="field" value={documentType} onChange={(event) => setDocumentType(event.target.value)} />
-            </label>
-          </div>
-          <button className="btn btn-primary" type="submit">
-            Search
-          </button>
-        </form>
-      </div>
-
-      <section className="panel">
-        <div className="border-b border-line px-4 py-3">
-          <h2 className="text-sm font-semibold text-ink">Search results</h2>
-        </div>
-        <div className="grid gap-3 p-4">
-          {(searchResults?.chunks ?? []).map((chunk, index) => (
-            <article key={chunk.id} className="border border-line bg-surface p-4 text-sm">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <p className="font-semibold text-ink">
-                  [{index + 1}] {chunk.citation.title}
-                </p>
-                <p className="text-xs text-muted">Score {chunk.score.toFixed(3)}</p>
-              </div>
-              <p className="leading-6 text-ink">{chunk.chunk_text}</p>
-              <p className="mt-2 text-xs text-muted">
-                {chunk.citation.source_name}
-                {chunk.page_number ? ` · page ${chunk.page_number}` : ""}
-                {chunk.citation.source_url ? ` · ${chunk.citation.source_url}` : ""}
-              </p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="border-b border-line px-4 py-3">
-          <h2 className="text-sm font-semibold text-ink">Documents</h2>
-        </div>
-        <div className="grid gap-2 p-4">
-          {documents.map((document) => (
-            <div key={document.id} className="border border-line bg-surface px-3 py-3 text-sm">
-              <p className="font-semibold text-ink">{document.title}</p>
-              <p className="mt-1 text-xs text-muted">
-                {document.symbol ?? "No symbol"} · {document.document_type} · {document.source_name} · {document.status}
-              </p>
-            </div>
-          ))}
-        </div>
-      </section>
-    </section>
-  );
+  const [documents, setDocuments] = useState<ApiDocument[]>([]);const [searchResults, setSearchResults] = useState<RagSearchResponse | null>(null);const [title, setTitle] = useState("Demo annual report snippet");const [documentType, setDocumentType] = useState("annual_report");const [symbol, setSymbol] = useState("MEBL");const [sourceName, setSourceName] = useState("manual");const [query, setQuery] = useState("deposit growth");const [file, setFile] = useState<File | null>(null);const [message, setMessage] = useState<string | null>(null);const [loading, setLoading] = useState(true);
+  async function loadDocuments() { setDocuments(await getDocuments()); }
+  useEffect(() => { void loadDocuments().catch((error: Error) => setMessage(error.message)).finally(() => setLoading(false)); }, []);
+  async function onUpload(event: FormEvent<HTMLFormElement>) {event.preventDefault();if (!file) {setMessage("Select a text, Markdown, or PDF file first.");return;}const formData = new FormData();formData.set("file", file);formData.set("title", title);formData.set("document_type", documentType);formData.set("symbol", symbol.toUpperCase());formData.set("source_name", sourceName);try {const created = await uploadDocument(formData);setDocuments([created, ...documents]);setMessage("Document uploaded, parsed, chunked, embedded, and cited.");} catch (error) {setMessage(error instanceof Error ? error.message : "Upload failed");}}
+  async function onSearch(event: FormEvent<HTMLFormElement>) {event.preventDefault();try {const result = await searchRag({query,symbols: symbol ? [symbol.toUpperCase()] : undefined,document_types: documentType ? [documentType] : undefined,limit: 5});setSearchResults(result);setMessage(result.chunks.length ? null : "No matching cited context found.");} catch (error) {setMessage(error instanceof Error ? error.message : "Search failed");}}
+  if (loading) return <section className="page-wrap"><div className="panel h-72 skeleton"/></section>;
+  return <section className="page-wrap grid gap-5">
+    <header className="page-heading !mb-0"><div><p className="eyebrow">Evidence operations</p><h1 className="page-title">Document library</h1><p className="page-subtitle">Upload source documents, preserve metadata, and search cited chunks. RAG remains separate from exact numerical data.</p></div></header>
+    {message ? <div className="notice" role="status"><Icon name="document"/>{message}</div> : null}
+    <div className="grid gap-4 lg:grid-cols-2">
+      <form onSubmit={onUpload} className="panel"><div className="panel-head"><h2 className="panel-title">Upload document</h2><span className="badge">PDF · TXT · MD</span></div><div className="panel-body grid gap-4"><label className="field-label">File<input className="field" type="file" accept=".txt,.md,.pdf,text/plain,application/pdf" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label><label className="field-label">Title<input className="field" value={title} onChange={(event) => setTitle(event.target.value)} /></label><div className="grid gap-3 md:grid-cols-3"><Field label="Type" value={documentType} onChange={setDocumentType}/><Field label="Symbol" value={symbol} onChange={setSymbol} uppercase/><Field label="Source" value={sourceName} onChange={setSourceName}/></div><button className="btn btn-primary w-max" type="submit">Upload and index</button></div></form>
+      <form onSubmit={onSearch} className="source-rail p-5"><h2 className="text-[14px] font-semibold">Search cited context</h2><div className="mt-4 grid gap-4"><label className="field-label">Query<input className="field" value={query} onChange={(event) => setQuery(event.target.value)} /></label><div className="grid gap-3 md:grid-cols-2"><Field label="Symbol filter" value={symbol} onChange={setSymbol} uppercase/><Field label="Type filter" value={documentType} onChange={setDocumentType}/></div><button className="btn btn-primary w-max" type="submit"><Icon name="search"/>Search evidence</button></div></form>
+    </div>
+    {searchResults?<section><div className="mb-3 flex items-center justify-between"><h2 className="text-[14px] font-semibold">Search results</h2><span className="text-[11px] text-muted">{searchResults.chunks.length} cited passages</span></div><div className="grid gap-3">{searchResults.chunks.map((chunk, index) => <article key={chunk.id} className="panel p-5"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-[11px] font-semibold text-accent">Evidence {index + 1}</p><p className="data-font text-[11px] text-muted">Relevance {chunk.score.toFixed(3)}</p></div><h3 className="mt-3 text-[15px] font-semibold">{chunk.citation.title}</h3><p className="mt-2 text-[13px] leading-6 text-[#3f454b]">{chunk.chunk_text}</p><p className="mt-4 border-t border-line pt-3 text-[11px] text-muted">{chunk.citation.source_name}{chunk.page_number ? ` · Page ${chunk.page_number}` : " · Page unavailable"}</p></article>)}</div></section>:null}
+    <section className="panel"><div className="panel-head"><h2 className="panel-title">Indexed documents</h2><span className="text-[11px] text-muted">{documents.length} documents</span></div>{documents.length?<div className="table-wrap"><table className="data-table"><thead><tr><th>Document</th><th>Company</th><th>Type</th><th>Source</th><th>Status</th></tr></thead><tbody>{documents.map(document=><tr key={document.id}><td className="font-semibold">{document.title}</td><td>{document.symbol ?? "—"}</td><td>{document.document_type.replaceAll("_"," ")}</td><td>{document.source_name}</td><td><span className={`badge ${document.status==="ready"?"badge-good":""}`}>{document.status}</span></td></tr>)}</tbody></table></div>:<div className="empty-state"><strong>No documents indexed</strong><span>Upload a source document to enable cited retrieval.</span></div>}</section>
+  </section>;
 }
+
+function Field({label,value,onChange,uppercase=false}:{label:string;value:string;onChange:(value:string)=>void;uppercase?:boolean}){return <label className="field-label">{label}<input className={`field ${uppercase?"uppercase":""}`} value={value} onChange={event=>onChange(event.target.value)}/></label>}
