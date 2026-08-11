@@ -40,6 +40,26 @@ MOCK_COMPANIES = [
     ("KEL", "K-Electric Limited", "Power"),
     ("UNITY", "Unity Foods Limited", "Food & Personal Care"),
     ("ILP", "Interloop Limited", "Textile"),
+    ("MCB", "MCB Bank Limited", "Banking"),
+    ("BAHL", "Bank AL Habib Limited", "Banking"),
+    ("NBP", "National Bank of Pakistan", "Banking"),
+    ("TRG", "TRG Pakistan Limited", "Technology"),
+    ("AVN", "Avanceon Limited", "Technology"),
+    ("EFERT", "Engro Fertilizers Limited", "Fertilizer"),
+    ("FATIMA", "Fatima Fertilizer Company Limited", "Fertilizer"),
+    ("MLCF", "Maple Leaf Cement Factory Limited", "Cement"),
+    ("FCCL", "Fauji Cement Company Limited", "Cement"),
+    ("MARI", "Mari Energies Limited", "Oil & Gas"),
+    ("SNGP", "Sui Northern Gas Pipelines Limited", "Oil & Gas Marketing"),
+    ("EPCL", "Engro Polymer & Chemicals Limited", "Chemical"),
+    ("LOTCHEM", "Lotte Chemical Pakistan Limited", "Chemical"),
+    ("NESTLE", "Nestle Pakistan Limited", "Food & Personal Care"),
+    ("MTL", "Millat Tractors Limited", "Automobile Assembler"),
+    ("ATLH", "Atlas Honda Limited", "Automobile Assembler"),
+    ("PAKT", "Pakistan Tobacco Company Limited", "Tobacco"),
+    ("SEARL", "The Searle Company Limited", "Pharmaceuticals"),
+    ("AGP", "AGP Limited", "Pharmaceuticals"),
+    ("ABOT", "Abbott Laboratories Pakistan Limited", "Pharmaceuticals"),
 ]
 
 BASE_PRICES = {
@@ -59,6 +79,13 @@ BASE_PRICES = {
     "KEL": Decimal("5.30"),
     "UNITY": Decimal("28.00"),
     "ILP": Decimal("69.00"),
+    "MCB": Decimal("232.00"), "BAHL": Decimal("118.00"), "NBP": Decimal("72.00"),
+    "TRG": Decimal("63.00"), "AVN": Decimal("58.00"), "EFERT": Decimal("196.00"),
+    "FATIMA": Decimal("76.00"), "MLCF": Decimal("54.00"), "FCCL": Decimal("39.00"),
+    "MARI": Decimal("690.00"), "SNGP": Decimal("88.00"), "EPCL": Decimal("47.00"),
+    "LOTCHEM": Decimal("19.00"), "NESTLE": Decimal("7050.00"), "MTL": Decimal("705.00"),
+    "ATLH": Decimal("890.00"), "PAKT": Decimal("1320.00"), "SEARL": Decimal("92.00"),
+    "AGP": Decimal("134.00"), "ABOT": Decimal("980.00"),
 }
 
 
@@ -126,6 +153,8 @@ def ensure_psx_exchange(db: Session) -> Exchange:
 
 
 def ensure_mock_companies(db: Session) -> list[Company]:
+    from app.models.workstation import Instrument
+
     exchange = ensure_psx_exchange(db)
 
     companies: list[Company] = []
@@ -147,6 +176,12 @@ def ensure_mock_companies(db: Session) -> list[Company]:
             company.sector = sector
             company.exchange_id = exchange.id
             company.is_active = True
+        instrument = db.scalar(select(Instrument).where(Instrument.company_id == company.id))
+        if instrument is None:
+            db.add(Instrument(company_id=company.id, symbol=company.symbol, name=company.name, instrument_type="equity", currency="PKR", country="PK", sector=company.sector, metadata_json='{"data_classification":"synthetic_demo"}'))
+        else:
+            instrument.name = company.name
+            instrument.sector = company.sector
         companies.append(company)
 
     return companies
@@ -249,6 +284,7 @@ def generate_mock_market_data(db: Session, days: int = 365, end_date: date | Non
                     change_percent=change_percent,
                     volume=volume,
                     value=traded_value,
+                    market_cap=money(close * Decimal(80_000_000 + (sum(ord(char) for char in company.symbol) * 1_000_000))),
                     source="mock",
                 )
             )

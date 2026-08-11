@@ -6,7 +6,8 @@ import pytest
 from app.db.session import SessionLocal
 from app.models.user import User
 from app.models.portfolio import Portfolio, PortfolioTransaction
-from app.models.workstation import AllocationSet, InvestorFinancialProfileVersion, MonitoringRun, OptimizerRun, PortfolioIPSVersion, Recommendation, ScenarioRun
+from app.models.document import Document
+from app.models.workstation import AllocationSet, FinancialFact, Instrument, InvestorFinancialProfileVersion, MacroObservation, MonitoringRule, MonitoringRun, OptimizerRun, PortfolioIPSVersion, Recommendation, ScenarioRun
 from app.seed.demo import seed_workstation
 from app.services.market_ingestion import generate_mock_market_data
 from app.tools import build_tool_registry
@@ -106,10 +107,16 @@ def test_demo_seed_is_idempotent_and_populates_the_decision_workflow(monkeypatch
         portfolio = db.query(Portfolio).filter(Portfolio.user_id == user.id).one()
         assert db.query(InvestorFinancialProfileVersion).filter_by(user_id=user.id).count() == 1
         assert db.query(PortfolioIPSVersion).filter_by(portfolio_id=portfolio.id, status="confirmed").count() == 1
-        assert db.query(PortfolioTransaction).filter_by(portfolio_id=portfolio.id).count() == 4
+        assert db.query(PortfolioTransaction).filter_by(portfolio_id=portfolio.id).count() == 9
         assert db.query(AllocationSet).filter_by(portfolio_id=portfolio.id, kind="target").count() == 1
-        assert db.query(OptimizerRun).filter_by(portfolio_id=portfolio.id).count() == 1
-        assert db.query(ScenarioRun).filter_by(portfolio_id=portfolio.id).count() == 1
+        assert db.query(Instrument).count() == 36
+        assert db.query(MacroObservation).count() == 96
+        assert db.query(Document).filter_by(document_type="synthetic_demo_facts").count() == 72
+        assert db.query(FinancialFact).count() == 504
+        assert db.query(OptimizerRun).filter_by(portfolio_id=portfolio.id).count() == 4
+        assert db.query(ScenarioRun).filter_by(portfolio_id=portfolio.id).count() == 5
+        assert db.query(MonitoringRule).filter_by(portfolio_id=portfolio.id).count() == 8
         assert db.query(MonitoringRun).filter_by(portfolio_id=portfolio.id, status="completed").count() == 1
-        recommendation = db.query(Recommendation).filter_by(portfolio_id=portfolio.id).one()
-        assert 80 < len(recommendation.trigger) <= 160
+        recommendations = db.query(Recommendation).filter_by(portfolio_id=portfolio.id).all()
+        assert recommendations
+        assert all(20 < len(row.trigger) <= 160 for row in recommendations)

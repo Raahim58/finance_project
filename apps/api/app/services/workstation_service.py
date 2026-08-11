@@ -642,8 +642,12 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
     target_return = payload.target_return
     if payload.objective == "target_return_minimum_variance" and target_return is None and ips_version and ips_version.required_return is not None:
         target_return = float(ips_version.required_return)
-    target_volatility = payload.target_volatility if payload.target_volatility is not None else (float(constraints["target_volatility"]) if "target_volatility" in constraints else None)
-    target_beta = payload.target_beta if payload.target_beta is not None else (float(constraints["target_beta"]) if "target_beta" in constraints else None)
+    target_volatility = None
+    if payload.objective == "target_volatility_maximum_return":
+        target_volatility = payload.target_volatility if payload.target_volatility is not None else (float(constraints["target_volatility"]) if "target_volatility" in constraints else None)
+    target_beta = None
+    if payload.objective == "target_beta":
+        target_beta = payload.target_beta if payload.target_beta is not None else (float(constraints["target_beta"]) if "target_beta" in constraints else None)
     try:
         result = optimize(
             covariance, objective=payload.objective, expected_returns=estimate.values if estimate else None,

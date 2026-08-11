@@ -28,9 +28,11 @@ SQLite can be used without Docker:
 DATABASE_URL=sqlite+pysqlite:///./psx_ai_local.db alembic upgrade head
 ```
 
-Seed the deterministic development workstation (mock market data, demo investor
-profile, confirmed IPS, ledger-backed portfolio, target/optimized proposals,
-scenario, monitoring rule, and recommendation):
+Seed the deterministic development workstation (36 mock PSX companies, one year
+of prices, 24 months of four macro series, two years of synthetic company facts
+with cited documents, events, a demo investor profile, confirmed IPS,
+ledger-backed portfolio, four optimizer methods, five scenarios, all supported
+monitoring rule types, and recommendations):
 
 ```bash
 DEMO_USER_PASSWORD='choose-a-local-password' python -m app.seed.demo
@@ -38,7 +40,8 @@ DEMO_USER_PASSWORD='choose-a-local-password' python -m app.seed.demo
 
 The demo login is `portfolio.manager@example.com`. The command is idempotent and
 never seeds an LLM key. Every seeded market observation and workflow assumption is
-labeled development/demo data.
+labeled synthetic development/demo data and must not be interpreted as an observed
+market price, filing, macro release, or investment recommendation.
 
 Run the API and scheduler:
 
