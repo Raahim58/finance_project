@@ -83,9 +83,13 @@ def _transactions(db: Session, portfolio_id: str, as_of: date | None = None) -> 
 
 
 def replay_positions(db: Session, portfolio_id: str, as_of: date | None = None) -> dict[str, PositionState]:
+    return replay_positions_from_transactions(_transactions(db, portfolio_id, as_of))
+
+
+def replay_positions_from_transactions(rows: list[PortfolioTransaction]) -> dict[str, PositionState]:
     states: dict[str, PositionState] = {}
-    reversed_ids = {row.reversal_of_id for row in _transactions(db, portfolio_id, as_of) if row.reversal_of_id}
-    for row in _transactions(db, portfolio_id, as_of):
+    reversed_ids = {row.reversal_of_id for row in rows if row.reversal_of_id}
+    for row in rows:
         if row.id in reversed_ids or row.reversal_of_id or row.transaction_type not in POSITION_TYPES:
             continue
         if not row.instrument_id or not row.company_id or not row.quantity:
@@ -114,8 +118,13 @@ def replay_positions(db: Session, portfolio_id: str, as_of: date | None = None) 
 
 
 def cash_balance(db: Session, portfolio_id: str, currency: str = "PKR", as_of: date | None = None) -> Decimal:
+    return cash_balance_from_transactions(_transactions(db, portfolio_id, as_of), currency, as_of)
+
+
+def cash_balance_from_transactions(
+    rows: list[PortfolioTransaction], currency: str = "PKR", as_of: date | None = None
+) -> Decimal:
     balance = ZERO
-    rows = _transactions(db, portfolio_id, as_of)
     reversed_ids = {row.reversal_of_id for row in rows if row.reversal_of_id}
     for row in rows:
         if row.id in reversed_ids or row.reversal_of_id or row.currency.upper() != currency.upper() or row.transaction_type not in CASH_TYPES:
@@ -147,6 +156,14 @@ def external_flow(db: Session, portfolio_id: str, start_exclusive: date | None, 
     and corporate actions are portfolio activity rather than external capital.
     """
     rows = _transactions(db, portfolio_id, end_inclusive)
+    return external_flow_from_transactions(rows, start_exclusive, end_inclusive)
+
+
+def external_flow_from_transactions(
+    rows: list[PortfolioTransaction], start_exclusive: date | None, end_inclusive: date
+) -> Decimal:
+    """Calculate external flow from already-loaded ledger rows."""
+    rows = [row for row in rows if row.transaction_date <= end_inclusive]
     reversed_ids = {row.reversal_of_id for row in rows if row.reversal_of_id}
     flow = ZERO
     for row in rows:

@@ -4,6 +4,7 @@ import pytest
 
 from app.db.session import SessionLocal
 from app.services.market_ingestion import generate_mock_market_data
+from app.services import workstation_service
 
 
 def signup(client, email="workstation@example.com"):
@@ -19,6 +20,29 @@ def seeded_portfolio(client, headers):
         response = client.post(f"/portfolios/{portfolio_id}/holdings", headers=headers, json={"symbol": symbol, "quantity": quantity, "average_cost": "100"})
         assert response.status_code == 201
     return portfolio_id
+
+
+def test_aligned_market_inputs_are_reused_across_analytics_endpoints(client, monkeypatch):
+    headers = signup(client, "aligned-cache@example.com")
+    portfolio_id = seeded_portfolio(client, headers)
+    workstation_service._aligned_price_cache.clear()
+    original = workstation_service.price_series
+    calls = 0
+
+    def counted_price_series(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(workstation_service, "price_series", counted_price_series)
+    quant = client.get(f"/portfolios/{portfolio_id}/quant", headers=headers)
+    assert quant.status_code == 200, quant.text
+    first_request_calls = calls
+    assert first_request_calls == 2
+
+    frontier = client.get(f"/portfolios/{portfolio_id}/frontier?points=8", headers=headers)
+    assert frontier.status_code == 200, frontier.text
+    assert calls == first_request_calls
 
 
 def test_profile_ips_minimum_variance_and_scenario_are_owned_and_auditable(client):

@@ -2,6 +2,8 @@ import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
+from threading import Lock
+from time import monotonic
 
 import numpy as np
 from fastapi import HTTPException, status
@@ -19,6 +21,7 @@ from app.domain.quant import (
     risk_contributions,
     risk_metrics,
 )
+from app.models.market import MarketPrice
 from app.models.portfolio import PortfolioHolding
 from app.models.user import User
 from app.models.workstation import (
@@ -32,6 +35,7 @@ from app.models.workstation import (
     MonitoringRule,
     MacroObservation,
     MacroSeries,
+    MarketObservation,
     OptimizerRun,
     OptimizerAllocation,
     PortfolioIPSVersion,
@@ -44,6 +48,11 @@ from app.services.ledger_service import cash_balance, replay_positions
 from app.services.scenario_service import resolve_shock
 from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_performance, get_portfolio_summary
 from app.services.canonical_market_service import latest_price, price_series
+
+
+_ALIGNED_PRICE_TTL_SECONDS = 60
+_aligned_price_cache: dict[tuple[object, ...], tuple[float, tuple[str, ...], tuple[date, ...], tuple[tuple[float, ...], ...]]] = {}
+_aligned_price_cache_lock = Lock()
 
 
 def _json(value: object) -> str:
@@ -295,18 +304,62 @@ def ips_compliance(db: Session, user: User, portfolio_id: str):
 
 
 def _aligned_prices(db: Session, portfolio_id: str, start: date | None, end: date | None):
-    symbols = list(db.scalars(select(PortfolioHolding.symbol).where(PortfolioHolding.portfolio_id == portfolio_id).order_by(PortfolioHolding.symbol)).all())
+    holding_rows = list(
+        db.execute(
+            select(PortfolioHolding.symbol, PortfolioHolding.updated_at)
+            .where(PortfolioHolding.portfolio_id == portfolio_id)
+            .order_by(PortfolioHolding.symbol)
+        )
+    )
+    symbols = [row.symbol for row in holding_rows]
     if len(symbols) < 2:
         raise HTTPException(status_code=422, detail="At least two holdings are required")
-    by_symbol = {symbol: {} for symbol in symbols}
-    for symbol in symbols:
-        for row in price_series(db, symbol, start, end):
-            by_symbol[symbol][row.trade_date] = float(row.close)
-    aligned_dates = sorted(set.intersection(*(set(values) for values in by_symbol.values())))
-    if len(aligned_dates) < 31:
-        raise HTTPException(status_code=422, detail="At least 31 aligned price observations are required")
-    prices = [[by_symbol[symbol][day] for day in aligned_dates] for symbol in symbols]
-    return symbols, aligned_dates, prices
+    instrument_ids = list(db.scalars(select(Instrument.id).where(Instrument.symbol.in_(symbols))))
+    observation_stamp = db.execute(
+        select(func.count(MarketObservation.id), func.max(MarketObservation.effective_at))
+        .where(
+            MarketObservation.instrument_id.in_(instrument_ids),
+            MarketObservation.is_selected.is_(True),
+            MarketObservation.frequency == "daily",
+        )
+    ).one()
+    legacy_stamp = db.execute(
+        select(func.count(MarketPrice.id), func.max(MarketPrice.trade_date), func.max(MarketPrice.ingested_at))
+        .where(MarketPrice.symbol.in_(symbols))
+    ).one()
+    key = (
+        portfolio_id,
+        start,
+        end,
+        tuple((row.symbol, row.updated_at) for row in holding_rows),
+        tuple(observation_stamp),
+        tuple(legacy_stamp),
+    )
+    now = monotonic()
+    with _aligned_price_cache_lock:
+        cached = _aligned_price_cache.get(key)
+        if cached and cached[0] > now:
+            return list(cached[1]), list(cached[2]), [list(column) for column in cached[3]]
+        by_symbol = {symbol: {} for symbol in symbols}
+        for symbol in symbols:
+            for row in price_series(db, symbol, start, end):
+                by_symbol[symbol][row.trade_date] = float(row.close)
+        aligned_dates = sorted(set.intersection(*(set(values) for values in by_symbol.values())))
+        if len(aligned_dates) < 31:
+            raise HTTPException(status_code=422, detail="At least 31 aligned price observations are required")
+        prices = [[by_symbol[symbol][day] for day in aligned_dates] for symbol in symbols]
+        for stale_key, value in list(_aligned_price_cache.items()):
+            if value[0] <= now:
+                _aligned_price_cache.pop(stale_key, None)
+        if len(_aligned_price_cache) >= 32:
+            _aligned_price_cache.pop(next(iter(_aligned_price_cache)))
+        _aligned_price_cache[key] = (
+            now + _ALIGNED_PRICE_TTL_SECONDS,
+            tuple(symbols),
+            tuple(aligned_dates),
+            tuple(tuple(column) for column in prices),
+        )
+        return symbols, aligned_dates, prices
 
 
 def _selected_ips_constraints(db: Session, portfolio) -> dict[str, object]:

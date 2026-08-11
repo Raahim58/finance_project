@@ -342,6 +342,15 @@ export type AssistantResult = {
 // which also makes temporary HTTPS preview tunnels work without CORS or mixed content.
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 const TOKEN_KEY = "psx_ai_token";
+const GET_CACHE_TTL_MS = 60_000;
+type CachedResponse = { expiresAt: number; value: unknown };
+const responseCache = new Map<string, CachedResponse>();
+const pendingRequests = new Map<string, Promise<unknown>>();
+
+export function clearApiCache() {
+  responseCache.clear();
+  pendingRequests.clear();
+}
 
 export function getToken() {
   if (typeof window === "undefined") return null;
@@ -349,27 +358,52 @@ export function getToken() {
 }
 
 export function setToken(token: string) {
+  clearApiCache();
   window.localStorage.setItem(TOKEN_KEY, token);
 }
 
 export function clearToken() {
+  clearApiCache();
   window.localStorage.removeItem(TOKEN_KEY);
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
+  const method = (options.method ?? "GET").toUpperCase();
+  const cacheKey = `${token ? "authenticated" : "anonymous"}:${path}`;
+  if (method === "GET") {
+    const cached = responseCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value as T;
+    if (cached) responseCache.delete(cacheKey);
+    const pending = pendingRequests.get(cacheKey);
+    if (pending) return pending as Promise<T>;
+  } else {
+    // Mutations can affect summaries, analytics, compliance, and market values.
+    clearApiCache();
+  }
   const headers = new Headers(options.headers);
   headers.set("Content-Type", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  const response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const detail = body.detail;
-    throw new Error(typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `Request failed: ${response.status}`);
+  const execute = async () => {
+    const response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      const detail = body.detail;
+      throw new Error(typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `Request failed: ${response.status}`);
+    }
+    if (response.status === 204) return undefined as T;
+    const value = await response.json() as T;
+    if (method === "GET") responseCache.set(cacheKey, { value, expiresAt: Date.now() + GET_CACHE_TTL_MS });
+    return value;
+  };
+  const result = execute();
+  if (method === "GET") pendingRequests.set(cacheKey, result);
+  try {
+    return await result;
+  } finally {
+    if (method === "GET") pendingRequests.delete(cacheKey);
   }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
 }
 
 export function signup(email: string, password: string, fullName?: string) {

@@ -13,7 +13,7 @@ import {
   PortfolioSummary, RagSearchResponse, ReturnDistribution, RiskBudget, RollingRisk, ScenarioResult, Transaction,
   comparePortfolio, createAllocation, createIpsVersion, getAllocations, getCapitalMarketAssumptions, getCapmSml,
   getEfficientFrontier, getIpsCompliance, getIpsVersions, getPortfolioExposure, getPortfolioPerformance,
-  getPortfolioQuant, getPortfolioRiskFlags, getPortfolioSummary, getReturnDistribution, getRiskBudget,
+  getPortfolioQuant, getPortfolioSummary, getReturnDistribution, getRiskBudget,
   getRollingRisk, getScenarioRuns, getTransactions, runHistoricalReplay, runOptimizer, runScenario, searchRag,
 } from "@/lib/api";
 
@@ -36,37 +36,53 @@ const number=(record:Record<string,unknown>|undefined,key:string)=>record?.[key]
 export function WorkspacePage({mode}:{mode:string}){
   const {portfolioId}=useParams<{portfolioId:string}>();
   const [data,setData]=useState<WorkspaceData>(blank);const [loading,setLoading]=useState(true);const [message,setMessage]=useState("");
+  const [analyticsLoading,setAnalyticsLoading]=useState(false);
   useEffect(()=>{
-    let active=true;setLoading(true);setMessage("");
-    async function load(){
-      const core=await Promise.all([
-        getPortfolioSummary(portfolioId),getPortfolioExposure(portfolioId).catch(()=>null),
-        getPortfolioPerformance(portfolioId).catch(()=>[]),getPortfolioRiskFlags(portfolioId).catch(()=>({flags:[]})),
-        getIpsCompliance(portfolioId).catch(()=>null),getIpsVersions(portfolioId).catch(()=>[]),
-      ]);
-      const needsQuant=["overview","build","quant","risk","stress","scenarios"].includes(mode);
-      const quant=needsQuant?await getPortfolioQuant(portfolioId).catch(()=>null):null;
-      const next:WorkspaceData={...blank,summary:core[0],exposure:core[1],performance:core[2],flags:core[3].flags,compliance:core[4],ips:core[5],quant};
-      if(mode==="build"){
-        [next.allocations,next.assumptions,next.riskBudget]=await Promise.all([getAllocations(portfolioId).catch(()=>[]),getCapitalMarketAssumptions(portfolioId).catch(()=>null),getRiskBudget(portfolioId).catch(()=>null)]);
-      }
-      if(mode==="quant"){
-        [next.frontier,next.capm,next.rolling,next.distribution,next.riskBudget]=await Promise.all([getEfficientFrontier(portfolioId).catch(()=>null),getCapmSml(portfolioId).catch(()=>null),getRollingRisk(portfolioId).catch(()=>null),getReturnDistribution(portfolioId).catch(()=>null),getRiskBudget(portfolioId).catch(()=>null)]);
-      }
-      if(mode==="risk")next.riskBudget=await getRiskBudget(portfolioId).catch(()=>null);
-      if(mode==="activity")next.transactions=await getTransactions(portfolioId).catch(()=>[]);
-      if(mode==="stress"||mode==="scenarios")next.scenarios=await getScenarioRuns(portfolioId).catch(()=>[]);
-      if(active)setData(next);
+    let active=true;setData(blank);setLoading(true);setAnalyticsLoading(false);setMessage("");
+    const update=(values:Partial<WorkspaceData>)=>active&&setData(current=>({...current,...values}));
+    const tasks:Promise<unknown>[]=[];
+    const needsSummary=["overview","build","risk","stress","scenarios"].includes(mode);
+    if(needsSummary)tasks.push(getPortfolioSummary(portfolioId).then(summary=>update({summary})).catch((error:Error)=>active&&setMessage(error.message)).finally(()=>active&&setLoading(false)));
+    else setLoading(false);
+    if(mode==="overview")tasks.push(
+      getPortfolioExposure(portfolioId).then(exposure=>update({exposure})).catch(()=>{}),
+      getPortfolioPerformance(portfolioId).then(performance=>update({performance})).catch(()=>{}),
+      getIpsCompliance(portfolioId).then(compliance=>update({compliance})).catch(()=>{}),
+      getIpsVersions(portfolioId).then(ips=>update({ips})).catch(()=>{}),
+    );
+    if(mode==="build")tasks.push(
+      getIpsVersions(portfolioId).then(ips=>update({ips})).catch(()=>{}),
+      getAllocations(portfolioId).then(allocations=>update({allocations})).catch(()=>{}),
+      getCapitalMarketAssumptions(portfolioId).then(assumptions=>update({assumptions})).catch(()=>{}),
+      getRiskBudget(portfolioId).then(riskBudget=>update({riskBudget})).catch(()=>{}),
+    );
+    if(["overview","quant","risk"].includes(mode)){
+      setAnalyticsLoading(true);
+      tasks.push(getPortfolioQuant(portfolioId).then(quant=>update({quant})).catch(()=>{}).finally(()=>active&&setAnalyticsLoading(false)));
     }
-    void load().catch((error:Error)=>active&&setMessage(error.message)).finally(()=>active&&setLoading(false));
+    if(mode==="quant")tasks.push(getRiskBudget(portfolioId).then(riskBudget=>update({riskBudget})).catch(()=>{}));
+    if(mode==="risk")tasks.push(
+      getPortfolioExposure(portfolioId).then(exposure=>update({exposure})).catch(()=>{}),
+      getIpsCompliance(portfolioId).then(compliance=>update({compliance})).catch(()=>{}),
+      getRiskBudget(portfolioId).then(riskBudget=>update({riskBudget})).catch(()=>{}),
+    );
+    if(mode==="activity")tasks.push(getTransactions(portfolioId).then(transactions=>update({transactions})).catch(()=>{}));
+    if(mode==="stress"||mode==="scenarios")tasks.push(getScenarioRuns(portfolioId).then(scenarios=>update({scenarios})).catch(()=>{}));
+    if(mode==="settings"||mode==="ips")tasks.push(
+      getIpsCompliance(portfolioId).then(compliance=>update({compliance})).catch(()=>{}),
+      getIpsVersions(portfolioId).then(ips=>update({ips})).catch(()=>{}),
+    );
+    void Promise.all(tasks);
     return()=>{active=false};
   },[portfolioId,mode]);
   const activeMode=mode==="scenarios"?"stress":mode==="ips"?"settings":mode;
-  return <PortfolioWorkspace portfolioId={portfolioId} active={activeMode}>{message?<div className="notice notice-warn mb-3"><Icon name="warning"/><span>{message}</span></div>:null}{loading?<Loading/>:<Mode mode={mode} portfolioId={portfolioId} data={data} setMessage={setMessage}/>}</PortfolioWorkspace>;
+  return <PortfolioWorkspace portfolioId={portfolioId} active={activeMode}>{message?<div className="notice notice-warn mb-3"><Icon name="warning"/><span>{message}</span></div>:null}{loading?<Loading/>:<Mode mode={mode} portfolioId={portfolioId} data={data} setMessage={setMessage} analyticsLoading={analyticsLoading}/>}</PortfolioWorkspace>;
 }
 
 function Loading(){return <div className="grid gap-3"><div className="metric-strip grid-cols-4">{[1,2,3,4].map(i=><div className="metric" key={i}><div className="skeleton h-3 w-20"/><div className="skeleton mt-3 h-7 w-28"/></div>)}</div><div className="panel h-80 p-4"><div className="skeleton h-full w-full"/></div></div>}
-function Mode({mode,...props}:{mode:string;portfolioId:string;data:WorkspaceData;setMessage:(s:string)=>void}){if(mode==="overview")return <Overview {...props}/>;if(mode==="build")return <Build {...props}/>;if(mode==="quant")return <Quant {...props}/>;if(mode==="risk")return <Risk {...props}/>;if(mode==="stress"||mode==="scenarios")return <Scenarios {...props}/>;if(mode==="research")return <PortfolioResearch {...props}/>;if(mode==="activity")return <Activity {...props}/>;if(mode==="settings"||mode==="ips")return <Ips {...props}/>;return null}
+function Mode({mode,analyticsLoading,...props}:{mode:string;portfolioId:string;data:WorkspaceData;setMessage:(s:string)=>void;analyticsLoading:boolean}){if(mode==="overview")return <Overview {...props}/>;if(mode==="build")return <Build {...props}/>;if(mode==="quant")return <Quant {...props} loading={analyticsLoading}/>;if(mode==="risk")return <Risk {...props}/>;if(mode==="stress"||mode==="scenarios")return <Scenarios {...props}/>;if(mode==="research")return <PortfolioResearch {...props}/>;if(mode==="activity")return <Activity {...props}/>;if(mode==="settings"||mode==="ips")return <Ips {...props}/>;return null}
+
+function AnalyticsLoading(){return <div className="panel h-80 p-4"><div className="skeleton h-full w-full"/></div>}
 
 function Overview({data}:{data:WorkspaceData}){
   const summary=data.summary;if(!summary)return <Empty title="Portfolio summary unavailable" text="The API did not return a database valuation."/>;
@@ -100,7 +116,22 @@ function Build({data,portfolioId,setMessage}:{data:WorkspaceData;portfolioId:str
   </div>;
 }
 
-function Quant({data}:{data:WorkspaceData}){const [tab,setTab]=useState("contribution");const quant=data.quant;if(!quant)return <Empty title="Quant analysis unavailable" text="At least two holdings and 31 aligned market observations are required."/>;const metrics=quant.portfolio;return <div className="grid gap-5"><div className="source-rail flex flex-wrap items-center justify-between gap-3 px-5 py-4"><div><p className="text-[13px] font-semibold">Model context</p><p className="mt-0.5 text-[11px] text-muted">Deterministic analytics · {quant.sample_size} aligned observations</p></div><div className="flex items-center gap-3"><span className={`badge ${quant.warnings.length?"badge-warn":"badge-good"}`}>{quant.warnings.length?`${quant.warnings.length} model warning(s)`:"Inputs complete"}</span><span className="text-[11px] text-muted">Cutoff {quant.data_cutoff}</span></div></div><div className="metric-strip grid-cols-4"><Metric label="Arithmetic return" value={pct(number(metrics,"arithmetic_expected_return"))}/><Metric label="Realized CAGR" value={pct(number(metrics,"realized_cagr"))}/><Metric label="Annual volatility" value={pct(number(metrics,"annual_volatility"))}/><Metric label="Historical VaR 95" value={pct(number(metrics,"historical_var_95"))}/></div><section className="panel"><div className="panel-head"><h2 className="panel-title">Portfolio analytics</h2><div className="segmented">{[["contribution","Risk contribution"],["frontier","Efficient frontier"],["capm","CAPM / SML"],["correlation","Correlation"],["rolling","Rolling risk"],["distribution","Distribution"]].map(([id,label])=><button className="segment" aria-selected={tab===id} onClick={()=>setTab(id)} key={id}>{label}</button>)}</div></div><div className="panel-body"><QuantView tab={tab} data={data}/></div></section>{data.riskBudget?<RiskBudgetTable budget={data.riskBudget}/>:null}</div>}
+function Quant({data,portfolioId,loading}:{data:WorkspaceData;portfolioId:string;loading:boolean}){
+  const [tab,setTab]=useState("contribution");
+  const [details,setDetails]=useState<Pick<WorkspaceData,"frontier"|"capm"|"rolling"|"distribution">>({frontier:null,capm:null,rolling:null,distribution:null});
+  const [loadingTab,setLoadingTab]=useState<string|null>(null);
+  useEffect(()=>{
+    if(["contribution","correlation"].includes(tab)||details[tab as keyof typeof details])return;
+    let active=true;setLoadingTab(tab);
+    const request=tab==="frontier"?getEfficientFrontier(portfolioId):tab==="capm"?getCapmSml(portfolioId):tab==="rolling"?getRollingRisk(portfolioId):getReturnDistribution(portfolioId);
+    void request.then(value=>{if(active)setDetails(current=>({...current,[tab]:value}))}).catch(()=>{}).finally(()=>{if(active)setLoadingTab(null)});
+    return()=>{active=false};
+  },[tab,portfolioId,details]);
+  if(loading)return <AnalyticsLoading/>;
+  const quant=data.quant;if(!quant)return <Empty title="Quant analysis unavailable" text="At least two holdings and 31 aligned market observations are required."/>;
+  const metrics=quant.portfolio;const viewData={...data,...details};
+  return <div className="grid gap-5"><div className="source-rail flex flex-wrap items-center justify-between gap-3 px-5 py-4"><div><p className="text-[13px] font-semibold">Model context</p><p className="mt-0.5 text-[11px] text-muted">Deterministic analytics · {quant.sample_size} aligned observations</p></div><div className="flex items-center gap-3"><span className={`badge ${quant.warnings.length?"badge-warn":"badge-good"}`}>{quant.warnings.length?`${quant.warnings.length} model warning(s)`:"Inputs complete"}</span><span className="text-[11px] text-muted">Cutoff {quant.data_cutoff}</span></div></div><div className="metric-strip grid-cols-4"><Metric label="Arithmetic return" value={pct(number(metrics,"arithmetic_expected_return"))}/><Metric label="Realized CAGR" value={pct(number(metrics,"realized_cagr"))}/><Metric label="Annual volatility" value={pct(number(metrics,"annual_volatility"))}/><Metric label="Historical VaR 95" value={pct(number(metrics,"historical_var_95"))}/></div><section className="panel"><div className="panel-head"><h2 className="panel-title">Portfolio analytics</h2><div className="segmented">{[["contribution","Risk contribution"],["frontier","Efficient frontier"],["capm","CAPM / SML"],["correlation","Correlation"],["rolling","Rolling risk"],["distribution","Distribution"]].map(([id,label])=><button className="segment" aria-selected={tab===id} onClick={()=>setTab(id)} key={id}>{label}</button>)}</div></div><div className="panel-body">{loadingTab===tab?<AnalyticsLoading/>:<QuantView tab={tab} data={viewData}/>}</div></section>{data.riskBudget?<RiskBudgetTable budget={data.riskBudget}/>:null}</div>
+}
 function QuantView({tab,data}:{tab:string;data:WorkspaceData}){if(tab==="contribution")return <BarChart labels={Object.keys(data.quant?.risk_contributions??{})} values={Object.values(data.quant?.risk_contributions??{}).map(v=>v*100)} percent height={350}/>;if(tab==="frontier")return data.frontier?<><ScatterChart percentAxes xName="Volatility" yName="Expected return" points={(data.frontier.points??[]).map(point=>({x:point.volatility,y:point.expected_return}))}/><ModelNotes items={data.frontier.warnings??[]}/></>:<Empty title="Efficient frontier unavailable" text="The chart requires a feasible modeled universe."/>;if(tab==="capm")return data.capm?.available?<><ScatterChart xName="Beta" yName="Annual return" xPercent={false} yPercent points={(data.capm.securities??[]).map(item=>({x:item.beta,y:item.realized_return,name:item.symbol}))}/><ModelNotes items={data.capm.diagnostics??[]}/></>:<Empty title="CAPM / SML unavailable" text={data.capm?.diagnostics?.join(" ")||"A benchmark and observed risk-free rate are required."}/>;if(tab==="correlation")return <Matrix symbols={data.quant?.symbols??[]} values={data.quant?.correlation??[]}/>;if(tab==="rolling")return data.rolling?.points?.length?<><LineChart percent labels={data.rolling.points.map(point=>point.date)} values={data.rolling.points.map(point=>point.volatility*100)}/><ModelNotes items={data.rolling.diagnostics??[]}/></>:<Empty title="Rolling risk unavailable" text={data.rolling?.diagnostics?.join(" ")||"More ledger history is required."}/>;if(tab==="distribution")return data.distribution?.bins?.length?<><HistogramChart bins={data.distribution.bins}/><div className="mt-3 flex flex-wrap gap-2"><span className="badge">VaR 95 {pct(data.distribution.var_95)}</span><span className="badge">ES 95 {pct(data.distribution.es_95)}</span><span className="badge">Skew {data.distribution.skewness?.toFixed(2)??"—"}</span><span className="badge">Excess kurtosis {data.distribution.excess_kurtosis?.toFixed(2)??"—"}</span></div></>:<Empty title="Return distribution unavailable" text={data.distribution?.diagnostics?.join(" ")||"At least 30 ledger returns are required."}/>;return null}
 
 function Risk({data}:{data:WorkspaceData}){

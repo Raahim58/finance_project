@@ -1,4 +1,5 @@
 from collections import defaultdict
+from bisect import bisect_right
 from datetime import UTC, date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 import json
@@ -13,14 +14,17 @@ from app.models.user import User
 from app.models.workstation import AllocationItem, AllocationSet, PortfolioIPS, PortfolioIPSVersion
 from app.services.ledger_service import (
     cash_balance,
+    cash_balance_from_transactions,
     ensure_cash_account,
     external_flow,
+    external_flow_from_transactions,
     generate_portfolio_snapshot,
     instrument_for_symbol,
     net_external_contributions,
     rebuild_holding_projection,
     record_holding_adjustment,
     replay_positions,
+    replay_positions_from_transactions,
     reverse_transaction,
 )
 from app.services.portfolio_providers import describe_portfolio_source, get_portfolio_provider
@@ -504,29 +508,23 @@ def get_portfolio_performance(
     db: Session, user: User, portfolio_id: str, limit: int = 90
 ) -> list[PortfolioPerformancePoint]:
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
-    if not db.scalar(select(func.count(PortfolioTransaction.id)).where(PortfolioTransaction.portfolio_id == portfolio.id)):
+    transactions = list(
+        db.scalars(
+            select(PortfolioTransaction)
+            .where(PortfolioTransaction.portfolio_id == portfolio.id)
+            .order_by(PortfolioTransaction.transaction_date, PortfolioTransaction.created_at, PortfolioTransaction.id)
+        )
+    )
+    if not transactions:
         return []
 
-    historical_symbols = set(
-        db.scalars(
-            select(PortfolioTransaction.symbol)
-            .where(
-                PortfolioTransaction.portfolio_id == portfolio.id,
-                PortfolioTransaction.instrument_id.is_not(None),
-            )
-            .distinct()
-        )
-    )
+    historical_symbols = {row.symbol for row in transactions if row.instrument_id is not None}
     if not historical_symbols:
         return []
-    market_dates = {row.trade_date for symbol in historical_symbols for row in price_series(db, symbol)}
-    transaction_dates = set(
-        db.scalars(
-            select(PortfolioTransaction.transaction_date)
-            .where(PortfolioTransaction.portfolio_id == portfolio.id)
-            .distinct()
-        )
-    )
+    prices_by_symbol = {symbol: price_series(db, symbol) for symbol in historical_symbols}
+    price_dates = {symbol: [row.trade_date for row in rows] for symbol, rows in prices_by_symbol.items()}
+    market_dates = {row.trade_date for rows in prices_by_symbol.values() for row in rows}
+    transaction_dates = {row.transaction_date for row in transactions}
     dates = sorted(market_dates | transaction_dates)
     dates = dates[-(limit + 1):]
     points: list[PortfolioPerformancePoint] = []
@@ -534,13 +532,15 @@ def get_portfolio_performance(
     previous_date: date | None = None
     cumulative_twr = Decimal("1")
     for value_date in dates:
-        total = cash_balance(db, portfolio.id, portfolio.base_currency, value_date)
-        for position in replay_positions(db, portfolio.id, value_date).values():
-            price = price_for_symbol_on_or_before(db, position.symbol, value_date)
-            if price:
-                total += position.quantity * price.close
+        dated_transactions = [row for row in transactions if row.transaction_date <= value_date]
+        total = cash_balance_from_transactions(dated_transactions, portfolio.base_currency, value_date)
+        for position in replay_positions_from_transactions(dated_transactions).values():
+            symbol_dates = price_dates.get(position.symbol, [])
+            price_index = bisect_right(symbol_dates, value_date) - 1
+            if price_index >= 0:
+                total += position.quantity * prices_by_symbol[position.symbol][price_index].close
         total = money(total)
-        flow = money(external_flow(db, portfolio.id, previous_date, value_date))
+        flow = money(external_flow_from_transactions(dated_transactions, previous_date, value_date))
         value_change = money(total - previous_total) if previous_total is not None else Decimal("0.0000")
         investment_change = money(value_change - flow) if previous_total is not None else Decimal("0.0000")
         period_return: Decimal | None = None
