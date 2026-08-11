@@ -341,7 +341,7 @@ class Recommendation(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
     portfolio_id: Mapped[str] = mapped_column(ForeignKey("portfolios.id"), index=True, nullable=False)
-    trigger: Mapped[str] = mapped_column(String(80), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(160), nullable=False)
     evidence_json: Mapped[str] = mapped_column(Text, nullable=False)
     ips_violation_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     assumptions_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)

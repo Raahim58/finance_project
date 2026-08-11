@@ -6,7 +6,7 @@ import pytest
 from app.db.session import SessionLocal
 from app.models.user import User
 from app.models.portfolio import Portfolio, PortfolioTransaction
-from app.models.workstation import AllocationSet, InvestorFinancialProfileVersion, OptimizerRun, PortfolioIPSVersion, ScenarioRun
+from app.models.workstation import AllocationSet, InvestorFinancialProfileVersion, MonitoringRun, OptimizerRun, PortfolioIPSVersion, Recommendation, ScenarioRun
 from app.seed.demo import seed_workstation
 from app.services.market_ingestion import generate_mock_market_data
 from app.tools import build_tool_registry
@@ -85,3 +85,6 @@ def test_demo_seed_is_idempotent_and_populates_the_decision_workflow(monkeypatch
         assert db.query(AllocationSet).filter_by(portfolio_id=portfolio.id, kind="target").count() == 1
         assert db.query(OptimizerRun).filter_by(portfolio_id=portfolio.id).count() == 1
         assert db.query(ScenarioRun).filter_by(portfolio_id=portfolio.id).count() == 1
+        assert db.query(MonitoringRun).filter_by(portfolio_id=portfolio.id, status="completed").count() == 1
+        recommendation = db.query(Recommendation).filter_by(portfolio_id=portfolio.id).one()
+        assert 80 < len(recommendation.trigger) <= 160

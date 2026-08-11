@@ -8,7 +8,7 @@ const tabs:Array<[string,string,string?]>=[["overview","Overview"],["build","Bui
 
 export function PortfolioWorkspace({portfolioId,active,children}:{portfolioId:string;active:string;children:React.ReactNode}){
   const [portfolios,setPortfolios]=useState<Portfolio[]>([]);
-  useEffect(()=>{void getPortfolios().then(setPortfolios)},[]);
+  useEffect(()=>{let active=true;void getPortfolios().then(rows=>active&&setPortfolios(rows)).catch(()=>active&&setPortfolios([]));return()=>{active=false}},[]);
   const selected=portfolios.find(p=>p.id===portfolioId);
   return <div className="page-wrap">
     <header className="page-heading">

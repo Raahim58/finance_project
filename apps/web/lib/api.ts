@@ -390,7 +390,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       const detail = body.detail;
-      throw new Error(typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `Request failed: ${response.status}`);
+      const fallback = `Request failed: ${response.status} (${method} ${path})`;
+      throw new Error(typeof detail === "string" ? `${detail} (${method} ${path})` : detail ? `${JSON.stringify(detail)} (${method} ${path})` : fallback);
     }
     if (response.status === 204) return undefined as T;
     const value = await response.json() as T;

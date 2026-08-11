@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from app.db.session import SessionLocal
 from app.models.portfolio import Portfolio, PortfolioTransaction
 from app.models.user import User
-from app.models.workstation import AllocationSet, InvestorFinancialProfileVersion, MonitoringRule, OptimizerRun, ScenarioRun
+from app.models.workstation import AllocationSet, InvestorFinancialProfileVersion, MonitoringRule, MonitoringRun, OptimizerRun, ScenarioRun
 from app.schemas.auth import SignupRequest
 from app.schemas.portfolio import AllocationItemInput, AllocationSetCreate, PortfolioCreate, TransactionCreate
 from app.schemas.workstation import IPSDraft, OptimizerRequest, ScenarioRequest, VersionDraft
@@ -105,6 +105,7 @@ def seed_workstation() -> dict[str, object]:
             run_scenario(db, user, portfolio.id, ScenarioRequest(name="Demo broad selloff", scenario_type="hypothetical", shocks={}, sector_shocks={"Banking": -0.12, "Technology": -0.16, "Oil & Gas Exploration": -0.10}))
         if not (db.scalar(select(func.count(MonitoringRule.id)).where(MonitoringRule.portfolio_id == portfolio.id)) or 0):
             create_monitoring_rule(db, user, portfolio.id, "concentration", {"maximum": 0.30})
+        if not (db.scalar(select(func.count(MonitoringRun.id)).where(MonitoringRun.portfolio_id == portfolio.id, MonitoringRun.status == "completed")) or 0):
             run_monitoring(db, user, portfolio.id)
 
         return {"market": market, "user_email": DEMO_EMAIL, "portfolio_id": portfolio.id, "mock_data": True}

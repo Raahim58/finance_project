@@ -72,7 +72,7 @@ export function WorkspacePage({mode}:{mode:string}){
       getIpsCompliance(portfolioId).then(compliance=>update({compliance})).catch(()=>{}),
       getIpsVersions(portfolioId).then(ips=>update({ips})).catch(()=>{}),
     );
-    void Promise.all(tasks);
+    void Promise.all(tasks).catch((error:Error)=>active&&setMessage(error.message));
     return()=>{active=false};
   },[portfolioId,mode]);
   const activeMode=mode==="scenarios"?"stress":mode==="ips"?"settings":mode;
