@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "dev-only-change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
+    enable_demo_access: bool = False
+    demo_access_token: str = ""
+    demo_access_email: str = "portfolio.manager@example.com"
     encryption_key: str = "dev-only-invalid-key"
     market_data_mode: str = "mock"
     market_data_refresh_seconds: int = 300

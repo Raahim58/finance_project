@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.user import User
-from app.models.workstation import Alert, Event, EventEntityLink, EventSource, IngestionRun, MonitoringRule, MonitoringRun, Recommendation
+from app.models.workstation import Alert, Event, EventEntityLink, EventSource, IngestionRun, MonitoringRule, MonitoringRun, PortfolioIPSVersion, Recommendation
 from app.services.market_service import get_market_freshness
 from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_summary
 from app.services.workstation_service import ips_compliance, portfolio_quant
@@ -85,6 +85,40 @@ def _evaluate(db: Session, user: User, rule: MonitoringRule) -> tuple[bool, dict
     return False, {"reason": "Rule evaluator is awaiting the required structured feed"}, rule.rule_type, "No alert generated because required structured data is unavailable."
 
 
+def _decision_context(db: Session, user: User, rule: MonitoringRule, evidence: dict) -> dict:
+    portfolio = get_portfolio_or_404(db, user, rule.portfolio_id)
+    version = db.get(PortfolioIPSVersion, portfolio.selected_ips_version_id) if portfolio.selected_ips_version_id else None
+    constraints = json.loads(version.constraints_json) if version else {}
+    related_ips_limit = constraints.get("max_instrument_weight") if rule.rule_type in {"position_weight", "concentration"} else constraints.get({"volatility": "target_volatility", "beta_shift": "target_beta"}.get(rule.rule_type, ""))
+    threshold = json.loads(rule.threshold_json)
+    current_value = None
+    if evidence.get("breaches"):
+        current_value = max((item.get("weight") for item in evidence["breaches"] if item.get("weight") is not None), default=None)
+    elif evidence.get("actual") is not None:
+        current_value = evidence["actual"]
+    classification = "monitoring_warning"
+    if related_ips_limit is not None and current_value is not None and float(current_value) > float(related_ips_limit):
+        classification = "mandate_breach"
+    return {
+        **evidence,
+        "rule_id": rule.id,
+        "rule_type": rule.rule_type,
+        "rule_threshold": threshold,
+        "current_value": current_value,
+        "related_ips_limit": related_ips_limit,
+        "ips_version_id": version.id if version else None,
+        "classification": classification,
+        "rule_enabled": rule.enabled,
+    }
+
+
+def _resolve_inactive_alerts(db: Session, user: User, rule: MonitoringRule) -> None:
+    for alert in db.scalars(select(Alert).where(Alert.user_id == user.id, Alert.portfolio_id == rule.portfolio_id, Alert.status == "open")):
+        evidence = json.loads(alert.evidence_json)
+        if evidence.get("rule_id") == rule.id:
+            alert.status = "resolved"
+
+
 def run_monitoring(db: Session, user: User, portfolio_id: str):
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     run = MonitoringRun(portfolio_id=portfolio.id, status="running")
@@ -92,8 +126,11 @@ def run_monitoring(db: Session, user: User, portfolio_id: str):
     evaluations = []; created = []
     for rule in db.scalars(select(MonitoringRule).where(MonitoringRule.portfolio_id == portfolio.id, MonitoringRule.user_id == user.id, MonitoringRule.enabled.is_(True))):
         triggered, evidence, alert_type, message = _evaluate(db, user, rule)
+        evidence = _decision_context(db, user, rule, evidence)
         evaluations.append({"rule_id": rule.id, "triggered": triggered, "evidence": evidence})
-        if not triggered: continue
+        if not triggered:
+            _resolve_inactive_alerts(db, user, rule)
+            continue
         window = datetime.now(UTC).timestamp() // (rule.deduplication_window_minutes * 60)
         key = sha256(f"{rule.id}:{alert_type}:{window}".encode()).hexdigest()
         existing = db.scalar(select(Alert).where(Alert.deduplication_key == key))
@@ -125,10 +162,20 @@ def summary_date(db: Session, user: User, portfolio_id: str):
     return get_portfolio_summary(db, user, portfolio_id).data_freshness_date
 
 
-def list_alerts(db: Session, user: User, portfolio_id: str | None = None):
+def list_alerts(db: Session, user: User, portfolio_id: str | None = None, include_closed: bool = False):
     statement = select(Alert).where(Alert.user_id == user.id)
+    if not include_closed:
+        statement = statement.where(Alert.status == "open")
     if portfolio_id: statement = statement.where(Alert.portfolio_id == portfolio_id)
-    return [{"id": row.id, "portfolio_id": row.portfolio_id, "alert_type": row.alert_type, "severity": row.severity, "message": row.message, "evidence": json.loads(row.evidence_json), "status": row.status, "acknowledged_at": row.acknowledged_at, "created_at": row.created_at} for row in db.scalars(statement.order_by(Alert.created_at.desc()))]
+    results = []
+    for row in db.scalars(statement.order_by(Alert.created_at.desc())):
+        evidence = json.loads(row.evidence_json)
+        if not evidence.get("rule_id"):
+            legacy_rule = db.scalar(select(MonitoringRule).where(MonitoringRule.user_id == user.id, MonitoringRule.portfolio_id == row.portfolio_id, MonitoringRule.rule_type.in_([row.alert_type, "position_weight" if row.alert_type == "concentration" else row.alert_type])))
+            if legacy_rule:
+                evidence = _decision_context(db, user, legacy_rule, evidence)
+        results.append({"id": row.id, "portfolio_id": row.portfolio_id, "alert_type": row.alert_type, "severity": row.severity, "message": row.message, "evidence": evidence, "rule_id": evidence.get("rule_id"), "rule_type": evidence.get("rule_type", row.alert_type), "threshold": evidence.get("rule_threshold"), "current_value": evidence.get("current_value"), "related_ips_limit": evidence.get("related_ips_limit"), "classification": evidence.get("classification", "monitoring_warning"), "rule_enabled": evidence.get("rule_enabled"), "data_as_of": evidence.get("as_of"), "status": row.status, "acknowledged_at": row.acknowledged_at, "created_at": row.created_at})
+    return results
 
 
 def acknowledge_alert(db: Session, user: User, alert_id: str):

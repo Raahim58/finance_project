@@ -32,8 +32,8 @@ def monitor(portfolio_id: str, current_user: User = Depends(get_current_user), d
 
 
 @router.get("/monitoring/alerts")
-def alerts(portfolio_id: str | None = None, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return list_alerts(db, current_user, portfolio_id)
+def alerts(portfolio_id: str | None = None, include_closed: bool = False, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return list_alerts(db, current_user, portfolio_id, include_closed)
 
 
 @router.post("/monitoring/alerts/{alert_id}/acknowledge")

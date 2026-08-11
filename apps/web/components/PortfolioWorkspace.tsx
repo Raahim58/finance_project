@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Portfolio,getPortfolios } from "@/lib/api";
 
-const tabs:Array<[string,string,string?]>=[["overview","Overview"],["build","Build"],["quant","Quant"],["risk","Risk"],["stress","Scenarios","scenarios"],["research","Research"],["activity","Activity"],["settings","IPS","ips"]];
+const tabs:Array<[string,string,string?]>=[["overview","Overview"],["settings","IPS","ips"],["build","Build"],["quant","Quant"],["risk","Risk"],["stress","Scenarios","scenarios"],["research","Research"],["activity","Activity"]];
 
 export function PortfolioWorkspace({portfolioId,active,children}:{portfolioId:string;active:string;children:React.ReactNode}){
   const [portfolios,setPortfolios]=useState<Portfolio[]>([]);

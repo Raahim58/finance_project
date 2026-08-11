@@ -48,6 +48,7 @@ from app.services.ledger_service import cash_balance, replay_positions
 from app.services.scenario_service import resolve_shock
 from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_performance, get_portfolio_summary
 from app.services.canonical_market_service import latest_price, price_series
+from app.services.compliance_service import evaluate_ips_constraints
 
 
 _ALIGNED_PRICE_TTL_SECONDS = 60
@@ -164,6 +165,10 @@ def list_profile_versions(db: Session, user: User):
 
 def save_ips_version(db: Session, user: User, portfolio_id: str, payload: IPSDraft, confirm: bool = False):
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    if payload.overall_risk_tolerance and payload.risk_capacity and payload.risk_willingness:
+        ceiling = min(_RISK_ORDER[payload.risk_capacity], _RISK_ORDER[payload.risk_willingness])
+        if _RISK_ORDER[payload.overall_risk_tolerance] > ceiling:
+            raise HTTPException(status_code=422, detail="Overall risk tolerance cannot exceed the more restrictive of capacity and willingness.")
     version = (db.scalar(select(func.max(PortfolioIPSVersion.version)).where(PortfolioIPSVersion.portfolio_id == portfolio.id)) or 0) + 1
     required_return = None
     valuation_date = payload.valuation_date or date.today()
@@ -274,33 +279,15 @@ def ips_compliance(db: Session, user: User, portfolio_id: str):
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     version = db.get(PortfolioIPSVersion, portfolio.selected_ips_version_id) if portfolio.selected_ips_version_id else None
     if version is None:
-        return {"portfolio_id": portfolio.id, "ips_version_id": None, "compliant": False, "violations": [{"code": "missing_confirmed_ips", "message": "Confirm an IPS before evaluating compliance."}], "evaluated_at": datetime.now(UTC)}
+        missing = {"code": "missing_confirmed_ips", "label": "Confirmed IPS", "status": "NOT_EVALUATED", "message": "Confirm an IPS before evaluating compliance.", "severity": "availability"}
+        return {"portfolio_id": portfolio.id, "ips_version_id": None, "context": "current", "status": "NOT_EVALUATED", "compliant": False, "checks": [missing], "violations": [], "not_evaluated": [missing], "evaluated_at": datetime.now(UTC)}
     constraints = _load(version.constraints_json)
     summary = get_portfolio_summary(db, user, portfolio.id)
-    violations = []
-    if not summary.valuation_complete:
-        violations.append({"code": "incomplete_valuation", "symbols": summary.unpriced_symbols, "message": summary.valuation_note, "severity": "availability"})
     total = float(summary.total_value)
-    max_instrument = constraints.get("max_instrument_weight")
-    excluded = {str(value).upper() for value in constraints.get("excluded_instruments", [])}
-    allowed = {str(value).upper() for value in constraints.get("allowed_instruments", [])}
-    sector_values: dict[str, float] = {}
-    for holding in summary.holdings:
-        weight = float(holding.market_value) / total if total else 0
-        sector_values[holding.sector] = sector_values.get(holding.sector, 0) + weight
-        if max_instrument is not None and weight > float(max_instrument):
-            violations.append({"code": "max_instrument_weight", "symbol": holding.symbol, "actual": weight, "limit": float(max_instrument), "breach": weight - float(max_instrument), "severity": "hard"})
-        if holding.symbol.upper() in excluded or (allowed and holding.symbol.upper() not in allowed):
-            violations.append({"code": "instrument_not_allowed", "symbol": holding.symbol, "actual": weight, "limit": 0.0, "breach": weight, "severity": "hard"})
-    max_sector = constraints.get("max_sector_weight")
-    if max_sector is not None:
-        for sector, weight in sector_values.items():
-            if weight > float(max_sector): violations.append({"code": "max_sector_weight", "sector": sector, "actual": weight, "limit": float(max_sector), "breach": weight - float(max_sector), "severity": "hard"})
-    min_cash = constraints.get("min_cash_weight")
-    cash_weight = float(summary.cash_balance) / total if total else 0
-    if min_cash is not None and cash_weight < float(min_cash):
-        violations.append({"code": "min_cash_weight", "actual": cash_weight, "limit": float(min_cash), "breach": float(min_cash) - cash_weight, "severity": "hard"})
-    return {"portfolio_id": portfolio.id, "ips_version_id": version.id, "compliant": not violations, "violations": violations, "evaluated_at": datetime.now(UTC)}
+    positions = [{"symbol": holding.symbol, "weight": float(holding.market_value) / total if total else 0.0, "sector": holding.sector} for holding in summary.holdings]
+    positions.append({"symbol": "CASH", "weight": float(summary.cash_balance) / total if total else 0.0, "sector": "Cash"})
+    result = evaluate_ips_constraints(constraints, positions, ips_version_id=version.id, valuation_complete=summary.valuation_complete, unpriced_symbols=summary.unpriced_symbols, context="current")
+    return {"portfolio_id": portfolio.id, **result, "evaluated_at": datetime.now(UTC)}
 
 
 def _aligned_prices(db: Session, portfolio_id: str, start: date | None, end: date | None):
@@ -381,7 +368,7 @@ def _effective_risk_free_rate(db: Session, as_of: date, series_key: str | None =
     No default rate is invented. A series is eligible only when explicitly selected,
     marked ``is_risk_free`` in metadata, or uses a recognized SBP risk-free key.
     """
-    preferred_keys = [series_key] if series_key else ["sbp.tbill.3m_yield", "sbp.policy_rate"]
+    preferred_keys = [series_key] if series_key else ["sbp.tbill.3m_yield", "pk.tbill.3m_yield", "government.tbill.3m_yield"]
     candidates = list(db.scalars(select(MacroSeries)))
     ranked = []
     for series in candidates:
@@ -607,13 +594,19 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
     portfolio_value = float(get_portfolio_summary(db, user, portfolio.id).total_value)
     liquidity_weight = float(constraints.get("liquidity_requirement", 0) or 0) / portfolio_value if portfolio_value else 0
     cash_minimum = max(float(payload.minimum_cash_weight or 0), float(constraints.get("min_cash_weight", 0) or 0), liquidity_weight)
+    observed_risk_free = _effective_risk_free_rate(db, days[-1], payload.risk_free_series_key)
+    effective_risk_free = float(capm_inputs["risk_free"]["annual_rate"]) if capm_inputs else payload.risk_free_rate if payload.risk_free_rate is not None else float(observed_risk_free["annual_rate"]) if observed_risk_free else None
+    if payload.objective == "max_sharpe" and effective_risk_free is None:
+        raise HTTPException(status_code=422, detail="Maximum Sharpe optimization requires an explicit or observed T-bill/government risk-free rate.")
     if include_cash:
         symbols.append("CASH")
         returns = np.column_stack([returns, np.zeros(returns.shape[0])])
         lower.append(cash_minimum)
         upper.append(1.0)
         if estimate:
-            cash_return = float(capm_inputs["risk_free"]["annual_rate"]) if capm_inputs else payload.risk_free_rate
+            if effective_risk_free is None:
+                raise HTTPException(status_code=422, detail="A cash return assumption requires an explicit or observed T-bill/government risk-free rate.")
+            cash_return = effective_risk_free
             estimate = type(estimate)(estimate.method, np.append(estimate.values, cash_return), {**estimate.assumptions, "cash_return_assumption": cash_return})
     covariance = covariance_matrix(returns, payload.covariance_shrinkage)
     linear_upper_bounds = []
@@ -649,7 +642,7 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
             covariance, objective=payload.objective, expected_returns=estimate.values if estimate else None,
             target_return=target_return, target_volatility=target_volatility,
             target_beta=target_beta, betas=betas, risk_budgets=budgets,
-            risk_free_rate=float(capm_inputs["risk_free"]["annual_rate"]) if capm_inputs else payload.risk_free_rate,
+            risk_free_rate=effective_risk_free,
             lower_bounds=lower, upper_bounds=upper, linear_upper_bounds=linear_upper_bounds,
         )
     except ValueError as exc:
@@ -801,14 +794,16 @@ def run_scenario(db: Session, user: User, portfolio_id: str, payload: ScenarioRe
     }
     stressed_weights["CASH"] = float(summary.cash_balance) / stressed_total if stressed_total else 0.0
     constraints = _selected_ips_constraints(db, portfolio)
-    violations = []
-    maximum = constraints.get("max_instrument_weight")
-    if maximum is not None:
-        violations.extend({"code": "max_instrument_weight", "symbol": symbol, "actual": weight, "limit": float(maximum), "breach": weight - float(maximum), "severity": "hard"} for symbol, weight in stressed_weights.items() if symbol != "CASH" and weight > float(maximum) + 1e-8)
-    minimum_cash = constraints.get("min_cash_weight")
-    if minimum_cash is not None and stressed_weights["CASH"] + 1e-8 < float(minimum_cash):
-        violations.append({"code": "min_cash_weight", "actual": stressed_weights["CASH"], "limit": float(minimum_cash), "breach": float(minimum_cash) - stressed_weights["CASH"], "severity": "hard"})
-    compliance = {"ips_version_id": portfolio.selected_ips_version_id, "compliant": not violations, "violations": violations, "stressed_weights": stressed_weights}
+    sector_by_symbol = {holding.symbol: holding.sector for holding in summary.holdings}
+    compliance = evaluate_ips_constraints(
+        constraints,
+        [{"symbol": symbol, "weight": weight, "sector": "Cash" if symbol == "CASH" else sector_by_symbol.get(symbol)} for symbol, weight in stressed_weights.items()],
+        ips_version_id=portfolio.selected_ips_version_id,
+        valuation_complete=summary.valuation_complete,
+        unpriced_symbols=summary.unpriced_symbols,
+        context="stressed",
+    )
+    compliance["stressed_weights"] = stressed_weights
     result = {"portfolio_value": total, "stressed_portfolio_value": stressed_total, "pnl": pnl, "pnl_percent": pnl / total if total else 0, "positions": positions, "sector_contributions": sector_contributions, "compliance": compliance, "assumptions": ["Direct instrument shocks override sector/factor mappings to avoid double counting.", "Sector and factor shocks are additive when no direct shock exists.", "Cash is held constant under the configured shocks.", "No liquidity, tax, fee, or second-order effects are modeled."]}
     all_shocks = {"instruments": payload.shocks, "sectors": payload.sector_shocks, "factors": payload.factor_shocks}
     row = ScenarioRun(portfolio_id=portfolio.id, name=payload.name, shocks_json=_json(all_shocks), result_json=_json(result), data_cutoff=cutoff, assumptions_json=_json({"scenario_type": payload.scenario_type, "mapping_order": ["instrument", "sector", "factor"]}), status="completed")
@@ -825,7 +820,36 @@ def create_monitoring_rule(db: Session, user: User, portfolio_id: str, rule_type
 
 def list_recommendations(db: Session, user: User):
     rows = db.scalars(select(Recommendation).where(Recommendation.user_id == user.id).order_by(Recommendation.created_at.desc())).all()
-    return [{"id": r.id, "portfolio_id": r.portfolio_id, "trigger": r.trigger, "evidence": _load(r.evidence_json), "ips_violation": json.loads(r.ips_violation_json), "assumptions": _load(r.assumptions_json), "expected_effect": _load(r.expected_effect_json), "uncertainty": _load(r.uncertainty_json), "freshness": _load(r.freshness_json), "message": r.message, "status": r.status, "created_at": r.created_at} for r in rows]
+    results = []
+    for row in rows:
+        evidence = _load(row.evidence_json)
+        assumptions = _load(row.assumptions_json)
+        rule_type = str(evidence.get("rule_type") or assumptions.get("rule_type") or "portfolio signal")
+        if rule_type in {"concentration", "position_weight"} and evidence.get("classification") is None:
+            portfolio = get_portfolio_or_404(db, user, row.portfolio_id)
+            version = db.get(PortfolioIPSVersion, portfolio.selected_ips_version_id) if portfolio.selected_ips_version_id else None
+            constraints = _load(version.constraints_json) if version else {}
+            current_value = max((float(item["weight"]) for item in evidence.get("breaches", []) if item.get("weight") is not None), default=None)
+            ips_limit = constraints.get("max_instrument_weight")
+            evidence.update({"rule_type": rule_type, "rule_threshold": assumptions.get("threshold", {"maximum": evidence.get("limit")}), "current_value": current_value, "related_ips_limit": ips_limit, "ips_version_id": version.id if version else None, "classification": "mandate_breach" if current_value is not None and ips_limit is not None and current_value > float(ips_limit) else "monitoring_warning"})
+        trigger_label = "IPS mandate breach" if row.trigger.startswith("ips:") else rule_type.replace("_", " ").title()
+        results.append({
+            "id": row.id,
+            "portfolio_id": row.portfolio_id,
+            "trigger": row.trigger,
+            "trigger_label": trigger_label,
+            "evidence": evidence,
+            "ips_violation": json.loads(row.ips_violation_json),
+            "assumptions": assumptions,
+            "expected_effect": _load(row.expected_effect_json),
+            "uncertainty": _load(row.uncertainty_json),
+            "freshness": _load(row.freshness_json),
+            "message": row.message,
+            "status": row.status,
+            "links": {"monitoring": "/monitoring", "risk": f"/portfolios/{row.portfolio_id}/risk", "build": f"/portfolios/{row.portfolio_id}/build"},
+            "created_at": row.created_at,
+        })
+    return results
 
 
 def list_optimizer_runs(db: Session, user: User, portfolio_id: str):

@@ -19,6 +19,7 @@ from app.models.user import User
 from app.models.workstation import PortfolioIPSVersion
 from app.schemas.workstation import PortfolioComparisonRequest
 from app.services.canonical_market_service import price_series
+from app.services.compliance_service import evaluate_ips_constraints
 from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_summary
 from app.services.workstation_service import (
     _aligned_prices,
@@ -148,9 +149,9 @@ def efficient_frontier_analysis(db: Session, user: User, portfolio_id: str, poin
         covariance,
         objective="max_sharpe",
         expected_returns=expected.values,
-        risk_free_rate=float(risk_free["annual_rate"]) if risk_free else 0.0,
+        risk_free_rate=float(risk_free["annual_rate"]),
         upper_bounds=upper,
-    )
+    ) if risk_free else None
     summary = get_portfolio_summary(db, user, portfolio.id)
     market_values = {row.symbol: float(row.market_value) for row in summary.holdings}
     risky_total = sum(market_values.values())
@@ -174,7 +175,7 @@ def efficient_frontier_analysis(db: Session, user: User, portfolio_id: str, poin
         "markers": {
             "current": point(current_weights),
             "global_minimum_variance": point(minimum.weights if minimum.status == "optimal" else None),
-            "maximum_sharpe": point(maximum_sharpe.weights if maximum_sharpe.status == "optimal" else None),
+            "maximum_sharpe": point(maximum_sharpe.weights if maximum_sharpe and maximum_sharpe.status == "optimal" else None),
         },
         "assumptions": {
             "long_only": True,
@@ -303,21 +304,13 @@ def return_distribution_analysis(db: Session, user: User, portfolio_id: str, bin
     }
 
 
-def _weight_compliance(weights: dict[str, float], constraints: dict[str, object], ips_version_id: str | None):
-    violations: list[dict[str, object]] = []
-    maximum = constraints.get("max_instrument_weight")
-    if maximum is not None:
-        for symbol, weight in weights.items():
-            if symbol != "CASH" and weight > float(maximum) + 1e-8:
-                violations.append({"code": "max_instrument_weight", "symbol": symbol, "actual": weight, "limit": float(maximum), "breach": weight - float(maximum), "severity": "hard"})
-    minimum_cash = constraints.get("min_cash_weight")
-    if minimum_cash is not None and weights.get("CASH", 0) + 1e-8 < float(minimum_cash):
-        violations.append({"code": "min_cash_weight", "actual": weights.get("CASH", 0), "limit": float(minimum_cash), "breach": float(minimum_cash) - weights.get("CASH", 0), "severity": "hard"})
-    excluded = {str(value).upper() for value in constraints.get("excluded_instruments", [])}
-    for symbol in excluded:
-        if weights.get(symbol, 0) > 1e-8:
-            violations.append({"code": "instrument_not_allowed", "symbol": symbol, "actual": weights[symbol], "limit": 0.0, "breach": weights[symbol], "severity": "hard"})
-    return {"ips_version_id": ips_version_id, "compliant": not violations, "violations": violations}
+def _weight_compliance(weights: dict[str, float], constraints: dict[str, object], ips_version_id: str | None, sectors: dict[str, str | None] | None = None):
+    return evaluate_ips_constraints(
+        constraints,
+        [{"symbol": symbol, "weight": weight, "sector": "Cash" if symbol == "CASH" else (sectors or {}).get(symbol)} for symbol, weight in weights.items()],
+        ips_version_id=ips_version_id,
+        context="proposed",
+    )
 
 
 def _portfolio_metrics(asset_returns: np.ndarray, weights: np.ndarray, expected: np.ndarray, covariance: np.ndarray, risk_free_rate: float | None, required_return: float | None, cash_weight: float):
@@ -383,7 +376,7 @@ def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: Portf
     proposed_risk = dict(zip(symbols, [float(value) for value in proposed_rc["percentage"]], strict=True))
     labels = {
         "expected_return": ("Expected return", "decimal", "higher"),
-        "realized_return": ("Realized CAGR", "decimal", "neutral"),
+        "realized_return": ("Historical modeled CAGR", "decimal", "neutral"),
         "required_return": ("Required return", "decimal", "neutral"),
         "return_shortfall": ("Excess / shortfall vs required", "decimal", "higher"),
         "volatility": ("Volatility", "decimal", "lower"),
@@ -413,7 +406,7 @@ def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: Portf
         "current_risk_contributions": current_risk,
         "proposed_risk_contributions": proposed_risk,
         "current_compliance": ips_compliance(db, user, portfolio.id),
-        "proposed_compliance": _weight_compliance(proposed, constraints, portfolio.selected_ips_version_id),
+        "proposed_compliance": _weight_compliance(proposed, constraints, portfolio.selected_ips_version_id, {row.symbol: row.sector for row in summary.holdings}),
         "trade_offs": trade_offs,
         "warnings": [] if required_return is not None else ["Required-return comparison is unavailable until the confirmed IPS contains a calculable goal."],
     }

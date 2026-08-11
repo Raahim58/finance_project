@@ -85,8 +85,12 @@ class RequiredReturnAnalysis(BaseModel):
 class IPSComplianceResponse(BaseModel):
     portfolio_id: str
     ips_version_id: str | None
+    context: str = "current"
+    status: Literal["PASS", "BREACH", "NOT_EVALUATED"]
     compliant: bool
+    checks: list[dict[str, object]] = Field(default_factory=list)
     violations: list[dict[str, object]]
+    not_evaluated: list[dict[str, object]] = Field(default_factory=list)
     evaluated_at: datetime
 
 
@@ -246,7 +250,7 @@ class OptimizerRequest(BaseModel):
     target_beta: float | None = None
     beta_assumptions: dict[str, float] | None = None
     risk_budgets: dict[str, float] | None = None
-    risk_free_rate: float = 0.0
+    risk_free_rate: float | None = None
     benchmark_symbol: str | None = Field(default=None, max_length=30)
     risk_free_series_key: str | None = Field(default=None, max_length=160)
     start_date: date | None = None
@@ -367,6 +371,7 @@ class RecommendationResponse(BaseModel):
     id: str
     portfolio_id: str
     trigger: str
+    trigger_label: str | None = None
     evidence: dict[str, object]
     ips_violation: object = Field(default_factory=dict)
     assumptions: dict[str, object] = Field(default_factory=dict)
@@ -375,4 +380,5 @@ class RecommendationResponse(BaseModel):
     freshness: dict[str, object] = Field(default_factory=dict)
     message: str
     status: str
+    links: dict[str, str] = Field(default_factory=dict)
     created_at: datetime
