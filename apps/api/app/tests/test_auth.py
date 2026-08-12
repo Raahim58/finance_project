@@ -1,4 +1,19 @@
-from app.core.config import settings
+import pytest
+
+from app.core.config import Settings, settings
+from app.core.security import hash_password
+
+
+def test_password_hash_uses_explicit_test_work_factor():
+    password_hash = hash_password("password123")
+    assert settings.app_env == "test"
+    assert settings.bcrypt_rounds == 4
+    assert password_hash.startswith("$2b$04$")
+
+
+def test_production_rejects_a_reduced_password_work_factor():
+    with pytest.raises(ValueError, match="BCRYPT_ROUNDS must be at least 12"):
+        Settings(app_env="production", market_data_mode="dps", bcrypt_rounds=4)
 
 
 def test_signup_login_and_me(client):

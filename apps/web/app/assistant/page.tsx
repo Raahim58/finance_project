@@ -1,13 +1,29 @@
 "use client";
 
-import { FormEvent,useEffect,useState } from "react";
+import { FormEvent,useEffect,useRef,useState } from "react";
 import { Icon } from "@/components/Icon";
 import { AssistantResult,Portfolio,getPortfolios,sendAssistantMessage } from "@/lib/api";
 
 export default function AssistantPage(){
   const [portfolios,setPortfolios]=useState<Portfolio[]>([]);const [portfolioId,setPortfolioId]=useState("");const [question,setQuestion]=useState("");const [result,setResult]=useState<AssistantResult|null>(null);const [loading,setLoading]=useState(false);const [error,setError]=useState("");
-  useEffect(()=>{void getPortfolios().then(rows=>{setPortfolios(rows);setPortfolioId(rows.find(r=>r.is_default)?.id??rows[0]?.id??"")}).catch((reason:unknown)=>setError(reason instanceof Error?`Portfolio scope request failed: ${reason.message}`:"Portfolio scope request failed"))},[]);
-  async function ask(e:FormEvent){e.preventDefault();setLoading(true);setError("");try{setResult(await sendAssistantMessage(question,portfolioId||undefined))}catch(err){setError(err instanceof Error?err.message:"Assistant failed")}finally{setLoading(false)}}
+  // Portfolio scope defaults to Market-wide and is only ever changed by an explicit
+  // user selection; the list load must never silently switch a question's scope.
+  const requestSeq=useRef(0);
+  useEffect(()=>{void getPortfolios().then(setPortfolios).catch((reason:unknown)=>setError(reason instanceof Error?`Portfolio scope request failed: ${reason.message}`:"Portfolio scope request failed"))},[]);
+  async function ask(e:FormEvent){
+    e.preventDefault();
+    const askedQuestion=question;const askedPortfolioId=portfolioId;
+    const id=++requestSeq.current;
+    setLoading(true);setError("");
+    try{
+      const response=await sendAssistantMessage(askedQuestion,askedPortfolioId||undefined);
+      if(id===requestSeq.current) setResult(response);
+    }catch(err){
+      if(id===requestSeq.current) setError(err instanceof Error?err.message:"Assistant failed");
+    }finally{
+      if(id===requestSeq.current) setLoading(false);
+    }
+  }
   return <div className="page-wrap">
     <header className="page-heading"><div><p className="eyebrow">Grounded decision support</p><h1 className="page-title">Research assistant</h1><p className="page-subtitle">A serious analysis surface that keeps conclusions, evidence, uncertainty and audit trace distinct.</p></div><span className="badge badge-good">Evidence required</span></header>
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]"><main className="grid min-w-0 content-start gap-5"><form onSubmit={ask} className="source-rail p-5"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h2 className="text-[14px] font-semibold">New research question</h2><label className="field-label w-full sm:w-60"><span className="sr-only">Portfolio scope</span><select aria-label="Portfolio scope" className="field" value={portfolioId} onChange={e=>setPortfolioId(e.target.value)}><option value="">Market-wide</option>{portfolios.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label></div><label className="field-label">Question<textarea className="field mt-1 text-sm leading-6" rows={5} value={question} onChange={e=>setQuestion(e.target.value)} placeholder="Where is risk concentrated, what changed, and what evidence is still missing?" required/></label><div className="mt-4 flex justify-end"><button className="btn btn-primary" disabled={loading}><Icon name="assistant"/>{loading?"Gathering evidence…":"Analyze question"}</button></div></form>{error?<div className="notice notice-error" role="alert"><Icon name="warning"/>{error}</div>:null}{result?<Response result={result}/>:<div className="rounded-xl bg-surface px-6 py-12 text-center"><Icon name="assistant" size={28} className="mx-auto text-muted"/><strong className="mt-3 block text-[13px]">Ask a portfolio or market question</strong><span className="mt-1 block text-[12px] text-muted">The response will show its evidence boundaries and freshness warnings.</span></div>}</main><aside className="grid h-fit gap-4 xl:sticky xl:top-20"><section className="panel"><div className="panel-head"><h2 className="panel-title">Analysis scope</h2></div><div className="panel-body space-y-4"><Scope label="Portfolio" value={portfolios.find(p=>p.id===portfolioId)?.name??"Market-wide"}/><Scope label="Numerical facts" value="Structured database"/><Scope label="Narrative evidence" value="Cited documents"/><Scope label="Execution" value="No trade placement"/></div></section><div className="notice"><Icon name="warning"/><span>Verify missing or stale evidence before acting.</span></div></aside></div>

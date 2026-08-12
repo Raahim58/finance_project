@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from random import Random
 from types import SimpleNamespace
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, insert, select, text
 from sqlalchemy.orm import Session
 
 from app.models.market import (
@@ -250,7 +250,7 @@ def generate_mock_market_data(db: Session, days: int = 365, end_date: date | Non
     previous_closes = {company.symbol: BASE_PRICES[company.symbol] for company in companies}
     random = Random(202602)
 
-    price_count = 0
+    price_rows: list[dict[str, object]] = []
     for index, trade_date in enumerate(dates):
         market_cycle = Decimal(str(((index % 23) - 11) / 1000))
         for company in companies:
@@ -270,31 +270,32 @@ def generate_mock_market_data(db: Session, days: int = 365, end_date: date | Non
             volume = int(base_volume * (1 + (index % 17) / 10) * random.uniform(0.75, 1.45))
             traded_value = money(close * Decimal(volume))
 
-            db.add(
-                MarketPrice(
-                    company_id=company.id,
-                    symbol=company.symbol,
-                    trade_date=trade_date,
-                    open=open_price,
-                    high=high,
-                    low=low,
-                    close=close,
-                    previous_close=previous_close,
-                    change=change,
-                    change_percent=change_percent,
-                    volume=volume,
-                    value=traded_value,
-                    market_cap=money(close * Decimal(80_000_000 + (sum(ord(char) for char in company.symbol) * 1_000_000))),
-                    source="mock",
-                )
+            price_rows.append(
+                {
+                    "company_id": company.id,
+                    "symbol": company.symbol,
+                    "trade_date": trade_date,
+                    "open": open_price,
+                    "high": high,
+                    "low": low,
+                    "close": close,
+                    "previous_close": previous_close,
+                    "change": change,
+                    "change_percent": change_percent,
+                    "volume": volume,
+                    "value": traded_value,
+                    "market_cap": money(close * Decimal(80_000_000 + (sum(ord(char) for char in company.symbol) * 1_000_000))),
+                    "source": "mock",
+                }
             )
             previous_closes[company.symbol] = close
-            price_count += 1
 
-    db.flush()
+    # Executemany avoids thousands of ORM unit-of-work objects in demo/test seeds.
+    # The generator is deterministic and no caller needs the inserted instances.
+    db.execute(insert(MarketPrice), price_rows)
     stats_count = compute_market_stats(db, source="mock")
     db.commit()
-    return {"companies": len(companies), "prices": price_count, "derived_stats": stats_count}
+    return {"companies": len(companies), "prices": len(price_rows), "derived_stats": stats_count}
 
 
 def cleanup_invalid_market_prices(db: Session) -> int:
@@ -436,89 +437,84 @@ def compute_market_stats(
     target_date: date | None = None,
 ) -> int:
     if target_date:
-        dates = [target_date]
         db.execute(delete(SectorDailyStats).where(SectorDailyStats.source == source, SectorDailyStats.trade_date == target_date))
         db.execute(delete(MarketSnapshot).where(MarketSnapshot.source == source, MarketSnapshot.snapshot_date == target_date))
     else:
-        dates = list(db.scalars(select(MarketPrice.trade_date).where(MarketPrice.source == source).distinct()))
         db.execute(delete(SectorDailyStats).where(SectorDailyStats.source == source))
         db.execute(delete(MarketSnapshot).where(MarketSnapshot.source == source))
 
-    derived_count = 0
-    for trade_date in dates:
-        prices = list(
-            db.scalars(
-                select(MarketPrice).where(MarketPrice.source == source, MarketPrice.trade_date == trade_date)
-            )
+    query = (
+        select(
+            MarketPrice.trade_date,
+            Company.sector,
+            MarketPrice.volume,
+            MarketPrice.value,
+            MarketPrice.change_percent,
+            MarketPrice.change,
         )
-        if not prices:
-            continue
+        .join(Company, Company.id == MarketPrice.company_id)
+        .where(MarketPrice.source == source)
+    )
+    if target_date:
+        query = query.where(MarketPrice.trade_date == target_date)
 
-        total_volume = sum(price.volume for price in prices)
-        total_value = sum((price.value for price in prices), Decimal("0"))
-        avg_change_percent = sum((price.change_percent for price in prices), Decimal("0")) / Decimal(len(prices))
+    prices_by_date: dict[date, list[object]] = {}
+    for row in db.execute(query):
+        prices_by_date.setdefault(row.trade_date, []).append(row)
+
+    snapshot_rows: list[dict[str, object]] = []
+    sector_rows: list[dict[str, object]] = []
+    for trade_date, prices in prices_by_date.items():
+        total_volume = sum(row.volume for row in prices)
+        total_value = sum((row.value for row in prices), Decimal("0"))
+        avg_change_percent = sum((row.change_percent for row in prices), Decimal("0")) / Decimal(len(prices))
+
         # A constituent average is demo data, not an observed index. Never label it
         # as KSE-100 for a live source; real snapshots are inserted only by an
         # index provider carrying its own artifact/provenance.
         if source == "mock":
             index_value = money(45_000 + (avg_change_percent * Decimal("85")) + Decimal(len(prices) * 10))
             index_change = money(avg_change_percent * Decimal("85"))
-            db.add(
-                MarketSnapshot(
-                    snapshot_date=trade_date,
-                    index_name="KSE-100 Mock",
-                    index_value=index_value,
-                    index_change=index_change,
-                    index_change_percent=percent(avg_change_percent),
-                    total_volume=total_volume,
-                    total_value=money(total_value),
-                    source=source,
-                )
+            snapshot_rows.append(
+                {
+                    "snapshot_date": trade_date,
+                    "index_name": "KSE-100 Mock",
+                    "index_value": index_value,
+                    "index_change": index_change,
+                    "index_change_percent": percent(avg_change_percent),
+                    "total_volume": total_volume,
+                    "total_value": money(total_value),
+                    "source": source,
+                }
             )
-            derived_count += 1
 
-        sector_names = {
-            row[0]
-            for row in db.execute(
-                select(Company.sector)
-                .join(MarketPrice, MarketPrice.company_id == Company.id)
-                .where(MarketPrice.source == source, MarketPrice.trade_date == trade_date)
-            )
-        }
-        for sector in sector_names:
-            sector_prices = list(
-                db.scalars(
-                    select(MarketPrice)
-                    .join(Company, Company.id == MarketPrice.company_id)
-                    .where(
-                        MarketPrice.source == source,
-                        MarketPrice.trade_date == trade_date,
-                        Company.sector == sector,
-                    )
-                )
-            )
-            if not sector_prices:
-                continue
+        sector_prices_by_name: dict[str, list[object]] = {}
+        for price in prices:
+            sector_prices_by_name.setdefault(price.sector, []).append(price)
+        for sector, sector_prices in sector_prices_by_name.items():
             sector_avg = sum((price.change_percent for price in sector_prices), Decimal("0")) / Decimal(
                 len(sector_prices)
             )
-            db.add(
-                SectorDailyStats(
-                    sector=sector,
-                    trade_date=trade_date,
-                    total_volume=sum(price.volume for price in sector_prices),
-                    total_value=money(sum((price.value for price in sector_prices), Decimal("0"))),
-                    average_change_percent=percent(sector_avg),
-                    advancers=sum(1 for price in sector_prices if price.change > 0),
-                    decliners=sum(1 for price in sector_prices if price.change < 0),
-                    unchanged=sum(1 for price in sector_prices if price.change == 0),
-                    source=source,
-                )
+            sector_rows.append(
+                {
+                    "sector": sector,
+                    "trade_date": trade_date,
+                    "total_volume": sum(price.volume for price in sector_prices),
+                    "total_value": money(sum((price.value for price in sector_prices), Decimal("0"))),
+                    "average_change_percent": percent(sector_avg),
+                    "advancers": sum(1 for price in sector_prices if price.change > 0),
+                    "decliners": sum(1 for price in sector_prices if price.change < 0),
+                    "unchanged": sum(1 for price in sector_prices if price.change == 0),
+                    "source": source,
+                }
             )
-            derived_count += 1
 
+    if snapshot_rows:
+        db.execute(insert(MarketSnapshot), snapshot_rows)
+    if sector_rows:
+        db.execute(insert(SectorDailyStats), sector_rows)
     db.commit()
-    return derived_count
+    return len(snapshot_rows) + len(sector_rows)
 
 
 def record_market_ingestion_run(

@@ -3,6 +3,8 @@ import os
 from cryptography.fernet import Fernet
 
 os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
+os.environ["APP_ENV"] = "test"
+os.environ["BCRYPT_ROUNDS"] = "4"
 os.environ["JWT_SECRET_KEY"] = "test-jwt-secret"
 os.environ["ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
 

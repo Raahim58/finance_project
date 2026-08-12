@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "dev-only-change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
+    bcrypt_rounds: int = Field(default=12, ge=4, le=16)
     enable_demo_access: bool = False
     demo_access_token: str = ""
     demo_access_email: str = "portfolio.manager@example.com"
@@ -74,6 +75,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def guard_mock_data_in_production(self) -> "Settings":
+        if self.app_env.lower().strip() in PRODUCTION_APP_ENVS and self.bcrypt_rounds < 12:
+            raise ValueError("BCRYPT_ROUNDS must be at least 12 in production")
         if self.app_env.lower().strip() in PRODUCTION_APP_ENVS and self.market_data_mode == "mock" and not self.allow_mock_in_production:
             raise ValueError(
                 "Refusing to start with APP_ENV=production and MARKET_DATA_MODE=mock: this would silently serve "
