@@ -307,9 +307,29 @@ def ips_compliance(db: Session, user: User, portfolio_id: str):
     constraints = _load(version.constraints_json)
     summary = get_portfolio_summary(db, user, portfolio.id)
     total = float(summary.total_value)
-    positions = [{"symbol": holding.symbol, "weight": float(holding.market_value) / total if total else 0.0, "sector": holding.sector} for holding in summary.holdings]
+    instruments = {row.symbol: row for row in db.scalars(select(Instrument).where(Instrument.symbol.in_([holding.symbol for holding in summary.holdings])))}
+    positions = []
+    for holding in summary.holdings:
+        instrument = instruments.get(holding.symbol)
+        metadata = _load(instrument.metadata_json) if instrument and instrument.metadata_json else {}
+        positions.append({"symbol": holding.symbol, "weight": float(holding.market_value) / total if total else 0.0, "sector": holding.sector, "shariah_eligible": metadata.get("shariah_compliant")})
     positions.append({"symbol": "CASH", "weight": float(summary.cash_balance) / total if total else 0.0, "sector": "Cash"})
-    result = evaluate_ips_constraints(constraints, positions, ips_version_id=version.id, valuation_complete=summary.valuation_complete, unpriced_symbols=summary.unpriced_symbols, context="current")
+    modeled_inputs: dict[str, object] = {"liquid_assets": float(summary.cash_balance), "data_cutoff": summary.data_freshness_date, "estimator": "aligned_price_covariance_v1"}
+    try:
+        quant = portfolio_quant(db, user, portfolio.id)
+        variance = quant.get("portfolio", {}).get("variance")
+        benchmark = quant.get("benchmark") if isinstance(quant.get("benchmark"), dict) else {}
+        benchmark_metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), dict) else {}
+        modeled_inputs.update({
+            "portfolio_volatility": float(np.sqrt(max(float(variance), 0))) if variance is not None else None,
+            "portfolio_beta": benchmark_metrics.get("beta"),
+            "risk_contributions": quant.get("risk_contributions"),
+            "data_cutoff": quant.get("data_cutoff"),
+        })
+    except HTTPException:
+        # Availability is reported per modeled check; cash and weight checks still run.
+        pass
+    result = evaluate_ips_constraints(constraints, positions, ips_version_id=version.id, valuation_complete=summary.valuation_complete, unpriced_symbols=summary.unpriced_symbols, context="current", modeled_inputs=modeled_inputs)
     return {"portfolio_id": portfolio.id, **result, "evaluated_at": datetime.now(UTC)}
 
 
@@ -610,7 +630,7 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
             estimate = estimate_expected_returns(payload.expected_return_method, returns, assumptions=assumptions, shrinkage=payload.expected_return_shrinkage)
     ips_version = db.get(PortfolioIPSVersion, portfolio.selected_ips_version_id) if portfolio.selected_ips_version_id else None
     constraints = _load(ips_version.constraints_json) if ips_version else constraints
-    informational = {"goal", "benchmark_symbol", "performance_benchmark_symbol", "capm_market_proxy_symbol", "risk_free_series_key", "operational_cash_return", "operational_cash_return_basis", "operational_cash_return_effective_date", "long_only", "loss_budget", "horizon_years", "notes", "risk_capacity", "risk_willingness", "overall_risk_tolerance", "tax_notes", "required_return_method", "objective_inputs"}
+    informational = {"goal", "benchmark_symbol", "performance_benchmark_symbol", "capm_market_proxy_symbol", "risk_free_series_key", "operational_cash_return", "operational_cash_return_basis", "operational_cash_return_effective_date", "long_only", "loss_budget", "horizon_years", "notes", "risk_capacity", "risk_willingness", "overall_risk_tolerance", "risk_budget_tolerance", "profile_policy_note", "tax_notes", "required_return_method", "objective_inputs"}
     supported = {
         "max_instrument_weight", "excluded_instruments", "allowed_instruments", "min_cash_weight", "max_cash_weight",
         "max_sector_weight", "allowed_asset_types", "allowed_currencies", "shariah_only",
@@ -883,6 +903,23 @@ def run_scenario(db: Session, user: User, portfolio_id: str, payload: ScenarioRe
     stressed_weights["CASH"] = float(summary.cash_balance) / stressed_total if stressed_total else 0.0
     constraints = _selected_ips_constraints(db, portfolio)
     sector_by_symbol = {holding.symbol: holding.sector for holding in summary.holdings}
+    modeled_inputs: dict[str, object] = {"liquid_assets": float(summary.cash_balance), "data_cutoff": cutoff, "estimator": "stressed_weight_aligned_price_covariance_v1"}
+    try:
+        model_symbols, model_days, model_prices = _aligned_prices(db, portfolio.id, None, None)
+        model_returns = return_matrix(model_prices)
+        model_covariance = covariance_matrix(model_returns, 0.20)
+        model_weights = np.asarray([stressed_weights.get(symbol, 0.0) for symbol in model_symbols])
+        modeled_inputs["portfolio_volatility"] = float(np.sqrt(max(model_weights @ model_covariance @ model_weights, 0)))
+        modeled_inputs["risk_contributions"] = dict(zip(model_symbols, [float(value) for value in risk_contributions(model_weights, model_covariance)["percentage"]], strict=True))
+        benchmark_symbol = _benchmark_symbol(db, portfolio, constraints)
+        risk_free = _effective_risk_free_rate(db, model_days[-1], str(constraints.get("risk_free_series_key")) if constraints.get("risk_free_series_key") else None)
+        if benchmark_symbol and risk_free:
+            modeled_returns = model_returns @ model_weights
+            benchmark_analysis = _benchmark_analysis(db, benchmark_symbol, dict(zip(model_days[1:], modeled_returns.tolist(), strict=True)), float(risk_free["annual_rate"]))
+            if benchmark_analysis.get("available"):
+                modeled_inputs["portfolio_beta"] = benchmark_analysis.get("metrics", {}).get("beta")
+    except HTTPException:
+        pass
     compliance = evaluate_ips_constraints(
         constraints,
         [{"symbol": symbol, "weight": weight, "sector": "Cash" if symbol == "CASH" else sector_by_symbol.get(symbol)} for symbol, weight in stressed_weights.items()],
@@ -890,6 +927,7 @@ def run_scenario(db: Session, user: User, portfolio_id: str, payload: ScenarioRe
         valuation_complete=summary.valuation_complete,
         unpriced_symbols=summary.unpriced_symbols,
         context="stressed",
+        modeled_inputs=modeled_inputs,
     )
     compliance["stressed_weights"] = stressed_weights
     assumptions = ["Direct instrument shocks override sector/factor mappings to avoid double counting.", "Sector and factor shocks are additive when no direct shock exists.", "Cash is held constant under the configured shocks.", "No liquidity, tax, fee, or second-order effects are modeled."]

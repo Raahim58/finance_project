@@ -50,6 +50,7 @@ def evaluate_ips_constraints(
     valuation_complete: bool = True,
     unpriced_symbols: list[str] | None = None,
     context: str = "current",
+    modeled_inputs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Evaluate every portfolio state through one deterministic IPS contract.
 
@@ -58,6 +59,7 @@ def evaluate_ips_constraints(
     """
 
     rows = [dict(position) for position in positions]
+    modeled = modeled_inputs or {}
     checks: list[dict[str, Any]] = []
     symbols = {str(row.get("symbol", "")).upper() for row in rows}
 
@@ -133,12 +135,55 @@ def evaluate_ips_constraints(
     else:
         checks.append(_check("shariah_eligibility", "Shariah eligibility", "NOT_EVALUATED", message="The IPS does not require Shariah-only holdings.", severity="not_applicable"))
 
-    for code, label in (("target_beta", "Portfolio beta"), ("target_volatility", "Portfolio volatility"), ("risk_budgets", "Risk budget"), ("liquidity_requirement", "Liquidity requirement")):
-        if constraints.get(code) is not None:
-            checks.append(_check(code, label, "NOT_EVALUATED", message=f"{label} requires modeled inputs that were not supplied to this compliance evaluation.", limit=constraints.get(code), severity="availability"))
+    for code, label, input_key in (
+        ("target_beta", "Portfolio beta", "portfolio_beta"),
+        ("target_volatility", "Portfolio volatility", "portfolio_volatility"),
+    ):
+        configured = constraints.get(code)
+        if configured is None:
+            continue
+        actual = modeled.get(input_key)
+        if actual is None:
+            checks.append(_check(code, label, "NOT_EVALUATED", message=f"{label} requires a modeled input that is unavailable for this portfolio state.", limit=configured, severity="availability"))
+            continue
+        limit = float(configured)
+        breached = float(actual) > limit + 1e-8
+        checks.append(_check(code, label, "BREACH" if breached else "PASS", message=f"{label} exceeds the confirmed IPS ceiling." if breached else f"{label} is within the confirmed IPS ceiling.", actual=float(actual), limit=limit, estimator=modeled.get("estimator"), data_cutoff=modeled.get("data_cutoff")))
+
+    configured_budgets = constraints.get("risk_budgets")
+    if configured_budgets is not None:
+        actual_budgets = modeled.get("risk_contributions")
+        if not isinstance(actual_budgets, dict) or not actual_budgets:
+            checks.append(_check("risk_budgets", "Risk budget", "NOT_EVALUATED", message="Risk-budget compliance requires modeled security risk contributions.", limit=configured_budgets, severity="availability"))
+        else:
+            configured_rows = {str(symbol).upper(): float(value) for symbol, value in dict(configured_budgets).items() if str(symbol).upper() != "CASH"}
+            budget_total = sum(configured_rows.values())
+            tolerance = float(constraints.get("risk_budget_tolerance", 0.05))
+            normalized = {symbol: value / budget_total for symbol, value in configured_rows.items()} if budget_total > 0 else {}
+            missing = sorted(set(normalized) - {str(symbol).upper() for symbol in actual_budgets})
+            if not normalized or missing:
+                checks.append(_check("risk_budgets", "Risk budget", "NOT_EVALUATED", message="Configured risk budgets are incomplete for the modeled security universe.", limit=configured_budgets, symbols=missing, severity="availability"))
+            else:
+                breaches = [
+                    {"symbol": symbol, "actual": float(actual_budgets.get(symbol, 0)), "limit": target + tolerance, "target": target}
+                    for symbol, target in normalized.items()
+                    if float(actual_budgets.get(symbol, 0)) > target + tolerance + 1e-8
+                ]
+                checks.append(_check("risk_budgets", "Risk budget", "BREACH" if breaches else "PASS", message=f"{len(breaches)} security risk contribution(s) exceed target plus tolerance." if breaches else "Security risk contributions are within configured targets plus tolerance.", limit={"targets": normalized, "tolerance": tolerance}, breaches=breaches, estimator=modeled.get("estimator"), data_cutoff=modeled.get("data_cutoff")))
+
+    liquidity_requirement = constraints.get("liquidity_requirement")
+    if liquidity_requirement is not None:
+        available_cash = modeled.get("liquid_assets")
+        if available_cash is None:
+            checks.append(_check("liquidity_requirement", "Liquidity requirement", "NOT_EVALUATED", message="Liquidity compliance requires the current operational cash balance.", limit=float(liquidity_requirement), severity="availability"))
+        else:
+            limit = float(liquidity_requirement)
+            breached = float(available_cash) + 1e-8 < limit
+            checks.append(_check("liquidity_requirement", "Liquidity requirement", "BREACH" if breached else "PASS", message="Operational cash is below the confirmed near-term liquidity requirement." if breached else "Operational cash covers the confirmed near-term liquidity requirement.", actual=float(available_cash), limit=limit, unit="PKR", data_cutoff=modeled.get("data_cutoff")))
 
     breaches = [check for check in checks if check["status"] == "BREACH"]
-    not_evaluated = [check for check in checks if check["status"] == "NOT_EVALUATED"]
+    # A visible non-applicable check is explanatory, not a missing-data failure.
+    not_evaluated = [check for check in checks if check["status"] == "NOT_EVALUATED" and check["severity"] == "availability"]
     unavailable = [check for check in not_evaluated if check["severity"] == "availability"]
     overall_status = "BREACH" if breaches else "NOT_EVALUATED" if unavailable else "PASS"
     return {

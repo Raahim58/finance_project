@@ -252,12 +252,18 @@ def generate_mock_market_data(db: Session, days: int = 365, end_date: date | Non
 
     price_rows: list[dict[str, object]] = []
     for index, trade_date in enumerate(dates):
-        market_cycle = Decimal(str(((index % 23) - 11) / 1000))
+        # Bounded factor-style demo returns: a modest common drift, a small
+        # mean-zero cycle and shared/issuer shocks. The previous ±1.1% daily
+        # cycle plus permanent symbol bias annualized into unrealistic return
+        # estimates and made optimizer trade-offs look erratic.
+        market_cycle = Decimal(str(((index % 31) - 15) / 20000))
+        market_drift = Decimal("0.00035")
+        common_market_shock = Decimal(str(random.uniform(-0.006, 0.006)))
         for company in companies:
-            sector_bias = Decimal(str((sum(ord(char) for char in company.sector) % 9 - 4) / 2000))
-            symbol_bias = Decimal(str((sum(ord(char) for char in company.symbol) % 7 - 3) / 3000))
-            noise = Decimal(str(random.uniform(-0.018, 0.018)))
-            change_ratio = market_cycle + sector_bias + symbol_bias + noise
+            sector_bias = Decimal(str((sum(ord(char) for char in company.sector) % 9 - 4) / 50000))
+            symbol_bias = Decimal(str((sum(ord(char) for char in company.symbol) % 7 - 3) / 75000))
+            noise = Decimal(str(random.uniform(-0.008, 0.008)))
+            change_ratio = market_drift + market_cycle + common_market_shock + sector_bias + symbol_bias + noise
 
             previous_close = previous_closes[company.symbol]
             close = max(Decimal("1.0000"), money(previous_close * (Decimal("1") + change_ratio)))

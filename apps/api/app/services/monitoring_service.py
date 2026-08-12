@@ -100,6 +100,8 @@ def _decision_context(db: Session, user: User, rule: MonitoringRule, evidence: d
         current_value = max((item.get("weight") for item in evidence["breaches"] if item.get("weight") is not None), default=None)
     elif evidence.get("actual") is not None:
         current_value = evidence["actual"]
+    elif rule.rule_type == "event":
+        current_value = len(evidence.get("events", []))
     classification = "monitoring_warning"
     if related_ips_limit is not None and current_value is not None and float(current_value) > float(related_ips_limit):
         classification = "mandate_breach"
@@ -114,6 +116,29 @@ def _decision_context(db: Session, user: User, rule: MonitoringRule, evidence: d
         "classification": classification,
         "rule_enabled": rule.enabled,
     }
+
+
+def _recommendation_content(rule: MonitoringRule, evidence: dict, alert_type: str) -> tuple[str, dict, dict]:
+    if rule.rule_type in {"position_weight", "concentration"}:
+        breaches = evidence.get("breaches", [])
+        names = ", ".join(str(item.get("symbol")) for item in breaches) or "the flagged position"
+        threshold = (evidence.get("rule_threshold") or {}).get("maximum")
+        return (
+            f"Review {names} in Build because its current weight exceeds the monitoring threshold. This is a warning unless it also exceeds the confirmed IPS limit.",
+            {"available": True, "note": f"A sandbox at or below {float(threshold):.1%} would clear this concentration warning if prices and other weights were unchanged." if threshold is not None else "Compare a lower concentration sandbox; no trade is inferred automatically.", "metric": "position_weight", "direction": "lower"},
+            {"note": "Prices, taxes, fees and the effect on return/risk must be recomputed in Build before acting."},
+        )
+    if rule.rule_type == "event":
+        return (
+            f"Review {len(evidence.get('events', []))} newly linked holding event(s) and their sources; decide whether any assumption or scenario needs updating.",
+            {"available": False, "note": "An event is evidence to review, not an automatic allocation signal."},
+            {"note": "Event materiality and portfolio impact require analyst review; no trade effect is inferred."},
+        )
+    return (
+        f"Review this {alert_type} trigger and its evidence before changing the portfolio.",
+        {"available": False, "note": "No allocation or trade effect is inferred automatically; use Build to compare a specific proposal."},
+        {"note": "Review source evidence, model assumptions and current freshness before acting."},
+    )
 
 
 def _resolve_inactive_alerts(db: Session, user: User, rule: MonitoringRule) -> None:
@@ -148,14 +173,15 @@ def run_monitoring(db: Session, user: User, portfolio_id: str):
         alert = Alert(user_id=user.id, portfolio_id=portfolio.id, monitoring_run_id=run.id, deduplication_key=key, alert_type=alert_type, severity="warning", message=message, evidence_json=json.dumps(evidence, default=str))
         db.add(alert); db.flush(); created.append(alert.id)
         recommendation_trigger = f"monitor:{rule.id}:{key}"
+        recommendation_message, expected_effect, uncertainty = _recommendation_content(rule, evidence, alert_type)
         db.add(Recommendation(
             user_id=user.id, portfolio_id=portfolio.id, trigger=recommendation_trigger,
             evidence_json=json.dumps(evidence, default=str), ips_violation_json="[]",
             assumptions_json=json.dumps({"rule_type": rule.rule_type, "threshold": json.loads(rule.threshold_json)}),
-            expected_effect_json=json.dumps({"available": False, "reason": "No trade or optimizer action is inferred automatically."}),
-            uncertainty_json=json.dumps({"note": "Review source evidence and current freshness before acting."}),
+            expected_effect_json=json.dumps(expected_effect),
+            uncertainty_json=json.dumps(uncertainty),
             freshness_json=json.dumps({"market_as_of": str(summary_date(db, user, portfolio.id))}),
-            message=f"Review this {alert_type} trigger and its evidence before changing the portfolio.", status="open",
+            message=recommendation_message, status="open",
         ))
     compliance = ips_compliance(db, user, portfolio.id)
     if compliance["violations"]:

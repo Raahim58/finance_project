@@ -25,6 +25,7 @@ ADVICE_RE = re.compile(r"\b(should|recommend|buy|sell|increase|reduce|rebalance)
 # Checked in priority order; the first match wins. Ordering keeps "risk" questions
 # from being swallowed by the broader performance/return pattern.
 INTENT_PATTERNS = (
+    ("decision_request", re.compile(r"what (?:should|can) i do|what do you recommend|recommendation|next (?:step|action)|how (?:should|can) i improve", re.I)),
     ("risk_concentration", re.compile(r"risk.*concentrat|concentrat.*risk|where.*risk|riskiest|risk contribut|biggest risk", re.I)),
     ("compliance", re.compile(r"\bmandate\b|\bcompliance\b|\bips\b|\bbreach\b|\bconstraint\b|\bviolat", re.I)),
     ("scenario", re.compile(r"\bscenario\b|stress test|\bshock\b|what if|hypothetical", re.I)),
@@ -173,7 +174,25 @@ def _answer_market_overview(freshness: dict[str, object] | None) -> tuple[list[s
 def _answer_holding_evidence(citations: list[dict[str, object]]) -> tuple[list[str], list[str], list[dict[str, object]]]:
     if not citations:
         return ["No cited document evidence met the relevance and symbol-scope threshold for this question."], ["No grounded document evidence was available; try a narrower company scope or confirm the filing has been ingested."], []
-    return [f"I found {len(citations)} symbol-scoped document citation(s) relevant to this question; see document evidence and sources for the underlying passages."], [], []
+    sources = "; ".join(f"{item.get('symbol') or 'market'} — {item.get('title')}" for item in citations[:3])
+    return [f"I found {len(citations)} symbol-scoped document citation(s) relevant to this question: {sources}. Use the quoted passages below as evidence; the document title alone is not a conclusion."], [], []
+
+
+def _answer_decision_request(compliance: dict[str, object] | None, risk_budget: dict[str, object] | None) -> tuple[list[str], list[str], list[dict[str, object]]]:
+    if not compliance:
+        return ["First confirm an IPS and refresh the portfolio valuation; a recommendation without a mandate and current weights would be ungrounded."], ["Missing input: confirmed IPS compliance."], []
+    evidence = [{"evidence_id": "calc:compliance_status", "metric": "compliance_status", "value": compliance.get("status"), "as_of": str(compliance.get("evaluated_at"))}]
+    violations = compliance.get("violations") or []
+    if violations:
+        first = violations[0]
+        evidence.append({"evidence_id": f"calc:ips:{first.get('code')}", "metric": first.get("code"), "value": first.get("actual"), "limit": first.get("limit"), "status": "BREACH"})
+        return [f"Recommended next decision step: resolve the confirmed {first.get('label')} breach first. Open Build and compare a sandbox that brings the breached value inside its IPS limit, then reject it if required return, volatility, beta, liquidity or another hard constraint deteriorates beyond the mandate. No trade is inferred automatically."], [], evidence
+    items = [item for item in (risk_budget or {}).get("items", []) if item.get("symbol") != "CASH"]
+    if items:
+        largest = max(items, key=lambda item: item.get("percentage_risk") or 0)
+        evidence.append({"evidence_id": f"calc:risk_contribution:{largest.get('symbol')}", "metric": "percentage_risk_contribution", "symbol": largest.get("symbol"), "value": largest.get("percentage_risk"), "portfolio_basis": "risky_sleeve", "as_of": str((risk_budget or {}).get("data_cutoff"))})
+        return [f"No evaluated hard breach is present. The most useful next comparison is a Build sandbox that reduces the largest modeled risk contributor, {largest.get('symbol')}, while preserving the required-return target and every confirmed ceiling/floor. Compare the proposal; do not treat this as an automatic sell instruction."], list((risk_budget or {}).get("diagnostics") or []), evidence
+    return ["No evaluated hard breach is present. Choose the Build objective that matches the confirmed goal—required-return minimum variance for goal sufficiency, minimum variance for risk reduction, or a risk-budget objective for contribution control—and compare the trade-offs before saving a sandbox."], ["Risk-contribution detail was unavailable, so no security-specific next step is stated."], evidence
 
 
 def _answer_scenario(scenario_history: dict[str, object] | None) -> tuple[list[str], list[str], list[dict[str, object]]]:
@@ -202,7 +221,9 @@ def _deterministic_answer(
 ) -> tuple[str, list[str], list[dict[str, object]], set[str]]:
     base_lines, evidence = _base_portfolio_evidence(summary)
     intent_evidence: list[dict[str, object]] = []
-    if intent == "risk_concentration":
+    if intent == "decision_request":
+        intent_lines, uncertainty, intent_evidence = _answer_decision_request(compliance, risk_budget)
+    elif intent == "risk_concentration":
         intent_lines, uncertainty, intent_evidence = _answer_risk_concentration(quant, risk_budget)
     elif intent == "performance":
         intent_lines, uncertainty, intent_evidence = _answer_performance(quant)
@@ -233,8 +254,8 @@ def _deterministic_answer(
             uncertainty.append("Note: this portfolio has an active mandate breach; ask a mandate-compliance question for details.")
         elif compliance.get("status") == "NOT_EVALUATED":
             uncertainty.append("Note: mandate compliance is not fully evaluated for this portfolio.")
-    if ADVICE_RE.search(question) and (not summary or not compliance or compliance.get("status") != "PASS"):
-        lines.append("I cannot provide a grounded buy/sell or rebalance recommendation until current portfolio data and a confirmed, passing IPS are available.")
+    if ADVICE_RE.search(question) and intent != "decision_request" and (not summary or not compliance):
+        lines.append("I cannot provide a grounded buy/sell or rebalance recommendation until current portfolio data and a confirmed IPS are available.")
     if not lines:
         lines.append("The required structured portfolio data or cited documents are missing. Refresh market data, confirm an IPS, or upload a source document before relying on an analysis.")
         uncertainty.append("No grounded evidence was available.")
@@ -380,9 +401,9 @@ async def run_assistant(db: Session, user: User, payload: AssistantMessageCreate
         if summary:
             holding_symbols = [str(row["symbol"]) for row in summary.get("holdings", [])]
         compliance = ips_compliance(db, user, payload.portfolio_id)
-        if intent in ("risk_concentration", "performance"):
+        if intent in ("decision_request", "risk_concentration", "performance"):
             quant = _invoke(trace, registry, "quant.portfolio", db, user, {"portfolio_id": payload.portfolio_id})
-        if intent == "risk_concentration":
+        if intent in ("decision_request", "risk_concentration"):
             risk_budget = _invoke(trace, registry, "quant.risk_budget", db, user, {"portfolio_id": payload.portfolio_id})
         if intent == "scenario":
             scenario_history = _invoke(trace, registry, "scenario.history", db, user, {"portfolio_id": payload.portfolio_id})

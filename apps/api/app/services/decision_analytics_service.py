@@ -337,12 +337,19 @@ def return_distribution_analysis(db: Session, user: User, portfolio_id: str, bin
     }
 
 
-def _weight_compliance(weights: dict[str, float], constraints: dict[str, object], ips_version_id: str | None, sectors: dict[str, str | None] | None = None):
+def _weight_compliance(
+    weights: dict[str, float],
+    constraints: dict[str, object],
+    ips_version_id: str | None,
+    sectors: dict[str, str | None] | None = None,
+    modeled_inputs: dict[str, object] | None = None,
+):
     return evaluate_ips_constraints(
         constraints,
         [{"symbol": symbol, "weight": weight, "sector": "Cash" if symbol == "CASH" else (sectors or {}).get(symbol)} for symbol, weight in weights.items()],
         ips_version_id=ips_version_id,
         context="proposed",
+        modeled_inputs=modeled_inputs,
     )
 
 
@@ -442,7 +449,20 @@ def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: Portf
         "current_risk_contributions": current_risk,
         "proposed_risk_contributions": proposed_risk,
         "current_compliance": ips_compliance(db, user, portfolio.id),
-        "proposed_compliance": _weight_compliance(proposed, constraints, portfolio.selected_ips_version_id, {row.symbol: row.sector for row in summary.holdings}),
+        "proposed_compliance": _weight_compliance(
+            proposed,
+            constraints,
+            portfolio.selected_ips_version_id,
+            {row.symbol: row.sector for row in summary.holdings},
+            {
+                "portfolio_volatility": proposed_metrics.get("volatility"),
+                "portfolio_beta": proposed_metrics.get("beta"),
+                "risk_contributions": proposed_risk,
+                "liquid_assets": proposed.get("CASH", 0.0) * total,
+                "data_cutoff": days[-1],
+                "estimator": "historical_shrunk_aligned_price_covariance_v1",
+            },
+        ),
         "trade_offs": trade_offs,
         "warnings": [] if required_return is not None else ["Required-return comparison is unavailable until the confirmed IPS contains a calculable goal."],
     }

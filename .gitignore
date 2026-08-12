@@ -9,6 +9,8 @@ node_modules/
 .next/
 dist/
 build/
+!apps/web/app/portfolios/*/build/
+!apps/web/app/portfolios/*/build/page.tsx
 coverage/
 htmlcov/
 .playwright-mcp/
