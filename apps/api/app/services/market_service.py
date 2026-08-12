@@ -212,9 +212,13 @@ def get_sector_performance(
 def search_companies(db: Session, query_text: str | None = None, limit: int = 20) -> list[CompanyResponse]:
     query = select(Company).options(joinedload(Company.exchange)).where(Company.is_active.is_(True))
     if query_text:
-        like = f"%{query_text.upper()}%"
+        normalized = query_text.strip().upper()
+        like = f"%{normalized}%"
         query = query.where((func.upper(Company.symbol).like(like)) | (func.upper(Company.name).like(like)))
-    rows = db.scalars(query.order_by(Company.symbol.asc()).limit(limit)).all()
+        query = query.order_by((func.upper(Company.symbol) == normalized).desc(), Company.symbol.asc())
+    else:
+        query = query.order_by(Company.symbol.asc())
+    rows = db.scalars(query.limit(limit)).all()
     return [serialize_company(row) for row in rows]
 
 

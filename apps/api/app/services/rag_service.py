@@ -28,6 +28,7 @@ TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._%-]*")
 EMBEDDING_DIMENSIONS = settings.embedding_dimensions
 CHUNK_TOKENS = 180
 CHUNK_OVERLAP = 40
+MIN_RELEVANCE_SCORE = 0.12
 
 
 @dataclass(frozen=True)
@@ -453,16 +454,18 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         vector_score = cosine_similarity(query_vector, vector)
         lexical_score = keyword_score(query_tokens, chunk.chunk_text)
         score = (0.75 * vector_score) + (0.25 * lexical_score)
-        if score > 0 and (settings.embedding_backend == "sentence_transformers" or lexical_score > 0):
+        if score >= MIN_RELEVANCE_SCORE and (settings.embedding_backend == "sentence_transformers" or lexical_score > 0):
             ranked.append((score, chunk, citation))
 
     if not ranked:
         ranked = [
             (keyword_score(query_tokens, chunk.chunk_text), chunk, citation)
             for chunk, _document, citation in rows
-            if keyword_score(query_tokens, chunk.chunk_text) > 0
+            if keyword_score(query_tokens, chunk.chunk_text) >= MIN_RELEVANCE_SCORE
         ]
 
+    # Below-threshold matches are dropped rather than used to pad toward `limit`;
+    # an empty result means insufficient evidence, not zero relevance.
     ranked.sort(key=lambda item: item[0], reverse=True)
     selected = ranked[: payload.limit]
     chunks: list[RagChunkResponse] = []

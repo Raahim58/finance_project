@@ -478,9 +478,9 @@ export function getMarketFreshness() {
   return request<MarketFreshness>("/market/freshness");
 }
 
-export function getCompanies(query?: string) {
+export function getCompanies(query?: string, options?: { signal?: AbortSignal }) {
   const params = query ? `?q=${encodeURIComponent(query)}` : "";
-  return request<Company[]>(`/market/companies${params}`);
+  return request<Company[]>(`/market/companies${params}`, options?.signal ? { signal: options.signal } : {});
 }
 
 export function getCompanyDetail(symbol: string) {

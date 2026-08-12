@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { Company, MacroRegime, MarketFreshness, MarketOverview, MarketPrice, getCompanies, getMacroRegime, getMarketFreshness, getMarketOverview } from "@/lib/api";
@@ -9,10 +9,27 @@ const num=(v:unknown,d=2)=>new Intl.NumberFormat("en-PK",{maximumFractionDigits:
 const pct=(v:unknown)=>v==null?"—":`${Number(v)>0?"+":""}${Number(v).toFixed(2)}%`;
 const tone=(v:unknown)=>Number(v)>0?"positive":Number(v)<0?"negative":"muted";
 
+type DirectoryState={status:"loading"|"success"|"error";query:string;rows:Company[];error?:string};
+
 export default function MarketPage(){
-  const [overview,setOverview]=useState<MarketOverview|null>(null);const [fresh,setFresh]=useState<MarketFreshness|null>(null);const [regime,setRegime]=useState<MacroRegime|null>(null);const [companies,setCompanies]=useState<Company[]>([]);const [query,setQuery]=useState("");const [loading,setLoading]=useState(true);const [error,setError]=useState("");const [directoryError,setDirectoryError]=useState("");const [showDirectory,setShowDirectory]=useState(true);
-  useEffect(()=>{void Promise.all([getMarketOverview(),getMarketFreshness(),getCompanies(),getMacroRegime()]).then(([o,f,c,r])=>{setOverview(o);setFresh(f);setCompanies(c);setRegime(r)}).catch((e:Error)=>setError(e.message)).finally(()=>setLoading(false))},[]);
-  useEffect(()=>{const t=setTimeout(()=>void getCompanies(query).then(rows=>{setCompanies(rows);setDirectoryError("")}).catch((reason:unknown)=>setDirectoryError(reason instanceof Error?reason.message:"Company directory request failed")),250);return()=>clearTimeout(t)},[query]);
+  const [overview,setOverview]=useState<MarketOverview|null>(null);const [fresh,setFresh]=useState<MarketFreshness|null>(null);const [regime,setRegime]=useState<MacroRegime|null>(null);const [query,setQuery]=useState("");const [loading,setLoading]=useState(true);const [error,setError]=useState("");const [showDirectory,setShowDirectory]=useState(true);
+  const [directory,setDirectory]=useState<DirectoryState>({status:"loading",query:"",rows:[]});
+  const requestId=useRef(0);
+  useEffect(()=>{void Promise.all([getMarketOverview(),getMarketFreshness(),getMacroRegime()]).then(([o,f,r])=>{setOverview(o);setFresh(f);setRegime(r)}).catch((e:Error)=>setError(e.message)).finally(()=>setLoading(false))},[]);
+  useEffect(()=>{
+    const normalized=query.trim();
+    const id=++requestId.current;
+    const controller=new AbortController();
+    const timer=setTimeout(()=>{
+      setDirectory({status:"loading",query:normalized,rows:[]});
+      getCompanies(normalized,{signal:controller.signal}).then(rows=>{
+        if(id===requestId.current)setDirectory({status:"success",query:normalized,rows});
+      }).catch((reason:unknown)=>{
+        if(!controller.signal.aborted&&id===requestId.current)setDirectory({status:"error",query:normalized,rows:[],error:reason instanceof Error?reason.message:"Company directory request failed"});
+      });
+    },250);
+    return()=>{clearTimeout(timer);controller.abort()};
+  },[query]);
   if(loading)return <div className="page-wrap"><div className="panel h-96 skeleton"/></div>;
   if(error)return <div className="page-wrap"><div className="notice notice-error"><Icon name="warning"/>{error}</div></div>;
   const snap=overview?.snapshot;const sectors=overview?.sectors??[];const adv=sectors.reduce((a,s)=>a+s.advancers,0),dec=sectors.reduce((a,s)=>a+s.decliners,0);
@@ -25,7 +42,7 @@ export default function MarketPage(){
     <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_.9fr]"><section className="panel"><div className="panel-head"><h2 className="panel-title">Sector leadership</h2><span className="text-[11px] text-muted">Average daily change</span></div><div className="panel-body space-y-3">{sectors.slice().sort((a,b)=>Number(b.average_change_percent)-Number(a.average_change_percent)).map(s=><div key={s.sector} className="grid grid-cols-[1fr_2fr_62px] items-center gap-3"><span className="truncate text-[12px] font-semibold">{s.sector}</span><div className="h-2 overflow-hidden rounded-full bg-surface"><div className={`h-full rounded-full ${Number(s.average_change_percent)>=0?"bg-accent":"bg-warn"}`} style={{width:`${Math.min(100,Math.abs(Number(s.average_change_percent))*25)}%`}}/></div><span className={`data-font text-right text-[11px] ${tone(s.average_change_percent)}`}>{pct(s.average_change_percent)}</span></div>)}</div></section><section className="panel"><div className="panel-head"><h2 className="panel-title">Breadth by sector</h2></div><div className="table-wrap"><table className="data-table !min-w-0"><thead><tr><th>Sector</th><th>Adv</th><th>Dec</th><th>Unch</th></tr></thead><tbody>{sectors.slice(0,8).map(s=><tr key={s.sector}><td className="max-w-40 truncate font-semibold">{s.sector}</td><td className="positive">{s.advancers}</td><td className="negative">{s.decliners}</td><td>{s.unchanged}</td></tr>)}</tbody></table></div></section></div>
     <div className="mt-4 grid gap-4 xl:grid-cols-3"><Mover title="Top gainers" rows={overview?.top_gainers??[]}/><Mover title="Top losers" rows={overview?.top_losers??[]}/><Mover title="Volume leaders" rows={overview?.top_volume??[]} volume/></div>
     <section className="panel mt-4"><div className="panel-head"><div><h2 className="panel-title">Macro and market regime</h2><p className="mt-1 text-[11px] text-muted">{regime?.method_note??"Structured macro observations are unavailable."}</p></div><span className={`badge ${regime?.regime==="risk_off"?"badge-bad":regime?.regime==="not_evaluated"?"badge-warn":"badge-good"}`}>{regime?.regime?.replaceAll("_"," ")??"Not evaluated"}</span></div>{regime&&Object.keys(regime.dimensions).length?<div className="grid gap-px bg-line md:grid-cols-3">{Object.entries(regime.dimensions).map(([key,value])=><div className="bg-white p-4" key={key}><p className="metric-label">{key.replaceAll("_"," ")}</p><p className="mt-2 text-sm font-semibold">{String(value.status??"not evaluated").replaceAll("_"," ")}</p><p className="mt-1 text-[11px] text-muted">{String(value.series_name??value.trade_date??"Source series unavailable")}</p></div>)}</div>:<div className="p-4 text-xs text-muted">No sufficient structured macro or breadth history is available; the regime is not evaluated.</div>}</section>
-    {showDirectory?<section className="panel mt-4"><div className="panel-head"><h2 className="panel-title">Company directory</h2><span className="text-[11px] text-muted">{directoryError?"Request failed":`${companies.length} results`}</span></div>{directoryError?<div className="notice notice-error m-4"><Icon name="warning"/><span>Company directory request failed: {directoryError}. Existing rows are not presented as a current search result.</span></div>:<div className="grid divide-y divide-line sm:grid-cols-2 lg:grid-cols-3">{companies.map(c=><Link className="flex items-center justify-between p-4 transition-colors hover:bg-[#f8f9f6]" key={c.symbol} href={`/companies/${c.symbol}`}><div><strong className="text-[13px] text-accent">{c.symbol}</strong><p className="mt-1 text-[11px]">{c.name}</p></div><span className="max-w-28 truncate text-[11px] text-muted">{c.sector}</span></Link>)}</div>}</section>:null}
+    {showDirectory?<section className="panel mt-4"><div className="panel-head"><h2 className="panel-title">Company directory</h2><span className="text-[11px] text-muted">{directory.status==="error"?"Request failed":directory.status==="loading"?"Searching…":directory.query?`Results for "${directory.query}"`:`${directory.rows.length} results`}</span></div>{directory.status==="error"?<div className="notice notice-error m-4"><Icon name="warning"/><span>Company directory request failed: {directory.error}. Existing rows are not presented as a current search result.</span></div>:directory.status==="loading"?<div className="grid gap-px divide-y divide-line p-4 sm:grid-cols-2 lg:grid-cols-3">{[1,2,3,4,5,6].map(i=><div className="skeleton h-14 w-full" key={i}/>)}</div>:directory.rows.length?<div className="grid divide-y divide-line sm:grid-cols-2 lg:grid-cols-3">{directory.rows.map(c=><Link className="flex items-center justify-between p-4 transition-colors hover:bg-[#f8f9f6]" key={c.symbol} href={`/companies/${c.symbol}`}><div><strong className="text-[13px] text-accent">{c.symbol}</strong><p className="mt-1 text-[11px]">{c.name}</p></div><span className="max-w-28 truncate text-[11px] text-muted">{c.sector}</span></Link>)}</div>:<div className="empty-state m-4"><strong>No companies found</strong><span>{directory.query?`No active company matches "${directory.query}".`:"No active companies are available."}</span></div>}</section>:null}
   </div>;
 }
 
