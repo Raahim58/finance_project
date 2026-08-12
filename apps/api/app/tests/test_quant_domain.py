@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from scipy.stats import kurtosis, skew
 
 from app.domain.quant.estimators import estimate_expected_returns
 from app.domain.quant.metrics import covariance_matrix, performance_ratios, regression_metrics, risk_metrics
@@ -64,3 +65,24 @@ def test_jensen_alpha_regresses_excess_returns():
     assert regression["beta"] == pytest.approx(1.5)
     assert regression["jensen_alpha"] == pytest.approx(alpha_daily * 252)
     assert ratios["jensen_alpha"] == pytest.approx(alpha_daily * 252)
+
+
+def test_higher_moments_use_one_bias_corrected_estimator_and_reject_degenerate_shape():
+    sample = np.array([-0.04, -0.01, 0.0, 0.01, 0.02, 0.08])
+    result = risk_metrics(sample)
+    assert result.skewness == pytest.approx(skew(sample, bias=False))
+    assert result.excess_kurtosis == pytest.approx(kurtosis(sample, fisher=True, bias=False))
+
+    constant = risk_metrics(np.full(8, 0.01))
+    assert constant.annual_volatility == 0
+    assert constant.skewness is None
+    assert constant.excess_kurtosis is None
+
+
+def test_cash_like_zero_variance_asset_is_only_dominant_when_its_bound_permits_it():
+    covariance = np.diag([0.04, 0.01, 0.0])
+    capped = optimize(covariance, upper_bounds=[1.0, 1.0, 0.20])
+    explicitly_permitted = optimize(covariance, upper_bounds=[1.0, 1.0, 1.0])
+    assert capped.status == "optimal"
+    assert capped.weights[2] == pytest.approx(0.20, abs=1e-6)
+    assert explicitly_permitted.weights[2] > 0.999

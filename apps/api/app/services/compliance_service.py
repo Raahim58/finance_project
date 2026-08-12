@@ -112,6 +112,12 @@ def evaluate_ips_constraints(
         breached = cash_weight + 1e-8 < limit
         checks.append(_check("min_cash_weight", "Minimum cash", "BREACH" if breached else "PASS", message="Cash is below the IPS minimum." if breached else "Cash meets the IPS minimum.", actual=cash_weight, limit=limit))
 
+    maximum_cash = constraints.get("max_cash_weight")
+    if maximum_cash is not None:
+        limit = float(maximum_cash)
+        breached = cash_weight > limit + 1e-8
+        checks.append(_check("max_cash_weight", "Maximum cash", "BREACH" if breached else "PASS", message="Cash exceeds the IPS maximum." if breached else "Cash is within the IPS maximum.", actual=cash_weight, limit=limit))
+
     excluded = {str(value).upper() for value in constraints.get("excluded_instruments", [])}
     allowed = {str(value).upper() for value in constraints.get("allowed_instruments", [])}
     disallowed = sorted(symbol for symbol in symbols - {"CASH"} if symbol in excluded or (allowed and symbol not in allowed))

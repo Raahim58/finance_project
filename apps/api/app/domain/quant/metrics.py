@@ -16,12 +16,12 @@ class RiskMetrics:
     historical_es_95: float
     historical_var_99: float
     historical_es_99: float
-    skewness: float
-    excess_kurtosis: float
+    skewness: float | None
+    excess_kurtosis: float | None
     sample_size: int
     annualization: int = 252
 
-    def to_dict(self) -> dict[str, float | int]:
+    def to_dict(self) -> dict[str, float | int | None]:
         return asdict(self)
 
 
@@ -133,10 +133,20 @@ def risk_metrics(
     values = _finite(np.asarray(returns, dtype=float))
     var95, es95 = tail_risk(values, 0.95)
     var99, es99 = tail_risk(values, 0.99)
-    centered = values - np.mean(values)
     standard = float(np.std(values, ddof=1))
-    skewness = float(np.mean(centered**3) / standard**3) if standard else 0.0
-    excess_kurtosis = float(np.mean(centered**4) / standard**4 - 3) if standard else 0.0
+    # Fisher-Pearson and excess-kurtosis estimators, both bias-corrected.  Returning
+    # unavailable for constant or undersized samples avoids implying observed shape.
+    skewness = None
+    excess_kurtosis = None
+    if standard > 0 and values.size >= 3:
+        centered = values - np.mean(values)
+        n = values.size
+        m2 = float(np.mean(centered**2))
+        m3 = float(np.mean(centered**3))
+        skewness = float(np.sqrt(n * (n - 1)) / (n - 2) * m3 / m2**1.5)
+        if n >= 4:
+            m4 = float(np.mean(centered**4))
+            excess_kurtosis = float(((n - 1) / ((n - 2) * (n - 3))) * ((n + 1) * (m4 / m2**2 - 3) + 6))
     target_daily = _daily_rate(downside_target_annual, annualization)
     downside_shortfall = np.minimum(values - target_daily, 0.0)
     arithmetic_return = float(np.mean(values) * annualization)

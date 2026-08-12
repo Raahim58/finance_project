@@ -310,18 +310,20 @@ export type EfficientFrontier = OpenApi["schemas"]["EfficientFrontierResponse"];
 export type CapmSml = OpenApi["schemas"]["CapmSmlResponse"];
 export type RollingRisk = OpenApi["schemas"]["RollingRiskResponse"];
 export type ReturnDistribution = OpenApi["schemas"]["ReturnDistributionResponse"];
-export type ComparisonMetric = OpenApi["schemas"]["ComparisonMetric"];
-export type PortfolioComparison = Omit<OpenApi["schemas"]["PortfolioComparisonResponse"],"current_compliance"|"proposed_compliance"|"trade_offs"> & {
-  current_compliance:{compliant:boolean;violations:Array<Record<string,unknown>>};
-  proposed_compliance:{compliant:boolean;violations:Array<Record<string,unknown>>};
-  trade_offs:Array<{metric:string;label:string;direction:string;delta:number}>;
+export type ComparisonMetric = Omit<OpenApi["schemas"]["ComparisonMetric"],"unit"|"classification"> & {unit:"decimal"|"percentage_point"|"ratio"|"PKR"|"days"|"count";classification?:"IMPROVED"|"WORSENED"|"UNCHANGED"|"REFERENCE"|"NOT_EVALUATED"};
+export type PortfolioComparison = Omit<OpenApi["schemas"]["PortfolioComparisonResponse"],"metrics"|"current_compliance"|"proposed_compliance"|"trade_offs"> & {
+  metrics:ComparisonMetric[];
+  current_compliance:Compliance;
+  proposed_compliance:Compliance;
+  trade_offs:Array<{metric:string;label:string;direction:"IMPROVED"|"WORSENED"|"UNCHANGED"|"NOT_EVALUATED";delta:number|null;unit:"decimal"|"percentage_point"|"ratio"|"PKR"|"days"|"count"}>;
 };
-export type RiskBudget = OpenApi["schemas"]["RiskBudgetResponse"];
+export type RiskBudget = Omit<OpenApi["schemas"]["RiskBudgetResponse"],"items"> & {portfolio_basis:"total_capital";items:Array<{symbol:string;total_capital_weight:number;risky_sleeve_weight?:number|null;component_risk:number;percentage_risk:number;target_risk?:number|null;residual?:number|null}>};
 export type OptimizerResult = OpenApi["schemas"]["OptimizerResponse"];
+export type Compliance = {compliant:boolean;status:"PASS"|"BREACH"|"NOT_EVALUATED";checks:Array<Record<string,unknown>>;violations:Array<Record<string,unknown>>;not_evaluated:Array<Record<string,unknown>>};
 export type ScenarioResult = Omit<OpenApi["schemas"]["ScenarioResponse"],"positions"|"sector_contributions"|"compliance"> & {
   positions:Array<Record<string,unknown>>;
   sector_contributions:Record<string,number>;
-  compliance:{compliant?:boolean;violations?:Array<Record<string,unknown>>};
+  compliance:Compliance;
 };
 
 export type HistoricalReplay = { portfolio_id:string; start_date:string; end_date:string; counterfactual:boolean; assumption:string; start_value:number; end_value:number; pnl:number; return?:number|null; path:Array<{date:string;value:number}>; max_drawdown?:number|null; recovery_days?:number|null; sector_pnl_contribution:Record<string,number>; positions:Array<Record<string,unknown>>; total_return_available:boolean; total_return_unavailable_reason:string };
@@ -601,7 +603,7 @@ export function runOptimizer(portfolioId: string, payload: Record<string,unknown
 export function getOptimizerRuns(portfolioId: string) { return request<Array<Record<string,unknown>>>(`/portfolios/${encodeURIComponent(portfolioId)}/optimizer-runs`); }
 
 export function getIpsCompliance(portfolioId: string) {
-  return request<{ compliant: boolean; violations: Array<Record<string, unknown>> }>(`/portfolios/${encodeURIComponent(portfolioId)}/ips/compliance`);
+  return request<Compliance>(`/portfolios/${encodeURIComponent(portfolioId)}/ips/compliance`);
 }
 
 export function createIpsVersion(portfolioId: string, payload: Record<string, unknown>, confirm = false) {

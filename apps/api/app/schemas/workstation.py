@@ -38,6 +38,8 @@ class IPSDraft(BaseModel):
     annual_contribution: float = Field(default=0, ge=0)
     goal: str | None = Field(default=None, max_length=500)
     benchmark_symbol: str | None = Field(default=None, max_length=30)
+    performance_benchmark_symbol: str | None = Field(default=None, max_length=30)
+    capm_market_proxy_symbol: str | None = Field(default=None, max_length=30)
     valuation_date: date | None = None
     target_date: date | None = None
     dated_contributions: list[DatedContribution] = Field(default_factory=list)
@@ -80,6 +82,22 @@ class RequiredReturnAnalysis(BaseModel):
     calculation_type: str | None = None
     assumptions: dict[str, object] = Field(default_factory=dict)
     diagnostics: list[str] = Field(default_factory=list)
+
+
+class MetricValue(BaseModel):
+    value: float | None
+    unit: Literal["decimal", "percentage_point", "ratio", "PKR", "days", "count"]
+    status: Literal["AVAILABLE", "NOT_EVALUATED"]
+    reason: str | None = None
+    sample_start: date | None = None
+    sample_end: date | None = None
+    data_cutoff: date | None = None
+    observations: int | None = None
+    annualization: int | None = None
+    return_basis: Literal["price", "total_return", "ledger_twr", "modeled_current_allocation"] | None = None
+    portfolio_basis: Literal["total_capital", "risky_sleeve"] | None = None
+    estimator: str | None = None
+    run_id: str | None = None
 
 
 class IPSComplianceResponse(BaseModel):
@@ -131,6 +149,9 @@ class EfficientFrontierResponse(BaseModel):
     portfolio_id: str
     data_cutoff: date
     estimator: str
+    unit: Literal["decimal"] = "decimal"
+    portfolio_basis: Literal["risky_sleeve"] = "risky_sleeve"
+    feasible_set_label: str
     points: list[FrontierPoint]
     markers: dict[str, FrontierPoint | None]
     assumptions: dict[str, object]
@@ -151,7 +172,12 @@ class CapmSmlResponse(BaseModel):
     data_cutoff: date
     risk_free_rate: float | None = None
     market_return: float | None = None
+    market_risk_premium: float | None = None
     benchmark_symbol: str | None = None
+    performance_benchmark_symbol: str | None = None
+    capm_market_proxy_symbol: str | None = None
+    risk_free: dict[str, object] | None = None
+    alignment: dict[str, object] = Field(default_factory=dict)
     securities: list[CapmPoint] = Field(default_factory=list)
     sml: list[dict[str, float]] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
@@ -169,6 +195,10 @@ class RollingRiskResponse(BaseModel):
     portfolio_id: str
     window: int
     points: list[RollingRiskPoint]
+    observations: int = 0
+    return_basis: Literal["modeled_current_allocation"] = "modeled_current_allocation"
+    benchmark_symbol: str | None = None
+    risk_free: dict[str, object] | None = None
     diagnostics: list[str] = Field(default_factory=list)
 
 
@@ -188,6 +218,7 @@ class ReturnDistributionResponse(BaseModel):
     es_99: float | None = None
     skewness: float | None = None
     excess_kurtosis: float | None = None
+    estimator: str = "bias_corrected_fisher_pearson_skew_and_excess_kurtosis"
     diagnostics: list[str] = Field(default_factory=list)
 
 
@@ -204,6 +235,7 @@ class ComparisonMetric(BaseModel):
     proposed: float | None = None
     delta: float | None = None
     preferred_direction: Literal["higher", "lower", "neutral"]
+    classification: Literal["IMPROVED", "WORSENED", "UNCHANGED", "REFERENCE", "NOT_EVALUATED"]
     availability_note: str | None = None
 
 
@@ -225,7 +257,8 @@ class PortfolioComparisonResponse(BaseModel):
 
 class RiskBudgetItem(BaseModel):
     symbol: str
-    capital_weight: float
+    total_capital_weight: float
+    risky_sleeve_weight: float | None = None
     component_risk: float
     percentage_risk: float
     target_risk: float | None = None
@@ -235,6 +268,7 @@ class RiskBudgetItem(BaseModel):
 class RiskBudgetResponse(BaseModel):
     portfolio_id: str
     data_cutoff: date
+    portfolio_basis: Literal["total_capital"] = "total_capital"
     items: list[RiskBudgetItem]
     total_percentage_risk: float
     residual_error: float | None = None
@@ -261,6 +295,10 @@ class OptimizerRequest(BaseModel):
     maximum_weight: float = Field(default=1, gt=0, le=1)
     include_cash: bool = False
     minimum_cash_weight: float | None = Field(default=None, ge=0, le=1)
+    maximum_cash_weight: float | None = Field(default=None, ge=0, le=1)
+    cash_return_rate: float = Field(default=0.0, gt=-1)
+    cash_return_basis: Literal["nominal", "real"] = "nominal"
+    cash_return_effective_date: date | None = None
 
     @model_validator(mode="after")
     def validate_method(self):
@@ -270,6 +308,10 @@ class OptimizerRequest(BaseModel):
             raise ValueError("Expected-return methodology is required for a return-targeted objective")
         if self.expected_return_method == "user_model" and not self.expected_return_assumptions:
             raise ValueError("user_model requires explicit symbol assumptions")
+        if self.objective == "target_beta" and self.expected_return_method == "user_model":
+            raise ValueError("target_beta requires CAPM or historical expected returns with an approved market proxy")
+        if self.minimum_cash_weight is not None and self.maximum_cash_weight is not None and self.minimum_cash_weight > self.maximum_cash_weight:
+            raise ValueError("minimum_cash_weight cannot exceed maximum_cash_weight")
         return self
 
 

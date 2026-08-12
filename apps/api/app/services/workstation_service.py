@@ -21,6 +21,7 @@ from app.domain.quant import (
     risk_contributions,
     risk_metrics,
 )
+from app.domain.analytics_contract import DEFAULT_MAX_CASH_WEIGHT, WEIGHT_TOLERANCE, weight_diagnostics
 from app.models.market import MarketPrice
 from app.models.portfolio import PortfolioHolding
 from app.models.user import User
@@ -217,7 +218,13 @@ def save_ips_version(db: Session, user: User, portfolio_id: str, payload: IPSDra
     }
     constraints["objective_inputs"] = {key: value for key, value in objective_inputs.items() if value is not None}
     if payload.goal: constraints["goal"] = payload.goal
-    if payload.benchmark_symbol: constraints["benchmark_symbol"] = payload.benchmark_symbol.upper()
+    performance_benchmark = payload.performance_benchmark_symbol or payload.benchmark_symbol
+    if performance_benchmark:
+        constraints["performance_benchmark_symbol"] = performance_benchmark.upper()
+        # Compatibility for older clients. New analytics never use this as CAPM proxy.
+        constraints["benchmark_symbol"] = performance_benchmark.upper()
+    if payload.capm_market_proxy_symbol:
+        constraints["capm_market_proxy_symbol"] = payload.capm_market_proxy_symbol.upper()
     typed_constraints = {
         "risk_capacity": payload.risk_capacity,
         "risk_willingness": payload.risk_willingness,
@@ -243,7 +250,7 @@ def save_ips_version(db: Session, user: User, portfolio_id: str, payload: IPSDra
             "dated_contributions": [{"date": day.isoformat(), "amount": amount} for day, amount in dated],
             "annual_contribution_timing": "end_of_year",
         }
-    for key in ("max_instrument_weight", "max_sector_weight", "min_cash_weight", "target_volatility", "target_beta"):
+    for key in ("max_instrument_weight", "max_sector_weight", "min_cash_weight", "max_cash_weight", "target_volatility", "target_beta", "operational_cash_return"):
         if key in constraints and not isinstance(constraints[key], (int, float)):
             raise HTTPException(status_code=422, detail=f"{key} must be numeric")
     row = PortfolioIPSVersion(
@@ -362,11 +369,37 @@ def _selected_ips_constraints(db: Session, portfolio) -> dict[str, object]:
 
 
 def _benchmark_symbol(db: Session, portfolio, constraints: dict[str, object]) -> str | None:
-    configured = constraints.get("benchmark_symbol")
+    configured = constraints.get("performance_benchmark_symbol") or constraints.get("benchmark_symbol")
     if configured:
         return str(configured).strip().upper()
     instrument = db.get(Instrument, portfolio.benchmark_instrument_id) if portfolio.benchmark_instrument_id else None
     return instrument.symbol if instrument else None
+
+
+def _capm_market_proxy_symbol(db: Session, constraints: dict[str, object]) -> tuple[str | None, list[str]]:
+    configured = constraints.get("capm_market_proxy_symbol")
+    if not configured:
+        return None, ["No CAPM market proxy is configured separately from the performance benchmark."]
+    symbol = str(configured).strip().upper()
+    instrument = db.scalar(select(Instrument).where(Instrument.symbol == symbol))
+    if instrument is None:
+        return None, [f"CAPM market proxy {symbol} is not in the instrument master."]
+    metadata = _load(instrument.metadata_json)
+    approved = instrument.instrument_type.lower() in {"index", "total_return_index"} and metadata.get("broad_market_proxy") is True
+    if not approved:
+        return None, [f"{symbol} is not an approved broad-index CAPM market proxy; individual securities are rejected."]
+    warnings = [] if instrument.instrument_type.lower() == "total_return_index" or metadata.get("return_basis") == "total_return" else [f"{symbol} uses a price-return index; distributions are not included."]
+    return symbol, warnings
+
+
+def _benchmark_returns_for_optimizer(db: Session, symbol: str | None, days: list[date]) -> np.ndarray | None:
+    if not symbol:
+        return None
+    by_date = {row.trade_date: float(row.close) for row in price_series(db, symbol)}
+    if any(day not in by_date for day in days):
+        return None
+    prices = np.asarray([by_date[day] for day in days], dtype=float)
+    return prices[1:] / prices[:-1] - 1
 
 
 def _effective_risk_free_rate(db: Session, as_of: date, series_key: str | None = None) -> dict[str, object] | None:
@@ -535,9 +568,11 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
     capm_inputs = None
     constraints = _selected_ips_constraints(db, portfolio)
     if payload.expected_return_method == "capm":
-        benchmark_symbol = (payload.benchmark_symbol or _benchmark_symbol(db, portfolio, constraints) or "").upper()
+        benchmark_symbol, proxy_diagnostics = _capm_market_proxy_symbol(db, constraints)
+        if payload.benchmark_symbol and payload.benchmark_symbol.upper() != benchmark_symbol:
+            raise HTTPException(status_code=422, detail={"code": "invalid_capm_proxy_override", "message": "CAPM uses the approved market proxy from the IPS, not the performance benchmark.", "diagnostics": proxy_diagnostics})
         if not benchmark_symbol:
-            raise HTTPException(status_code=422, detail="CAPM requires a configured benchmark symbol")
+            raise HTTPException(status_code=422, detail={"code": "capm_market_proxy_unavailable", "message": "CAPM requires an approved broad-index market proxy", "diagnostics": proxy_diagnostics})
         benchmark_by_date = {row.trade_date: float(row.close) for row in price_series(db, benchmark_symbol, payload.start_date, payload.end_date)}
         selected_indexes = [index for index, day in enumerate(days) if day in benchmark_by_date]
         if len(selected_indexes) < 31:
@@ -556,7 +591,7 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
             market_returns=market_returns,
             risk_free_rate=float(risk_free["annual_rate"]),
         )
-        capm_inputs = {"benchmark_symbol": benchmark_symbol, "risk_free": risk_free}
+        capm_inputs = {"capm_market_proxy_symbol": benchmark_symbol, "risk_free": risk_free, "diagnostics": proxy_diagnostics}
     if payload.expected_return_method:
         if payload.expected_return_method != "capm":
             try:
@@ -566,9 +601,9 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
             estimate = estimate_expected_returns(payload.expected_return_method, returns, assumptions=assumptions, shrinkage=payload.expected_return_shrinkage)
     ips_version = db.get(PortfolioIPSVersion, portfolio.selected_ips_version_id) if portfolio.selected_ips_version_id else None
     constraints = _load(ips_version.constraints_json) if ips_version else constraints
-    informational = {"goal", "benchmark_symbol", "risk_free_series_key", "long_only", "loss_budget", "horizon_years", "notes", "risk_capacity", "risk_willingness", "overall_risk_tolerance", "tax_notes", "required_return_method", "objective_inputs"}
+    informational = {"goal", "benchmark_symbol", "performance_benchmark_symbol", "capm_market_proxy_symbol", "risk_free_series_key", "operational_cash_return", "operational_cash_return_basis", "operational_cash_return_effective_date", "long_only", "loss_budget", "horizon_years", "notes", "risk_capacity", "risk_willingness", "overall_risk_tolerance", "tax_notes", "required_return_method", "objective_inputs"}
     supported = {
-        "max_instrument_weight", "excluded_instruments", "allowed_instruments", "min_cash_weight",
+        "max_instrument_weight", "excluded_instruments", "allowed_instruments", "min_cash_weight", "max_cash_weight",
         "max_sector_weight", "allowed_asset_types", "allowed_currencies", "shariah_only",
         "minimum_daily_volume", "target_volatility", "target_beta", "risk_budgets",
         "leverage_allowed", "derivatives_allowed", "liquidity_requirement",
@@ -595,12 +630,15 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
         if constraints.get("shariah_only") and metadata.get("shariah_compliant") is not True: upper[index] = 0
         observed = latest_price(db, symbol)
         if minimum_volume and (observed is None or observed.volume < minimum_volume): upper[index] = 0
-    include_cash = payload.include_cash or float(payload.minimum_cash_weight or 0) > 0 or float(constraints.get("min_cash_weight", 0) or 0) > 0 or float(constraints.get("liquidity_requirement", 0) or 0) > 0
-    if include_cash and payload.objective in {"risk_parity", "risk_budget"}:
-        raise HTTPException(status_code=422, detail="Cash cannot be included in risk-parity/risk-budget objectives because it has zero modeled covariance")
+    include_cash = payload.include_cash or payload.maximum_cash_weight is not None or "max_cash_weight" in constraints or float(payload.minimum_cash_weight or 0) > 0 or float(constraints.get("min_cash_weight", 0) or 0) > 0 or float(constraints.get("liquidity_requirement", 0) or 0) > 0
     portfolio_value = float(get_portfolio_summary(db, user, portfolio.id).total_value)
     liquidity_weight = float(constraints.get("liquidity_requirement", 0) or 0) / portfolio_value if portfolio_value else 0
     cash_minimum = max(float(payload.minimum_cash_weight or 0), float(constraints.get("min_cash_weight", 0) or 0), liquidity_weight)
+    cash_maximum = float(payload.maximum_cash_weight if payload.maximum_cash_weight is not None else constraints.get("max_cash_weight", DEFAULT_MAX_CASH_WEIGHT))
+    if cash_minimum > cash_maximum + WEIGHT_TOLERANCE:
+        raise HTTPException(status_code=422, detail={"code": "cash_bounds_infeasible", "message": "Minimum cash exceeds maximum cash", "binding_constraints": ["min_cash_weight", "max_cash_weight"], "minimum_cash_weight": cash_minimum, "maximum_cash_weight": cash_maximum})
+    if payload.objective in {"risk_parity", "risk_budget"} and payload.minimum_cash_weight is None and "min_cash_weight" not in constraints:
+        raise HTTPException(status_code=422, detail={"code": "cash_minimum_required", "message": "Risk-parity and risk-budget objectives require a confirmed cash minimum so the risky sleeve is explicit.", "binding_constraints": ["min_cash_weight"]})
     observed_risk_free = _effective_risk_free_rate(db, days[-1], payload.risk_free_series_key)
     effective_risk_free = float(capm_inputs["risk_free"]["annual_rate"]) if capm_inputs else payload.risk_free_rate if payload.risk_free_rate is not None else float(observed_risk_free["annual_rate"]) if observed_risk_free else None
     if payload.objective == "max_sharpe" and effective_risk_free is None:
@@ -609,11 +647,9 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
         symbols.append("CASH")
         returns = np.column_stack([returns, np.zeros(returns.shape[0])])
         lower.append(cash_minimum)
-        upper.append(1.0)
+        upper.append(cash_maximum)
         if estimate:
-            if effective_risk_free is None:
-                raise HTTPException(status_code=422, detail="A cash return assumption requires an explicit or observed T-bill/government risk-free rate.")
-            cash_return = effective_risk_free
+            cash_return = payload.cash_return_rate
             estimate = type(estimate)(estimate.method, np.append(estimate.values, cash_return), {**estimate.assumptions, "cash_return_assumption": cash_return})
     covariance = covariance_matrix(returns, payload.covariance_shrinkage)
     linear_upper_bounds = []
@@ -632,11 +668,21 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
         raise HTTPException(status_code=422, detail=f"Missing beta assumption for {exc.args[0]}") from exc
     if betas is None and estimate and estimate.method == "capm":
         betas = np.asarray(estimate.assumptions["betas"], dtype=float)
+    if payload.objective == "target_beta" and betas is None:
+        proxy_symbol, proxy_diagnostics = _capm_market_proxy_symbol(db, constraints)
+        benchmark_returns = _benchmark_returns_for_optimizer(db, proxy_symbol, days)
+        if benchmark_returns is None:
+            raise HTTPException(status_code=422, detail={"code": "beta_inputs_unavailable", "message": "Target beta requires aligned returns for an approved CAPM market proxy.", "diagnostics": proxy_diagnostics})
+        variance = float(np.var(benchmark_returns, ddof=1))
+        if variance <= 0:
+            raise HTTPException(status_code=422, detail={"code": "degenerate_market_proxy", "message": "The approved CAPM market proxy has zero return variance."})
+        risky_returns = returns[:, :len(symbols) - (1 if include_cash else 0)]
+        betas = np.asarray([np.cov(risky_returns[:, index], benchmark_returns, ddof=1)[0, 1] / variance for index in range(risky_returns.shape[1])])
     if include_cash and betas is not None:
         betas = np.append(betas, 0.0)
     configured_budgets = payload.risk_budgets or constraints.get("risk_budgets")
     try:
-        budgets = np.array([configured_budgets[s] for s in symbols]) if configured_budgets else None
+        budgets = np.array([configured_budgets[s] for s in symbols if s != "CASH"]) if configured_budgets else None
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=f"Missing risk budget for {exc.args[0]}") from exc
     target_return = payload.target_return
@@ -649,16 +695,32 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
     if payload.objective == "target_beta":
         target_beta = payload.target_beta if payload.target_beta is not None else (float(constraints["target_beta"]) if "target_beta" in constraints else None)
     try:
-        result = optimize(
+        if payload.objective in {"risk_parity", "risk_budget"} and include_cash:
+            risky_share = 1.0 - cash_minimum
+            if risky_share <= WEIGHT_TOLERANCE:
+                raise ValueError("Risk-budget objectives require a positive risky sleeve")
+            risky_count = len(symbols) - 1
+            risky_covariance = covariance[:risky_count, :risky_count]
+            risky_lower = [value / risky_share for value in lower[:risky_count]]
+            risky_upper = [min(1.0, value / risky_share) for value in upper[:risky_count]]
+            risky_budgets = budgets[:risky_count] if budgets is not None else None
+            risky_result = optimize(risky_covariance, objective=payload.objective, risk_budgets=risky_budgets, lower_bounds=risky_lower, upper_bounds=risky_upper)
+            if risky_result.status == "optimal":
+                total_weights = [weight * risky_share for weight in risky_result.weights] + [cash_minimum]
+                result = type(risky_result)("optimal", total_weights, float(np.asarray(total_weights) @ estimate.values) if estimate is not None else None, float(risky_result.volatility or 0) * risky_share, {**risky_result.diagnostics, "portfolio_basis": "risky_sleeve", "attached_cash_weight": cash_minimum})
+            else:
+                result = risky_result
+        else:
+            result = optimize(
             covariance, objective=payload.objective, expected_returns=estimate.values if estimate else None,
             target_return=target_return, target_volatility=target_volatility,
             target_beta=target_beta, betas=betas, risk_budgets=budgets,
             risk_free_rate=effective_risk_free,
             lower_bounds=lower, upper_bounds=upper, linear_upper_bounds=linear_upper_bounds,
-        )
+            )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail={"message": str(exc), "lower_bound_sum": sum(lower), "upper_bound_sum": sum(upper), "nearest_relaxations": ["Reduce minimum weights or cash", "Increase maximum instrument/sector weights", "Remove exclusions"]}) from exc
-    assumptions_data = {"covariance": "diagonal_shrinkage", "covariance_shrinkage": payload.covariance_shrinkage, "expected_returns": estimate.assumptions if estimate else None, "capm_inputs": capm_inputs, "annualization": 252}
+    assumptions_data = {"covariance": "diagonal_shrinkage", "covariance_shrinkage": payload.covariance_shrinkage, "expected_returns": estimate.assumptions if estimate else None, "capm_inputs": capm_inputs, "annualization": 252, "cash": {"instrument": "operational_cash", "annual_return": payload.cash_return_rate, "basis": payload.cash_return_basis, "effective_date": payload.cash_return_effective_date.isoformat() if payload.cash_return_effective_date else days[-1].isoformat(), "minimum_weight": cash_minimum, "maximum_weight": cash_maximum, "maximum_source": "request_or_ips" if payload.maximum_cash_weight is not None or "max_cash_weight" in constraints else "product_default"}}
     result_data = result.to_dict()
     row = OptimizerRun(portfolio_id=portfolio.id, objective=payload.objective, expected_return_method=payload.expected_return_method, ips_version_id=ips_version.id if ips_version else None, data_cutoff=days[-1], bounds_json=_json({"lower": lower, "upper": upper}), solver=str(result.diagnostics.get("solver")) if result.diagnostics.get("solver") else None, seed=0, input_json=_json(payload.model_dump(mode="json")), result_json=_json({**result_data, "symbols": symbols}), status=result.status, diagnostics_json=_json(result.diagnostics))
     db.add(row); db.flush()

@@ -178,7 +178,7 @@ def seed_workstation() -> dict[str, object]:
             OptimizerRequest(objective="minimum_variance"),
             OptimizerRequest(objective="max_sharpe", expected_return_method="historical_shrunk"),
             OptimizerRequest(objective="target_volatility_maximum_return", expected_return_method="historical_shrunk", target_volatility=0.18),
-            OptimizerRequest(objective="target_beta", expected_return_method="capm", target_beta=1.0, benchmark_symbol="HBL"),
+            OptimizerRequest(objective="risk_parity"),
         ]
         existing_objectives = set(db.scalars(select(OptimizerRun.objective).where(OptimizerRun.portfolio_id == portfolio.id)))
         for payload in optimizer_payloads:

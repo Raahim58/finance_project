@@ -15,6 +15,7 @@ from app.domain.quant import (
     risk_contributions,
     risk_metrics,
 )
+from app.domain.analytics_contract import CHANGE_TOLERANCE, WEIGHT_TOLERANCE, weight_diagnostics
 from app.models.user import User
 from app.models.workstation import PortfolioIPSVersion
 from app.schemas.workstation import PortfolioComparisonRequest
@@ -24,6 +25,7 @@ from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_s
 from app.services.workstation_service import (
     _aligned_prices,
     _benchmark_symbol,
+    _capm_market_proxy_symbol,
     _effective_risk_free_rate,
     _load,
     _selected_ips_constraints,
@@ -58,12 +60,14 @@ def _benchmark_returns(db: Session, symbol: str | None, days: list[date]) -> np.
 
 
 def capital_market_assumptions(db: Session, user: User, portfolio_id: str):
-    portfolio, symbols, days, returns, covariance, expected, _constraints, benchmark_symbol, risk_free = _market_inputs(db, user, portfolio_id)
-    benchmark_returns = _benchmark_returns(db, benchmark_symbol, days)
+    portfolio, symbols, days, returns, covariance, expected, constraints, benchmark_symbol, risk_free = _market_inputs(db, user, portfolio_id)
+    capm_proxy_symbol, proxy_diagnostics = _capm_market_proxy_symbol(db, constraints)
+    benchmark_returns = _benchmark_returns(db, capm_proxy_symbol, days)
     capm = None
     diagnostics: list[str] = []
-    if benchmark_symbol and benchmark_returns is None:
-        diagnostics.append("Benchmark history is not aligned across the complete security sample.")
+    diagnostics.extend(proxy_diagnostics)
+    if capm_proxy_symbol and benchmark_returns is None:
+        diagnostics.append("CAPM market-proxy history is not aligned across the complete security sample.")
     if benchmark_returns is not None and risk_free:
         capm = estimate_expected_returns(
             "capm",
@@ -113,7 +117,9 @@ def capital_market_assumptions(db: Session, user: User, portfolio_id: str):
         },
         "risk_free": risk_free,
         "benchmark": {
-            "symbol": benchmark_symbol,
+            "symbol": capm_proxy_symbol,
+            "performance_benchmark_symbol": benchmark_symbol,
+            "role": "capm_market_proxy",
             "available": benchmark_returns is not None,
             "realized_return": float(np.mean(benchmark_returns) * 252) if benchmark_returns is not None else None,
         },
@@ -167,10 +173,17 @@ def efficient_frontier_analysis(db: Session, user: User, portfolio_id: str, poin
             "weights": dict(zip(symbols, values.tolist(), strict=True)),
         }
 
+    chart_values = [(item["volatility"], item["expected_return"]) for item in frontier]
+    if any(not np.isfinite(volatility) or not np.isfinite(expected_return) or volatility < 0 or volatility > 5 or abs(expected_return) > 5 for volatility, expected_return in chart_values):
+        raise HTTPException(status_code=422, detail={"code": "frontier_unit_contract_error", "message": "Frontier values must be finite annual decimals within validated chart ranges.", "unit": "decimal"})
+
     return {
         "portfolio_id": portfolio.id,
         "data_cutoff": days[-1],
         "estimator": "historical_shrunk_comparison",
+        "unit": "decimal",
+        "portfolio_basis": "risky_sleeve",
+        "feasible_set_label": "Unconstrained risky-sleeve comparison",
         "points": frontier,
         "markers": {
             "current": point(current_weights),
@@ -183,23 +196,22 @@ def efficient_frontier_analysis(db: Session, user: User, portfolio_id: str, poin
             "risk_free_rate": float(risk_free["annual_rate"]) if risk_free else None,
             "constraints_applied": ["long_only", "max_instrument_weight"],
         },
-        "warnings": ["Sector, eligibility, and cash constraints are applied by saved optimizer runs, not this comparison frontier."],
+        "warnings": ["This comparison applies long-only and maximum-instrument constraints only. Cash, sector, and eligibility constraints belong to saved Build runs and are not in this feasible set."],
     }
 
 
 def capm_sml_analysis(db: Session, user: User, portfolio_id: str):
-    portfolio, symbols, days, returns, _covariance, _expected, _constraints, benchmark_symbol, risk_free = _market_inputs(db, user, portfolio_id)
-    benchmark_returns = _benchmark_returns(db, benchmark_symbol, days)
-    diagnostics = []
-    if not benchmark_symbol:
-        diagnostics.append("No benchmark is configured in the confirmed IPS or portfolio.")
+    portfolio, symbols, days, returns, _covariance, _expected, constraints, performance_benchmark_symbol, risk_free = _market_inputs(db, user, portfolio_id)
+    capm_proxy_symbol, diagnostics = _capm_market_proxy_symbol(db, constraints)
+    benchmark_returns = _benchmark_returns(db, capm_proxy_symbol, days)
     if not risk_free:
         diagnostics.append("No observed effective-dated risk-free series is available.")
     if benchmark_returns is None:
         diagnostics.append("At least 31 completely aligned benchmark observations are required.")
-    if diagnostics:
-        return {"available": False, "portfolio_id": portfolio.id, "data_cutoff": days[-1], "benchmark_symbol": benchmark_symbol, "securities": [], "sml": [], "diagnostics": diagnostics}
+    if not capm_proxy_symbol or not risk_free or benchmark_returns is None:
+        return {"available": False, "portfolio_id": portfolio.id, "data_cutoff": days[-1], "benchmark_symbol": capm_proxy_symbol, "performance_benchmark_symbol": performance_benchmark_symbol, "capm_market_proxy_symbol": capm_proxy_symbol, "risk_free": risk_free, "alignment": {"observations": 0, "sample_start": days[0], "sample_end": days[-1]}, "securities": [], "sml": [], "diagnostics": diagnostics}
     market_return = float(np.mean(benchmark_returns) * 252)
+    market_risk_premium = market_return - float(risk_free["annual_rate"])
     estimate = estimate_expected_returns("capm", returns, market_returns=benchmark_returns, risk_free_rate=float(risk_free["annual_rate"]))
     realized = np.mean(returns, axis=0) * 252
     securities = [
@@ -224,10 +236,15 @@ def capm_sml_analysis(db: Session, user: User, portfolio_id: str):
         "data_cutoff": days[-1],
         "risk_free_rate": float(risk_free["annual_rate"]),
         "market_return": market_return,
-        "benchmark_symbol": benchmark_symbol,
+        "market_risk_premium": market_risk_premium,
+        "benchmark_symbol": capm_proxy_symbol,
+        "performance_benchmark_symbol": performance_benchmark_symbol,
+        "capm_market_proxy_symbol": capm_proxy_symbol,
+        "risk_free": risk_free,
+        "alignment": {"observations": int(benchmark_returns.size), "sample_start": days[0], "sample_end": days[-1], "regression_window": int(benchmark_returns.size)},
         "securities": securities,
         "sml": sml,
-        "diagnostics": ["CAPM is shown as an analytical lens and is not the sole allocation method."],
+        "diagnostics": ["CAPM is shown as an analytical lens and is not the sole allocation method.", *( ["Market risk premium is negative for the aligned sample."] if market_risk_premium < 0 else []), *diagnostics],
     }
 
 
@@ -248,14 +265,18 @@ def _modeled_portfolio_returns(db: Session, user: User, portfolio_id: str):
         [next((float(row.market_value) for row in summary.holdings if row.symbol == symbol), 0.0) / total if total else 0.0 for symbol in symbols],
         dtype=float,
     )
-    return days[1:], returns @ weights
+    return days, returns @ weights
 
 
 def rolling_risk_analysis(db: Session, user: User, portfolio_id: str, window: int = 60):
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
-    days, values = _modeled_portfolio_returns(db, user, portfolio.id)
+    price_days, values = _modeled_portfolio_returns(db, user, portfolio.id)
+    days = price_days[1:]
+    constraints = _selected_ips_constraints(db, portfolio)
+    benchmark_symbol = _benchmark_symbol(db, portfolio, constraints)
+    benchmark_returns = _benchmark_returns(db, benchmark_symbol, price_days) if days else None
     if values.size < window:
-        return {"portfolio_id": portfolio.id, "window": window, "points": [], "diagnostics": [f"At least {window} ledger return observations are required."]}
+        return {"portfolio_id": portfolio.id, "window": window, "observations": int(values.size), "return_basis": "modeled_current_allocation", "benchmark_symbol": benchmark_symbol, "points": [], "diagnostics": [f"At least {window} modeled current-allocation return observations are required."]}
     wealth = np.cumprod(1 + values)
     running_peak = np.maximum.accumulate(wealth)
     points = []
@@ -263,20 +284,31 @@ def rolling_risk_analysis(db: Session, user: User, portfolio_id: str, window: in
         sample = values[end - window:end]
         volatility = float(np.std(sample, ddof=1) * np.sqrt(252))
         annual_return = float(np.mean(sample) * 252)
+        risk_free = _effective_risk_free_rate(db, days[end - 1], str(constraints.get("risk_free_series_key")) if constraints.get("risk_free_series_key") else None)
+        annual_risk_free = float(risk_free["annual_rate"]) if risk_free else None
+        benchmark_sample = benchmark_returns[end - window:end] if benchmark_returns is not None else None
+        beta = None
+        if benchmark_sample is not None and float(np.var(benchmark_sample, ddof=1)) > 0:
+            beta = float(np.cov(sample, benchmark_sample, ddof=1)[0, 1] / np.var(benchmark_sample, ddof=1))
         points.append({
             "date": days[end - 1],
             "volatility": volatility,
-            "sharpe": annual_return / volatility if volatility else None,
+            "sharpe": (annual_return - annual_risk_free) / volatility if volatility and annual_risk_free is not None else None,
             "drawdown": float(wealth[end - 1] / running_peak[end - 1] - 1),
-            "beta": None,
+            "beta": beta,
         })
     return {
         "portfolio_id": portfolio.id,
         "window": window,
+        "observations": int(values.size),
+        "return_basis": "modeled_current_allocation",
+        "benchmark_symbol": benchmark_symbol,
+        "risk_free": _effective_risk_free_rate(db, days[-1], str(constraints.get("risk_free_series_key")) if constraints.get("risk_free_series_key") else None),
         "points": points,
         "diagnostics": [
             "Current-allocation modeled return series; the realized ledger TWR remains on Overview.",
-            "Rolling beta requires a fully aligned benchmark return series and is not emitted when alignment is incomplete.",
+            *( ["Rolling beta is NOT_EVALUATED because a fully aligned performance-benchmark series is unavailable."] if benchmark_returns is None else []),
+            *( ["Rolling Sharpe is NOT_EVALUATED because no effective-dated risk-free observation is available for one or more windows."] if any(point["sharpe"] is None for point in points) else []),
         ],
     }
 
@@ -285,7 +317,7 @@ def return_distribution_analysis(db: Session, user: User, portfolio_id: str, bin
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     _days, values = _modeled_portfolio_returns(db, user, portfolio.id)
     if values.size < 30:
-        return {"portfolio_id": portfolio.id, "sample_size": int(values.size), "bins": [], "diagnostics": ["At least 30 ledger return observations are required."]}
+        return {"portfolio_id": portfolio.id, "sample_size": int(values.size), "bins": [], "estimator": "bias_corrected_fisher_pearson", "diagnostics": ["At least 30 modeled current-allocation return observations are required."]}
     counts, edges = np.histogram(values, bins=bins)
     metrics = risk_metrics(values).to_dict()
     return {
@@ -298,6 +330,7 @@ def return_distribution_analysis(db: Session, user: User, portfolio_id: str, bin
         "es_99": metrics["historical_es_99"],
         "skewness": metrics["skewness"],
         "excess_kurtosis": metrics["excess_kurtosis"],
+        "estimator": "bias_corrected_fisher_pearson_skew_and_excess_kurtosis",
         "diagnostics": [
             "Historical empirical distribution of the current-allocation modeled daily return series; not the realized ledger TWR."
         ],
@@ -337,8 +370,9 @@ def _portfolio_metrics(asset_returns: np.ndarray, weights: np.ndarray, expected:
 def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: PortfolioComparisonRequest):
     portfolio, symbols, days, returns, covariance, expected, constraints, benchmark_symbol, risk_free = _market_inputs(db, user, portfolio_id)
     proposed = {key.upper(): float(value) for key, value in payload.target_weights.items()}
-    if any(value < 0 for value in proposed.values()) or abs(sum(proposed.values()) - 1) > 1e-6:
-        raise HTTPException(status_code=422, detail="Proposed weights must be non-negative and sum to one")
+    weight_check = weight_diagnostics(proposed)
+    if not weight_check["valid"]:
+        raise HTTPException(status_code=422, detail={"code": "invalid_weight_sum", "message": "Proposed weights must be non-negative and sum to one", **weight_check})
     unknown = sorted(set(proposed) - set(symbols) - {"CASH"})
     if unknown:
         raise HTTPException(status_code=422, detail={"message": "Comparison contains securities outside the modeled portfolio universe", "symbols": unknown})
@@ -351,13 +385,9 @@ def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: Portf
     proposed_risky = np.asarray([proposed.get(symbol, 0) for symbol in symbols])
     annual_rf = float(risk_free["annual_rate"]) if risk_free else None
     adjusted_expected = expected.values
-    if annual_rf is not None:
-        # Cash earns the observed risk-free assumption, while covariance remains zero.
-        current_expected = np.append(adjusted_expected, annual_rf)
-        proposed_expected = current_expected
-    else:
-        current_expected = np.append(adjusted_expected, 0.0)
-        proposed_expected = current_expected
+    cash_return = float(constraints.get("operational_cash_return", 0.0) or 0.0)
+    current_expected = np.append(adjusted_expected, cash_return)
+    proposed_expected = current_expected
     current_metrics = _portfolio_metrics(returns, current_risky, adjusted_expected, covariance, annual_rf, None, current["CASH"])
     proposed_metrics = _portfolio_metrics(returns, proposed_risky, adjusted_expected, covariance, annual_rf, None, proposed["CASH"])
     current_metrics["expected_return"] = float(np.append(current_risky, current["CASH"]) @ current_expected)
@@ -397,15 +427,15 @@ def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: Portf
     for key, (label, unit, direction) in labels.items():
         before, after = current_metrics.get(key), proposed_metrics.get(key)
         delta = after - before if before is not None and after is not None else None
-        metrics.append({"key": key, "label": label, "unit": unit, "current": before, "proposed": after, "delta": delta, "preferred_direction": direction, "availability_note": "A confirmed IPS goal is required." if key in {"required_return", "return_shortfall"} and required_return is None else None})
-        if delta is not None and abs(delta) > 1e-10 and direction != "neutral":
-            improved = delta > 0 if direction == "higher" else delta < 0
-            trade_offs.append({"metric": key, "label": label, "direction": "improved" if improved else "worsened", "delta": delta})
+        classification = "NOT_EVALUATED" if delta is None else "REFERENCE" if direction == "neutral" else "UNCHANGED" if abs(delta) <= CHANGE_TOLERANCE else "IMPROVED" if (delta > 0 if direction == "higher" else delta < 0) else "WORSENED"
+        metrics.append({"key": key, "label": label, "unit": unit, "current": before, "proposed": after, "delta": delta, "preferred_direction": direction, "classification": classification, "availability_note": "A confirmed IPS goal is required." if key in {"required_return", "return_shortfall"} and required_return is None else None})
+        if direction != "neutral":
+            trade_offs.append({"metric": key, "label": label, "direction": classification, "delta": delta, "unit": unit})
     return {
         "portfolio_id": portfolio.id,
         "label": payload.label,
         "data_cutoff": days[-1],
-        "assumptions": {"expected_return_method": expected.method, "expected_return": expected.assumptions, "covariance": "diagonal_shrinkage", "risk_free": risk_free, "cash_covariance": 0.0},
+        "assumptions": {"expected_return_method": expected.method, "expected_return": expected.assumptions, "covariance": "diagonal_shrinkage", "risk_free": risk_free, "cash": {"instrument": "operational_cash", "annual_return": cash_return, "basis": "nominal", "effective_date": days[-1].isoformat()}, "cash_covariance": 0.0},
         "current_weights": current,
         "proposed_weights": proposed,
         "metrics": metrics,
@@ -422,9 +452,11 @@ def risk_budget_analysis(db: Session, user: User, portfolio_id: str, target: dic
     portfolio, symbols, days, _returns, covariance, _expected, constraints, _benchmark, _risk_free = _market_inputs(db, user, portfolio_id)
     summary = get_portfolio_summary(db, user, portfolio.id)
     values = {row.symbol: float(row.market_value) for row in summary.holdings}
-    total = sum(values.values())
-    weights = np.asarray([values.get(symbol, 0) / total for symbol in symbols])
-    contribution = risk_contributions(weights, covariance)
+    risky_total = sum(values.values())
+    total_capital = float(summary.total_value)
+    risky_weights = np.asarray([values.get(symbol, 0) / risky_total for symbol in symbols])
+    total_weights = np.asarray([values.get(symbol, 0) / total_capital if total_capital else 0.0 for symbol in symbols])
+    contribution = risk_contributions(risky_weights, covariance)
     configured = target or constraints.get("risk_budgets")
     normalized = None
     if configured:
@@ -439,6 +471,8 @@ def risk_budget_analysis(db: Session, user: User, portfolio_id: str, target: dic
     for index, symbol in enumerate(symbols):
         actual = float(contribution["percentage"][index])
         target_value = float(normalized[index]) if normalized is not None else None
-        items.append({"symbol": symbol, "capital_weight": float(weights[index]), "component_risk": float(contribution["component"][index]), "percentage_risk": actual, "target_risk": target_value, "residual": actual - target_value if target_value is not None else None})
+        items.append({"symbol": symbol, "total_capital_weight": float(total_weights[index]), "risky_sleeve_weight": float(risky_weights[index]), "component_risk": float(contribution["component"][index]), "percentage_risk": actual, "target_risk": target_value, "residual": actual - target_value if target_value is not None else None})
+    cash_weight = float(summary.cash_balance) / total_capital if total_capital else 0.0
+    items.append({"symbol": "CASH", "total_capital_weight": cash_weight, "risky_sleeve_weight": None, "component_risk": 0.0, "percentage_risk": 0.0, "target_risk": None, "residual": None})
     error = float(np.sqrt(np.sum((np.asarray(contribution["percentage"]) - normalized) ** 2))) if normalized is not None else None
-    return {"portfolio_id": portfolio.id, "data_cutoff": days[-1], "items": items, "total_percentage_risk": float(np.sum(contribution["percentage"])), "residual_error": error, "diagnostics": [] if normalized is not None else ["No target risk budget is configured; actual contribution is shown without a target."]}
+    return {"portfolio_id": portfolio.id, "data_cutoff": days[-1], "portfolio_basis": "total_capital", "items": items, "total_percentage_risk": float(np.sum(contribution["percentage"])), "residual_error": error, "diagnostics": [] if normalized is not None else ["No target risk budget is configured; actual contribution is shown without a target."]}

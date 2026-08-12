@@ -55,6 +55,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/demo-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Demo Login */
+        get: operations["demo_login_auth_demo_login_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/sample-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sample Session
+         * @description Issue the enabled demo user's session for the temporary public workspace.
+         */
+        post: operations["sample_session_auth_sample_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/logout": {
         parameters: {
             query?: never;
@@ -1257,6 +1294,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/macro/regime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Regime */
+        get: operations["regime_macro_regime_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/companies/{instrument_id}/overview": {
         parameters: {
             query?: never;
@@ -1388,6 +1442,23 @@ export interface paths {
         put?: never;
         /** Create Scenario */
         post: operations["create_scenario_portfolios__portfolio_id__scenarios_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scenario-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Scenario Templates */
+        get: operations["scenario_templates_scenario_templates_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1906,8 +1977,22 @@ export interface components {
             risk_free_rate?: number | null;
             /** Market Return */
             market_return?: number | null;
+            /** Market Risk Premium */
+            market_risk_premium?: number | null;
             /** Benchmark Symbol */
             benchmark_symbol?: string | null;
+            /** Performance Benchmark Symbol */
+            performance_benchmark_symbol?: string | null;
+            /** Capm Market Proxy Symbol */
+            capm_market_proxy_symbol?: string | null;
+            /** Risk Free */
+            risk_free?: {
+                [key: string]: unknown;
+            } | null;
+            /** Alignment */
+            alignment?: {
+                [key: string]: unknown;
+            };
             /** Securities */
             securities?: components["schemas"]["CapmPoint"][];
             /** Sml */
@@ -2003,6 +2088,11 @@ export interface components {
              * @enum {string}
              */
             preferred_direction: "higher" | "lower" | "neutral";
+            /**
+             * Classification
+             * @enum {string}
+             */
+            classification: "IMPROVED" | "WORSENED" | "UNCHANGED" | "REFERENCE" | "NOT_EVALUATED";
             /** Availability Note */
             availability_note?: string | null;
         };
@@ -2121,6 +2211,20 @@ export interface components {
             data_cutoff: string;
             /** Estimator */
             estimator: string;
+            /**
+             * Unit
+             * @default decimal
+             * @constant
+             */
+            unit: "decimal";
+            /**
+             * Portfolio Basis
+             * @default risky_sleeve
+             * @constant
+             */
+            portfolio_basis: "risky_sleeve";
+            /** Feasible Set Label */
+            feasible_set_label: string;
             /** Points */
             points: components["schemas"]["FrontierPoint"][];
             /** Markers */
@@ -2292,10 +2396,28 @@ export interface components {
             portfolio_id: string;
             /** Ips Version Id */
             ips_version_id: string | null;
+            /**
+             * Context
+             * @default current
+             */
+            context: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "PASS" | "BREACH" | "NOT_EVALUATED";
             /** Compliant */
             compliant: boolean;
+            /** Checks */
+            checks?: {
+                [key: string]: unknown;
+            }[];
             /** Violations */
             violations: {
+                [key: string]: unknown;
+            }[];
+            /** Not Evaluated */
+            not_evaluated?: {
                 [key: string]: unknown;
             }[];
             /**
@@ -2325,6 +2447,10 @@ export interface components {
             goal?: string | null;
             /** Benchmark Symbol */
             benchmark_symbol?: string | null;
+            /** Performance Benchmark Symbol */
+            performance_benchmark_symbol?: string | null;
+            /** Capm Market Proxy Symbol */
+            capm_market_proxy_symbol?: string | null;
             /** Valuation Date */
             valuation_date?: string | null;
             /** Target Date */
@@ -2622,11 +2748,8 @@ export interface components {
             risk_budgets?: {
                 [key: string]: number;
             } | null;
-            /**
-             * Risk Free Rate
-             * @default 0
-             */
-            risk_free_rate: number;
+            /** Risk Free Rate */
+            risk_free_rate?: number | null;
             /** Benchmark Symbol */
             benchmark_symbol?: string | null;
             /** Risk Free Series Key */
@@ -2662,6 +2785,21 @@ export interface components {
             include_cash: boolean;
             /** Minimum Cash Weight */
             minimum_cash_weight?: number | null;
+            /** Maximum Cash Weight */
+            maximum_cash_weight?: number | null;
+            /**
+             * Cash Return Rate
+             * @default 0
+             */
+            cash_return_rate: number;
+            /**
+             * Cash Return Basis
+             * @default nominal
+             * @enum {string}
+             */
+            cash_return_basis: "nominal" | "real";
+            /** Cash Return Effective Date */
+            cash_return_effective_date?: string | null;
         };
         /** OptimizerResponse */
         OptimizerResponse: {
@@ -3156,6 +3294,8 @@ export interface components {
             portfolio_id: string;
             /** Trigger */
             trigger: string;
+            /** Trigger Label */
+            trigger_label?: string | null;
             /** Evidence */
             evidence: {
                 [key: string]: unknown;
@@ -3182,6 +3322,16 @@ export interface components {
             message: string;
             /** Status */
             status: string;
+            /** Linked Allocation */
+            linked_allocation?: {
+                [key: string]: unknown;
+            } | null;
+            /** Lifecycle */
+            lifecycle?: string[];
+            /** Links */
+            links?: {
+                [key: string]: string;
+            };
             /**
              * Created At
              * Format: date-time
@@ -3208,6 +3358,11 @@ export interface components {
             skewness?: number | null;
             /** Excess Kurtosis */
             excess_kurtosis?: number | null;
+            /**
+             * Estimator
+             * @default bias_corrected_fisher_pearson_skew_and_excess_kurtosis
+             */
+            estimator: string;
             /** Diagnostics */
             diagnostics?: string[];
         };
@@ -3215,8 +3370,10 @@ export interface components {
         RiskBudgetItem: {
             /** Symbol */
             symbol: string;
-            /** Capital Weight */
-            capital_weight: number;
+            /** Total Capital Weight */
+            total_capital_weight: number;
+            /** Risky Sleeve Weight */
+            risky_sleeve_weight?: number | null;
             /** Component Risk */
             component_risk: number;
             /** Percentage Risk */
@@ -3235,6 +3392,12 @@ export interface components {
              * Format: date
              */
             data_cutoff: string;
+            /**
+             * Portfolio Basis
+             * @default total_capital
+             * @constant
+             */
+            portfolio_basis: "total_capital";
             /** Items */
             items: components["schemas"]["RiskBudgetItem"][];
             /** Total Percentage Risk */
@@ -3268,6 +3431,23 @@ export interface components {
             window: number;
             /** Points */
             points: components["schemas"]["RollingRiskPoint"][];
+            /**
+             * Observations
+             * @default 0
+             */
+            observations: number;
+            /**
+             * Return Basis
+             * @default modeled_current_allocation
+             * @constant
+             */
+            return_basis: "modeled_current_allocation";
+            /** Benchmark Symbol */
+            benchmark_symbol?: string | null;
+            /** Risk Free */
+            risk_free?: {
+                [key: string]: unknown;
+            } | null;
             /** Diagnostics */
             diagnostics?: string[];
         };
@@ -3685,6 +3865,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    demo_login_auth_demo_login_get: {
+        parameters: {
+            query: {
+                token: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sample_session_auth_sample_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
                 };
             };
         };
@@ -6208,6 +6439,37 @@ export interface operations {
             };
         };
     };
+    regime_macro_regime_get: {
+        parameters: {
+            query?: {
+                portfolio_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     overview_companies__instrument_id__overview_get: {
         parameters: {
             query?: never;
@@ -6490,6 +6752,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scenario_templates_scenario_templates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -6972,6 +7254,7 @@ export interface operations {
         parameters: {
             query?: {
                 portfolio_id?: string | null;
+                include_closed?: boolean;
             };
             header?: never;
             path?: never;
