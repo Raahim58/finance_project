@@ -1,11 +1,13 @@
 "use client";
 
-import { FormEvent,useEffect,useRef,useState } from "react";
+import { FormEvent,Suspense,useEffect,useRef,useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { AssistantResult,Portfolio,getPortfolios,sendAssistantMessage } from "@/lib/api";
 
-export default function AssistantPage(){
-  const [portfolios,setPortfolios]=useState<Portfolio[]>([]);const [portfolioId,setPortfolioId]=useState("");const [question,setQuestion]=useState("");const [result,setResult]=useState<AssistantResult|null>(null);const [loading,setLoading]=useState(false);const [error,setError]=useState("");
+export default function AssistantPage(){return <Suspense fallback={<div className="page-wrap"><div className="panel h-96 skeleton"/></div>}><AssistantContent/></Suspense>}
+function AssistantContent(){
+  const params=useSearchParams();const instrumentId=params?.get("instrument_id")??"";const [portfolios,setPortfolios]=useState<Portfolio[]>([]);const [portfolioId,setPortfolioId]=useState(params?.get("portfolio_id")??"");const [question,setQuestion]=useState(params?.get("question")??"");const [result,setResult]=useState<AssistantResult|null>(null);const [loading,setLoading]=useState(false);const [error,setError]=useState("");
   // Portfolio scope defaults to Market-wide and is only ever changed by an explicit
   // user selection; the list load must never silently switch a question's scope.
   const requestSeq=useRef(0);
@@ -16,7 +18,7 @@ export default function AssistantPage(){
     const id=++requestSeq.current;
     setLoading(true);setError("");
     try{
-      const response=await sendAssistantMessage(askedQuestion,askedPortfolioId||undefined);
+      const response=await sendAssistantMessage(askedQuestion,askedPortfolioId||undefined,instrumentId||undefined);
       if(id===requestSeq.current) setResult(response);
     }catch(err){
       if(id===requestSeq.current) setError(err instanceof Error?err.message:"Assistant failed");

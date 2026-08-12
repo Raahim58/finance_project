@@ -4,6 +4,7 @@ from datetime import date
 
 import numpy as np
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.quant import (
@@ -17,13 +18,14 @@ from app.domain.quant import (
 )
 from app.domain.analytics_contract import CHANGE_TOLERANCE, WEIGHT_TOLERANCE, weight_diagnostics
 from app.models.user import User
-from app.models.workstation import PortfolioIPSVersion
+from app.models.workstation import Instrument, PortfolioIPSVersion
 from app.schemas.workstation import PortfolioComparisonRequest
 from app.services.canonical_market_service import price_series
 from app.services.compliance_service import evaluate_ips_constraints
 from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_summary
 from app.services.workstation_service import (
     _aligned_prices,
+    _aligned_symbol_prices,
     _benchmark_symbol,
     _capm_market_proxy_symbol,
     _effective_risk_free_rate,
@@ -33,9 +35,14 @@ from app.services.workstation_service import (
 )
 
 
-def _market_inputs(db: Session, user: User, portfolio_id: str):
+def _market_inputs(db: Session, user: User, portfolio_id: str, extra_symbols: list[str] | None = None):
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
-    symbols, days, prices = _aligned_prices(db, portfolio.id, None, None)
+    if extra_symbols:
+        summary = get_portfolio_summary(db, user, portfolio.id)
+        universe = [row.symbol for row in summary.holdings] + [symbol.upper() for symbol in extra_symbols if symbol.upper() != "CASH"]
+        symbols, days, prices = _aligned_symbol_prices(db, universe, None, None)
+    else:
+        symbols, days, prices = _aligned_prices(db, portfolio.id, None, None)
     returns = return_matrix(prices)
     covariance = covariance_matrix(returns, 0.20)
     expected = estimate_expected_returns("historical_shrunk", returns, shrinkage=0.50)
@@ -375,14 +382,11 @@ def _portfolio_metrics(asset_returns: np.ndarray, weights: np.ndarray, expected:
 
 
 def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: PortfolioComparisonRequest):
-    portfolio, symbols, days, returns, covariance, expected, constraints, benchmark_symbol, risk_free = _market_inputs(db, user, portfolio_id)
+    portfolio, symbols, days, returns, covariance, expected, constraints, benchmark_symbol, risk_free = _market_inputs(db, user, portfolio_id, list(payload.target_weights))
     proposed = {key.upper(): float(value) for key, value in payload.target_weights.items()}
     weight_check = weight_diagnostics(proposed)
     if not weight_check["valid"]:
         raise HTTPException(status_code=422, detail={"code": "invalid_weight_sum", "message": "Proposed weights must be non-negative and sum to one", **weight_check})
-    unknown = sorted(set(proposed) - set(symbols) - {"CASH"})
-    if unknown:
-        raise HTTPException(status_code=422, detail={"message": "Comparison contains securities outside the modeled portfolio universe", "symbols": unknown})
     summary = get_portfolio_summary(db, user, portfolio.id)
     total = float(summary.total_value)
     current = {row.symbol: float(row.market_value) / total if total else 0.0 for row in summary.holdings}
@@ -453,7 +457,7 @@ def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: Portf
             proposed,
             constraints,
             portfolio.selected_ips_version_id,
-            {row.symbol: row.sector for row in summary.holdings},
+            {row.symbol: row.sector for row in db.scalars(select(Instrument).where(Instrument.symbol.in_(symbols)))},
             {
                 "portfolio_volatility": proposed_metrics.get("volatility"),
                 "portfolio_beta": proposed_metrics.get("beta"),

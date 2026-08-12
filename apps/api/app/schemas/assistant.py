@@ -11,6 +11,7 @@ class ConversationCreate(BaseModel):
 class AssistantMessageCreate(BaseModel):
     question: str = Field(min_length=1, max_length=8000)
     portfolio_id: str | None = None
+    instrument_id: str | None = None
     provider: str | None = None
     model: str | None = None
 

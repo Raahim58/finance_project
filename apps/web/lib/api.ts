@@ -99,6 +99,25 @@ export type CompanyResearch = {
   has_synthetic_data: boolean;
 };
 
+export type SecurityIntelligence = {
+  security:{id:string;symbol:string;name:string;sector?:string|null};
+  observed_facts:Record<string,unknown>;
+  model_outputs:{portfolio_relevance?:Record<string,unknown>|null;regime?:Record<string,unknown>};
+  assumptions:Array<string|null>;
+  ai_interpretation:null;
+  evidence:Record<string,unknown>;
+  missing_data:string[];
+};
+export type CandidateEvaluation = {
+  candidate:{symbol:string;action:string;sizing:string;current_weight:number;proposed_weight:number};
+  comparison:PortfolioComparison;
+  stress:{current:Array<Record<string,unknown>>;proposed:Array<Record<string,unknown>>};
+  optimizer:Record<string,unknown>|null;
+  decision_explanation:{improved:Array<Record<string,unknown>>;deteriorated:Array<Record<string,unknown>>;sizing:string;assumptions:Record<string,unknown>;main_downside_scenarios:Array<Record<string,unknown>>};
+  ledger_mutated:false;
+  warnings:string[];
+};
+
 export type MarketOverview = {
   snapshot?: MarketSnapshot | null;
   top_gainers: MarketPrice[];
@@ -653,8 +672,8 @@ export type MacroRegime={regime:string;method:string;method_note:string;dimensio
 export function getMacroRegime(portfolioId?:string){return request<MacroRegime>(`/macro/regime${portfolioId?`?portfolio_id=${encodeURIComponent(portfolioId)}`:""}`);}
 export function runHistoricalReplay(portfolioId:string,startDate:string,endDate:string,useCurrentHoldings=true){return request<HistoricalReplay>(`/portfolios/${encodeURIComponent(portfolioId)}/scenarios/historical-replay`,{method:"POST",body:JSON.stringify({start_date:startDate,end_date:endDate,use_current_holdings:useCurrentHoldings})});}
 
-export function sendAssistantMessage(question: string, portfolioId?: string) {
-  return request<AssistantResult>("/assistant/messages", { method: "POST", body: JSON.stringify({ question, portfolio_id: portfolioId || null }) });
+export function sendAssistantMessage(question: string, portfolioId?: string, instrumentId?: string) {
+  return request<AssistantResult>("/assistant/messages", { method: "POST", body: JSON.stringify({ question, portfolio_id: portfolioId || null, instrument_id: instrumentId || null }) });
 }
 
 export type AlertStatus = "active" | "acknowledged" | "resolved" | "all";
@@ -694,4 +713,7 @@ export function searchInstruments(query = "") {
 }
 
 export async function getCompanyResearch(symbol:string){const matches=await searchInstruments(symbol);const instrument=matches.find(item=>item.symbol.toUpperCase()===symbol.toUpperCase());if(!instrument)throw new Error("Instrument not found");return request<CompanyResearch>(`/companies/${encodeURIComponent(instrument.id)}/overview`);}
+export function getSecurityIntelligence(symbol:string,portfolioId?:string){const query=portfolioId?`?portfolio_id=${encodeURIComponent(portfolioId)}`:"";return request<SecurityIntelligence>(`/intelligence/securities/${encodeURIComponent(symbol)}${query}`);}
+export function evaluateSecurity(symbol:string,payload:Record<string,unknown>){return request<CandidateEvaluation>(`/intelligence/securities/${encodeURIComponent(symbol)}/evaluate`,{method:"POST",body:JSON.stringify(payload)});}
+export function saveSecurityProposal(symbol:string,payload:Record<string,unknown>){return request<{proposal:AllocationSet;evaluation:CandidateEvaluation;ledger_mutated:false}>(`/intelligence/securities/${encodeURIComponent(symbol)}/proposals`,{method:"POST",body:JSON.stringify(payload)});}
 import type { components as OpenApi } from "@/lib/generated/api";

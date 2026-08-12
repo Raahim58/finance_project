@@ -342,8 +342,14 @@ def _aligned_prices(db: Session, portfolio_id: str, start: date | None, end: dat
         )
     )
     symbols = [row.symbol for row in holding_rows]
+    return _aligned_symbol_prices(db, symbols, start, end, cache_key=(portfolio_id, tuple((row.symbol, row.updated_at) for row in holding_rows)))
+
+
+def _aligned_symbol_prices(db: Session, symbols: list[str], start: date | None, end: date | None, cache_key: object | None = None):
+    """Align canonical prices for an analytical universe without changing holdings."""
+    symbols = sorted({symbol.upper() for symbol in symbols})
     if len(symbols) < 2:
-        raise HTTPException(status_code=422, detail="At least two holdings are required")
+        raise HTTPException(status_code=422, detail="At least two securities are required")
     instrument_ids = list(db.scalars(select(Instrument.id).where(Instrument.symbol.in_(symbols))))
     observation_stamp = db.execute(
         select(func.count(MarketObservation.id), func.max(MarketObservation.effective_at))
@@ -358,10 +364,9 @@ def _aligned_prices(db: Session, portfolio_id: str, start: date | None, end: dat
         .where(MarketPrice.symbol.in_(symbols))
     ).one()
     key = (
-        portfolio_id,
+        cache_key or tuple(symbols),
         start,
         end,
-        tuple((row.symbol, row.updated_at) for row in holding_rows),
         tuple(observation_stamp),
         tuple(legacy_stamp),
     )

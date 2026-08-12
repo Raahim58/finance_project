@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.routes import assistant, auth, documents, health, ingestion, market, monitoring, portfolio, rag, research, settings, workstation
+from app.api.routes import assistant, auth, documents, health, ingestion, intelligence, market, monitoring, portfolio, rag, research, settings, workstation
 
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
@@ -14,4 +14,5 @@ api_router.include_router(workstation.router, tags=["workstation"])
 api_router.include_router(research.router, tags=["research"])
 api_router.include_router(ingestion.router, tags=["ingestion"])
 api_router.include_router(assistant.router, tags=["assistant"])
+api_router.include_router(intelligence.router, tags=["intelligence"])
 api_router.include_router(monitoring.router, tags=["monitoring"])

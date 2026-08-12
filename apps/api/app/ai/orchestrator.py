@@ -25,6 +25,7 @@ ADVICE_RE = re.compile(r"\b(should|recommend|buy|sell|increase|reduce|rebalance)
 # Checked in priority order; the first match wins. Ordering keeps "risk" questions
 # from being swallowed by the broader performance/return pattern.
 INTENT_PATTERNS = (
+    ("security_fit", re.compile(r"worth adding|interesting right now|fit my portfolio|risks? of|contradict", re.I)),
     ("decision_request", re.compile(r"what (?:should|can) i do|what do you recommend|recommendation|next (?:step|action)|how (?:should|can) i improve", re.I)),
     ("risk_concentration", re.compile(r"risk.*concentrat|concentrat.*risk|where.*risk|riskiest|risk contribut|biggest risk", re.I)),
     ("compliance", re.compile(r"\bmandate\b|\bcompliance\b|\bips\b|\bbreach\b|\bconstraint\b|\bviolat", re.I)),
@@ -208,6 +209,32 @@ def _answer_scenario(scenario_history: dict[str, object] | None) -> tuple[list[s
     return lines, [], evidence
 
 
+def _answer_security_fit(context: dict[str, object] | None) -> tuple[list[str], list[str], list[dict[str, object]]]:
+    if not context:
+        return ["Security fit cannot be evaluated without a security and selected portfolio context."], ["Missing input: Intelligence V1 security context."], []
+    security = context.get("security") or {}
+    outputs = context.get("model_outputs") or {}
+    relevance = outputs.get("portfolio_relevance") if isinstance(outputs, dict) else None
+    if not isinstance(relevance, dict):
+        return [f"{security.get('symbol', 'This security')} can be described from observed company evidence, but personal fit requires a selected portfolio."], list(context.get("missing_data") or []), []
+    ownership = relevance.get("ownership") or {}
+    sector = relevance.get("sector_exposure") or {}
+    correlation = relevance.get("correlation") or {}
+    symbol = str(security.get("symbol") or "Security")
+    lines = [f"You currently own {float(ownership.get('weight', 0)):.2%} {symbol}. Current {sector.get('sector') or 'sector'} exposure is {float(sector.get('current_weight', 0)):.2%}."]
+    if sector.get("headroom") is not None:
+        lines.append(f"Confirmed IPS sector headroom is {float(sector['headroom']):.2%}; position headroom is {float(relevance.get('position_headroom')):.2%} when configured.")
+    if correlation.get("available"):
+        lines.append(f"Average aligned-return correlation with current holdings is {float(correlation.get('average_with_holdings')):.2f}. Run a candidate evaluation before drawing a diversification conclusion.")
+    else:
+        lines.append("Diversification impact is not evaluated because aligned candidate/holding history is unavailable.")
+    evidence = [
+        {"evidence_id": f"calc:ownership:{symbol}", "metric": "current_weight", "symbol": symbol, "value": ownership.get("weight"), "unit": "decimal", "as_of": (relevance.get("portfolio") or {}).get("data_cutoff")},
+        {"evidence_id": f"calc:sector_headroom:{symbol}", "metric": "sector_headroom", "symbol": symbol, "value": sector.get("headroom"), "limit": sector.get("limit"), "unit": "decimal"},
+    ]
+    return lines, list(context.get("missing_data") or []), evidence
+
+
 def _deterministic_answer(
     question: str,
     intent: str,
@@ -218,10 +245,13 @@ def _deterministic_answer(
     freshness: dict[str, object] | None,
     scenario_history: dict[str, object] | None,
     citations: list[dict[str, object]],
+    security_context: dict[str, object] | None = None,
 ) -> tuple[str, list[str], list[dict[str, object]], set[str]]:
     base_lines, evidence = _base_portfolio_evidence(summary)
     intent_evidence: list[dict[str, object]] = []
-    if intent == "decision_request":
+    if intent == "security_fit":
+        intent_lines, uncertainty, intent_evidence = _answer_security_fit(security_context)
+    elif intent == "decision_request":
         intent_lines, uncertainty, intent_evidence = _answer_decision_request(compliance, risk_budget)
     elif intent == "risk_concentration":
         intent_lines, uncertainty, intent_evidence = _answer_risk_concentration(quant, risk_budget)
@@ -254,7 +284,7 @@ def _deterministic_answer(
             uncertainty.append("Note: this portfolio has an active mandate breach; ask a mandate-compliance question for details.")
         elif compliance.get("status") == "NOT_EVALUATED":
             uncertainty.append("Note: mandate compliance is not fully evaluated for this portfolio.")
-    if ADVICE_RE.search(question) and intent != "decision_request" and (not summary or not compliance):
+    if ADVICE_RE.search(question) and intent != "decision_request" and (not summary or not compliance or compliance.get("status") == "NOT_EVALUATED"):
         lines.append("I cannot provide a grounded buy/sell or rebalance recommendation until current portfolio data and a confirmed IPS are available.")
     if not lines:
         lines.append("The required structured portfolio data or cited documents are missing. Refresh market data, confirm an IPS, or upload a source document before relying on an analysis.")
@@ -396,10 +426,15 @@ async def run_assistant(db: Session, user: User, payload: AssistantMessageCreate
     freshness = _invoke(trace, registry, "market.freshness", db, user, {})
     summary = quant = compliance = risk_budget = scenario_history = None
     holding_symbols: list[str] = []
+    security_context = None
+    if payload.instrument_id:
+        security_context = _invoke(trace, registry, "intelligence.security_context", db, user, {"instrument_id": payload.instrument_id, "portfolio_id": payload.portfolio_id})
+        if security_context and security_context.get("instrument"):
+            holding_symbols.append(str(security_context["instrument"]["symbol"]))
     if payload.portfolio_id:
         summary = _invoke(trace, registry, "portfolio.summary", db, user, {"portfolio_id": payload.portfolio_id})
         if summary:
-            holding_symbols = [str(row["symbol"]) for row in summary.get("holdings", [])]
+            holding_symbols = list(dict.fromkeys([*holding_symbols, *[str(row["symbol"]) for row in summary.get("holdings", [])]]))
         compliance = ips_compliance(db, user, payload.portfolio_id)
         if intent in ("decision_request", "risk_concentration", "performance"):
             quant = _invoke(trace, registry, "quant.portfolio", db, user, {"portfolio_id": payload.portfolio_id})
@@ -417,7 +452,7 @@ async def run_assistant(db: Session, user: User, payload: AssistantMessageCreate
         citations = (research or {}).get("citations", [])
     else:
         trace.append({"tool": "research.search", "status": "skipped", "reason": "The question is structured/quantitative; narrative document search was not required for this intent."})
-    answer, uncertainty, evidence, required_evidence_ids = _deterministic_answer(payload.question, intent, summary, quant, risk_budget, compliance, freshness, scenario_history, citations)
+    answer, uncertainty, evidence, required_evidence_ids = _deterministic_answer(payload.question, intent, summary, quant, risk_budget, compliance, freshness, scenario_history, citations, security_context)
     warnings = []
     if freshness:
         for key in ("stale_warning", "backup_warning"):
@@ -465,7 +500,7 @@ async def run_assistant(db: Session, user: User, payload: AssistantMessageCreate
                 for index, item in enumerate(tool_results)
             ]
             citation_evidence = [{"evidence_id": f"citation:{item.get('id')}", **item} for item in citations]
-            grounded_context = json.dumps({"question": payload.question, "intent": intent, "conversation_history": prior_history, "calculated_evidence": evidence, "source_citations": citation_evidence, "tool_evidence": tool_evidence, "uncertainty": uncertainty}, default=str)
+            grounded_context = json.dumps({"question": payload.question, "intent": intent, "conversation_history": prior_history, "security_context": security_context, "calculated_evidence": evidence, "source_citations": citation_evidence, "tool_evidence": tool_evidence, "uncertainty": uncertainty}, default=str)
             response = await provider.chat(api_key, [
                 {"role": "system", "content": "Use only supplied evidence. Return JSON with answer and claims. Each claim is {text, evidence_ids}; every claim must cite one or more supplied evidence_id values. The response must address the supplied intent using the intent-specific calculated_evidence. Do not introduce numbers or financial facts."},
                 {"role": "user", "content": grounded_context},
