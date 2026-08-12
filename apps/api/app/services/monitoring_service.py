@@ -8,10 +8,14 @@ from sqlalchemy.orm import Session
 
 from app.models.user import User
 from app.models.workstation import Alert, Event, EventEntityLink, EventSource, IngestionRun, MonitoringRule, MonitoringRun, PortfolioIPSVersion, Recommendation
+from app.services.audit_service import record_event
 from app.services.market_service import get_market_freshness
 from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_summary
 from app.services.workstation_service import ips_compliance, portfolio_quant
 from app.services.canonical_market_service import latest_price
+
+ALERT_STATUS_FILTERS = {"active", "acknowledged", "resolved", "all"}
+RECOMMENDATION_DECISIONS = {"accepted", "reviewed", "dismissed", "rejected", "superseded", "resolved"}
 
 
 def _rule(db: Session, user: User, rule_id: str) -> MonitoringRule:
@@ -117,6 +121,12 @@ def _resolve_inactive_alerts(db: Session, user: User, rule: MonitoringRule) -> N
         evidence = json.loads(alert.evidence_json)
         if evidence.get("rule_id") == rule.id:
             alert.status = "resolved"
+            record_event(
+                db, user, event_type="alert_resolved", entity_type="alert", entity_id=alert.id,
+                portfolio_id=alert.portfolio_id, previous_state={"status": "open"}, new_state={"status": "resolved"},
+                source="system_monitoring_run",
+                note="Automatically resolved: the triggering rule condition no longer holds.",
+            )
 
 
 def run_monitoring(db: Session, user: User, portfolio_id: str):
@@ -162,10 +172,14 @@ def summary_date(db: Session, user: User, portfolio_id: str):
     return get_portfolio_summary(db, user, portfolio_id).data_freshness_date
 
 
-def list_alerts(db: Session, user: User, portfolio_id: str | None = None, include_closed: bool = False):
+def list_alerts(db: Session, user: User, portfolio_id: str | None = None, status_filter: str = "active"):
+    if status_filter not in ALERT_STATUS_FILTERS:
+        raise HTTPException(status_code=422, detail=f"status must be one of {sorted(ALERT_STATUS_FILTERS)}")
     statement = select(Alert).where(Alert.user_id == user.id)
-    if not include_closed:
+    if status_filter == "active":
         statement = statement.where(Alert.status == "open")
+    elif status_filter != "all":
+        statement = statement.where(Alert.status == status_filter)
     if portfolio_id: statement = statement.where(Alert.portfolio_id == portfolio_id)
     results = []
     for row in db.scalars(statement.order_by(Alert.created_at.desc())):
@@ -174,12 +188,36 @@ def list_alerts(db: Session, user: User, portfolio_id: str | None = None, includ
             legacy_rule = db.scalar(select(MonitoringRule).where(MonitoringRule.user_id == user.id, MonitoringRule.portfolio_id == row.portfolio_id, MonitoringRule.rule_type.in_([row.alert_type, "position_weight" if row.alert_type == "concentration" else row.alert_type])))
             if legacy_rule:
                 evidence = _decision_context(db, user, legacy_rule, evidence)
-        results.append({"id": row.id, "portfolio_id": row.portfolio_id, "alert_type": row.alert_type, "severity": row.severity, "message": row.message, "evidence": evidence, "rule_id": evidence.get("rule_id"), "rule_type": evidence.get("rule_type", row.alert_type), "threshold": evidence.get("rule_threshold"), "current_value": evidence.get("current_value"), "related_ips_limit": evidence.get("related_ips_limit"), "classification": evidence.get("classification", "monitoring_warning"), "rule_enabled": evidence.get("rule_enabled"), "data_as_of": evidence.get("as_of"), "status": row.status, "acknowledged_at": row.acknowledged_at, "created_at": row.created_at})
+        results.append({"id": row.id, "portfolio_id": row.portfolio_id, "alert_type": row.alert_type, "severity": row.severity, "message": row.message, "evidence": evidence, "rule_id": evidence.get("rule_id"), "rule_type": evidence.get("rule_type", row.alert_type), "threshold": evidence.get("rule_threshold"), "current_value": evidence.get("current_value"), "related_ips_limit": evidence.get("related_ips_limit"), "classification": evidence.get("classification", "monitoring_warning"), "rule_enabled": evidence.get("rule_enabled"), "data_as_of": evidence.get("as_of"), "status": row.status, "acknowledged_at": row.acknowledged_at, "acknowledged_by_user_id": row.acknowledged_by_user_id, "acknowledgement_note": row.acknowledgement_note, "created_at": row.created_at})
     return results
 
 
-def acknowledge_alert(db: Session, user: User, alert_id: str):
+def acknowledge_alert(db: Session, user: User, alert_id: str, note: str | None = None):
     row = db.scalar(select(Alert).where(Alert.id == alert_id, Alert.user_id == user.id))
     if row is None: raise HTTPException(status_code=404, detail="Alert not found")
-    row.status = "acknowledged"; row.acknowledged_at = datetime.now(UTC); db.commit()
-    return {"id": row.id, "status": row.status, "acknowledged_at": row.acknowledged_at}
+    previous_status = row.status
+    row.status = "acknowledged"; row.acknowledged_at = datetime.now(UTC); row.acknowledged_by_user_id = user.id; row.acknowledgement_note = note
+    record_event(
+        db, user, event_type="alert_acknowledged", entity_type="alert", entity_id=row.id, portfolio_id=row.portfolio_id,
+        previous_state={"status": previous_status}, new_state={"status": row.status, "note": note}, note=note,
+    )
+    db.commit()
+    return {"id": row.id, "status": row.status, "acknowledged_at": row.acknowledged_at, "acknowledged_by_user_id": row.acknowledged_by_user_id, "acknowledgement_note": row.acknowledgement_note}
+
+
+def decide_recommendation(db: Session, user: User, recommendation_id: str, decision: str):
+    if decision not in RECOMMENDATION_DECISIONS:
+        raise HTTPException(status_code=422, detail=f"decision must be one of {sorted(RECOMMENDATION_DECISIONS)}")
+    row = db.scalar(select(Recommendation).where(Recommendation.id == recommendation_id, Recommendation.user_id == user.id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+    previous_status = row.status
+    # Compatibility: legacy "accepted" meant the user reviewed the item. It did
+    # not and still does not authorize a holding mutation or trade.
+    row.status = "reviewed" if decision in {"accepted", "reviewed"} else decision
+    record_event(
+        db, user, event_type="recommendation_transition", entity_type="recommendation", entity_id=row.id, portfolio_id=row.portfolio_id,
+        previous_state={"status": previous_status}, new_state={"status": row.status}, note=f"Decision: {decision}",
+    )
+    db.commit()
+    return {"id": row.id, "status": row.status, "holdings_mutated": False}

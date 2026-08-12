@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -88,3 +89,12 @@ class MarketFreshnessResponse(BaseModel):
     is_stale: bool
     stale_warning: str | None
     backup_warning: str | None = None
+    # Split fields: "stale" previously conflated mock-mode, ingestion age, and
+    # trade-date/session status into one boolean and one warning string.
+    ingestion_age_seconds: float | None = None
+    provider_mode_warning: str | None = None
+    ingestion_staleness_warning: str | None = None
+    fallback_provider_active: bool = False
+    trade_date_status: Literal["current", "prior_session", "stale", "unknown"] = "unknown"
+    exchange_session_status: Literal["open", "closed", "unknown"] = "unknown"
+    exchange_session_note: str | None = None

@@ -1,8 +1,10 @@
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+PRODUCTION_APP_ENVS = {"production", "prod"}
 
 
 class Settings(BaseSettings):
@@ -16,6 +18,7 @@ class Settings(BaseSettings):
     enable_demo_access: bool = False
     demo_access_token: str = ""
     demo_access_email: str = "portfolio.manager@example.com"
+    allow_mock_in_production: bool = False
     encryption_key: str = "dev-only-invalid-key"
     market_data_mode: str = "mock"
     market_data_refresh_seconds: int = 300
@@ -68,6 +71,20 @@ class Settings(BaseSettings):
         if normalized not in {"hash", "sentence_transformers"}:
             raise ValueError("EMBEDDING_BACKEND must be hash or sentence_transformers")
         return normalized
+
+    @model_validator(mode="after")
+    def guard_mock_data_in_production(self) -> "Settings":
+        if self.app_env.lower().strip() in PRODUCTION_APP_ENVS and self.market_data_mode == "mock" and not self.allow_mock_in_production:
+            raise ValueError(
+                "Refusing to start with APP_ENV=production and MARKET_DATA_MODE=mock: this would silently serve "
+                "synthetic/demo market data as if it were observed. Set MARKET_DATA_MODE to a live provider, or set "
+                "ALLOW_MOCK_IN_PRODUCTION=true if this is an explicit, disclosed exception."
+            )
+        return self
+
+    @property
+    def is_synthetic_environment(self) -> bool:
+        return self.market_data_mode == "mock" or self.app_env.lower().strip() not in PRODUCTION_APP_ENVS | {"staging"}
 
 
 @lru_cache

@@ -506,4 +506,31 @@ class Alert(Base):
     evidence_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="open", nullable=False)
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    acknowledgement_note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class AuditEvent(Base):
+    """Immutable record of a user- or system-initiated action on a mutable entity.
+
+    Distinct from `Event` (market/corporate-news items linked to instruments) —
+    this is the app-action audit trail described by the activity/audit-trail
+    remediation ticket, not a market data feed.
+    """
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    portfolio_id: Mapped[str | None] = mapped_column(ForeignKey("portfolios.id"), index=True)
+    event_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    entity_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    entity_version: Mapped[int | None] = mapped_column(Integer)
+    previous_state_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    new_state_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    data_cutoff: Mapped[date | None] = mapped_column(Date)
+    source: Mapped[str | None] = mapped_column(String(160))
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)

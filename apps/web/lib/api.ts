@@ -88,13 +88,15 @@ export type CompanyDetail = {
   latest_price?: MarketPrice | null;
 };
 
+export type FactProvenance = {source_name:string|null;document_type:string|null;is_synthetic:boolean;ingested_at:string|null};
 export type CompanyResearch = {
   instrument: { id:string; symbol:string; name:string; sector?:string|null };
   market: Record<string,unknown>|null;
   market_research: Record<string,unknown>;
-  fundamentals: Array<{taxonomy_key:string;period_type:string;period_end:string;filing_date?:string|null;value:string|number;unit:string;currency?:string|null;document_id?:string|null;page_number?:number|null}>;
+  fundamentals: Array<{taxonomy_key:string;period_type:string;period_end:string;filing_date?:string|null;value:string|number;unit:string;currency?:string|null;document_id?:string|null;page_number?:number|null;provenance:FactProvenance}>;
   derived_fundamentals: { latest?:Record<string,Record<string,unknown>>; growth?:Record<string,Record<string,unknown>>; ratios?:Record<string,Record<string,unknown>>; valuation?:Record<string,unknown> };
   documents: Array<Record<string,unknown>>; events: Array<Record<string,unknown>>; portfolio_relevance:Array<Record<string,unknown>>;
+  has_synthetic_data: boolean;
 };
 
 export type MarketOverview = {
@@ -116,6 +118,13 @@ export type MarketFreshness = {
   is_stale: boolean;
   stale_warning?: string | null;
   backup_warning?: string | null;
+  ingestion_age_seconds?: number | null;
+  provider_mode_warning?: string | null;
+  ingestion_staleness_warning?: string | null;
+  fallback_provider_active: boolean;
+  trade_date_status: "current" | "prior_session" | "stale" | "unknown";
+  exchange_session_status: "open" | "closed" | "unknown";
+  exchange_session_note?: string | null;
 };
 
 export type Portfolio = {
@@ -345,6 +354,10 @@ export type AssistantResult = {
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 const TOKEN_KEY = "psx_ai_token";
 const GET_CACHE_TTL_MS = 60_000;
+// Records that only change via an explicit confirm/save action (not background
+// ingestion) can be cached longer; a write to that portfolio still invalidates
+// them immediately via invalidateCache, so this is not a staleness risk.
+const IMMUTABLE_CACHE_TTL_MS = 10 * 60_000;
 type CachedResponse = { expiresAt: number; value: unknown };
 const responseCache = new Map<string, CachedResponse>();
 const pendingRequests = new Map<string, Promise<unknown>>();
@@ -353,6 +366,18 @@ let sampleSessionPromise: Promise<string> | null = null;
 export function clearApiCache() {
   responseCache.clear();
   pendingRequests.clear();
+}
+
+// Mutations under /portfolios/{id}/... only need to invalidate that portfolio's
+// cached data — nuking the whole cache on every write forces every other open
+// portfolio, and unrelated market/monitoring data, to refetch on the next
+// navigation. Mutations outside that scope (monitoring, recommendations, auth)
+// fall back to a full clear since their blast radius isn't derivable from the path.
+function invalidateCache(path: string) {
+  const portfolioScope = path.match(/^\/portfolios\/([^/]+)\//)?.[0];
+  if (!portfolioScope) { clearApiCache(); return; }
+  for (const key of Array.from(responseCache.keys())) if (key.includes(portfolioScope)) responseCache.delete(key);
+  for (const key of Array.from(pendingRequests.keys())) if (key.includes(portfolioScope)) pendingRequests.delete(key);
 }
 
 export function getToken() {
@@ -387,7 +412,7 @@ async function ensureSampleToken(): Promise<string> {
   return sampleSessionPromise;
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, ttlMs: number = GET_CACHE_TTL_MS): Promise<T> {
   let token = getToken();
   if (!token && typeof window !== "undefined" && !path.startsWith("/auth/")) {
     token = await ensureSampleToken();
@@ -401,8 +426,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const pending = pendingRequests.get(cacheKey);
     if (pending) return pending as Promise<T>;
   } else {
-    // Mutations can affect summaries, analytics, compliance, and market values.
-    clearApiCache();
+    // Mutations can affect summaries, analytics, compliance, and market values —
+    // but only within their own portfolio scope; see invalidateCache.
+    invalidateCache(path);
   }
   const headers = new Headers(options.headers);
   headers.set("Content-Type", "application/json");
@@ -418,7 +444,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     }
     if (response.status === 204) return undefined as T;
     const value = await response.json() as T;
-    if (method === "GET") responseCache.set(cacheKey, { value, expiresAt: Date.now() + GET_CACHE_TTL_MS });
+    if (method === "GET") responseCache.set(cacheKey, { value, expiresAt: Date.now() + ttlMs });
     return value;
   };
   const result = execute();
@@ -538,7 +564,7 @@ export function getTransactions(portfolioId: string) {
 }
 
 export function getAllocations(portfolioId: string) {
-  return request<AllocationSet[]>(`/portfolios/${encodeURIComponent(portfolioId)}/allocations`);
+  return request<AllocationSet[]>(`/portfolios/${encodeURIComponent(portfolioId)}/allocations`, {}, IMMUTABLE_CACHE_TTL_MS);
 }
 
 export function addHolding(portfolioId: string, symbol: string, quantity: string, averageCost: string) {
@@ -592,7 +618,7 @@ export function getPortfolioQuant(portfolioId: string) {
   return request<PortfolioQuant>(`/portfolios/${encodeURIComponent(portfolioId)}/quant`);
 }
 
-export function getCapitalMarketAssumptions(portfolioId: string) { return request<CapitalMarketAssumptions>(`/portfolios/${encodeURIComponent(portfolioId)}/assumptions`); }
+export function getCapitalMarketAssumptions(portfolioId: string) { return request<CapitalMarketAssumptions>(`/portfolios/${encodeURIComponent(portfolioId)}/assumptions`, {}, IMMUTABLE_CACHE_TTL_MS); }
 export function getEfficientFrontier(portfolioId: string) { return request<EfficientFrontier>(`/portfolios/${encodeURIComponent(portfolioId)}/frontier`); }
 export function getCapmSml(portfolioId: string) { return request<CapmSml>(`/portfolios/${encodeURIComponent(portfolioId)}/capm-sml`); }
 export function getRollingRisk(portfolioId: string, window = 60) { return request<RollingRisk>(`/portfolios/${encodeURIComponent(portfolioId)}/rolling-risk?window=${window}`); }
@@ -610,7 +636,7 @@ export function createIpsVersion(portfolioId: string, payload: Record<string, un
   return request<Record<string, unknown>>(`/portfolios/${encodeURIComponent(portfolioId)}/ips/${confirm ? "confirm" : "draft"}`, { method: "POST", body: JSON.stringify(payload) });
 }
 
-export function getIpsVersions(portfolioId: string) { return request<IpsVersion[]>(`/portfolios/${encodeURIComponent(portfolioId)}/ips/versions`); }
+export function getIpsVersions(portfolioId: string) { return request<IpsVersion[]>(`/portfolios/${encodeURIComponent(portfolioId)}/ips/versions`, {}, IMMUTABLE_CACHE_TTL_MS); }
 
 export function createAllocation(portfolioId: string, payload: Record<string, unknown>) {
   return request<Record<string, unknown>>(`/portfolios/${encodeURIComponent(portfolioId)}/allocations`, { method: "POST", body: JSON.stringify(payload) });
@@ -631,8 +657,11 @@ export function sendAssistantMessage(question: string, portfolioId?: string) {
   return request<AssistantResult>("/assistant/messages", { method: "POST", body: JSON.stringify({ question, portfolio_id: portfolioId || null }) });
 }
 
-export function getAlerts(portfolioId?: string) {
-  return request<Array<Record<string, unknown>>>(`/monitoring/alerts${portfolioId ? `?portfolio_id=${encodeURIComponent(portfolioId)}` : ""}`);
+export type AlertStatus = "active" | "acknowledged" | "resolved" | "all";
+export function getAlerts(portfolioId?: string, status: AlertStatus = "active") {
+  const params = new URLSearchParams({ status });
+  if (portfolioId) params.set("portfolio_id", portfolioId);
+  return request<Array<Record<string, unknown>>>(`/monitoring/alerts?${params.toString()}`);
 }
 
 export function getRecommendations() {
@@ -643,8 +672,17 @@ export function decideRecommendation(recommendationId: string, decision: "accept
   return request<{ id: string; status: string }>(`/recommendations/${encodeURIComponent(recommendationId)}?decision=${decision}`, { method: "PATCH" });
 }
 
-export function acknowledgeAlert(alertId: string) {
-  return request<Record<string, unknown>>(`/monitoring/alerts/${encodeURIComponent(alertId)}/acknowledge`, { method: "POST" });
+export function acknowledgeAlert(alertId: string, note?: string) {
+  return request<Record<string, unknown>>(`/monitoring/alerts/${encodeURIComponent(alertId)}/acknowledge`, { method: "POST", body: JSON.stringify({ note: note || null }) });
+}
+
+export type AuditEvent = {
+  id: string; user_id: string; portfolio_id?: string | null; event_type: string; entity_type: string; entity_id: string;
+  entity_version?: number | null; previous_state: Record<string, unknown>; new_state: Record<string, unknown>;
+  data_cutoff?: string | null; source?: string | null; note?: string | null; created_at: string;
+};
+export function getAuditEvents(portfolioId?: string) {
+  return request<AuditEvent[]>(`/audit-events${portfolioId ? `?portfolio_id=${encodeURIComponent(portfolioId)}` : ""}`);
 }
 
 export function saveFinancialProfile(data: Record<string, unknown>, confirm = true) {

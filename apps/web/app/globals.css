@@ -185,6 +185,11 @@ button, a, input, select, textarea, summary { outline: none; }
 .btn:disabled { cursor: not-allowed; opacity: .48; transform: none; }
 .icon-btn { width: 36px; height: 36px; display: inline-grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; transition: background-color .16s ease, color .16s ease; }
 .icon-btn:hover { background: var(--surface); color: var(--ink); }
+.mobile-menu-btn { display: none; flex: 0 0 auto; }
+.mobile-nav-overlay { position: fixed; inset: 0; z-index: 60; display: flex; }
+.mobile-nav-backdrop { position: absolute; inset: 0; border: 0; background: rgba(20, 22, 20, .45); cursor: pointer; }
+.mobile-nav-drawer { position: relative; z-index: 1; display: flex; flex-direction: column; width: min(300px, 84vw); height: 100%; background: #fbfbf8; border-right: 1px solid var(--line); box-shadow: var(--shadow-subtle); animation: mobile-nav-slide-in .18s ease-out; }
+@keyframes mobile-nav-slide-in { from { transform: translateX(-12px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
 .field { width: 100%; min-height: 42px; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: white; padding: 9px 11px; color: var(--ink); transition: border-color .16s ease, box-shadow .16s ease; }
 .field:hover { border-color: rgba(23,26,29,.3); }
@@ -329,13 +334,9 @@ body:has(select[aria-label="Activity type"]) .data-table td:nth-child(n+4):not(:
 }
 @media (max-width: 720px) {
   html { scroll-padding-top: 66px; }
-  .app-sidebar { inset: auto 0 0 0; width: auto; height: 64px; flex-direction: row; align-items: center; border: 0; border-top: 1px solid var(--line); background: rgba(251,251,248,.97); overflow-x: auto; backdrop-filter: blur(14px); }
-  .app-sidebar > a:first-child, .app-sidebar > div:last-child { display: none; }
-  .app-sidebar > div { display: flex; flex: 0 0 auto; min-width: max-content; align-items: center; overflow: visible; padding: 0; }
-  .app-sidebar > div > div { display: contents; }
-  .nav-item { width: 48px; min-height: 44px; margin: 0 2px; border-radius: 9px; }
-  .nav-item[aria-current="page"]::before { display: none; }
-  .app-main { margin-left: 0; padding-bottom: 64px; }
+  .app-sidebar { display: none; }
+  .mobile-menu-btn { display: inline-grid; }
+  .app-main { margin-left: 0; }
   .app-topbar { height: 50px; padding: 0 16px; }
   .page-wrap { padding: 22px 15px 38px; }
   .page-heading { align-items: flex-start; flex-direction: column; gap: 16px; margin-bottom: 22px; }

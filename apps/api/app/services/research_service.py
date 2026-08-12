@@ -44,7 +44,36 @@ def _normalized_taxonomy(key: str) -> str:
     return key.lower().replace(".", "_").replace("-", "_").strip("_")
 
 
-def _derived_fundamentals(facts: list[FinancialFact]) -> dict[str, object]:
+def _document_provenance(db: Session, document_ids: set[str]) -> dict[str, dict[str, object]]:
+    if not document_ids:
+        return {}
+    return {
+        row.id: {
+            "source_name": row.source_name,
+            "document_type": row.document_type,
+            "is_synthetic": row.document_type == "synthetic_demo_facts",
+            "ingested_at": row.parsed_at or row.downloaded_at or row.created_at,
+        }
+        for row in db.scalars(select(Document).where(Document.id.in_(document_ids)))
+    }
+
+
+def _fact_provenance(provenance: dict[str, dict[str, object]], document_id: str | None) -> dict[str, object]:
+    if document_id and document_id in provenance:
+        return provenance[document_id]
+    return {"source_name": None, "document_type": None, "is_synthetic": False, "ingested_at": None}
+
+
+def _group_provenance(provenance: dict[str, dict[str, object]], document_ids: list[str | None]) -> dict[str, object]:
+    resolved = [provenance[document_id] for document_id in document_ids if document_id and document_id in provenance]
+    return {
+        "is_synthetic": any(item["is_synthetic"] for item in resolved),
+        "sources": sorted({str(item["source_name"]) for item in resolved if item["source_name"]}),
+    }
+
+
+def _derived_fundamentals(facts: list[FinancialFact], provenance: dict[str, dict[str, object]] | None = None) -> dict[str, object]:
+    provenance = provenance or {}
     grouped: dict[str, list[FinancialFact]] = {}
     for fact in facts:
         normalized = _normalized_taxonomy(fact.taxonomy_key)
@@ -82,8 +111,12 @@ def _derived_fundamentals(facts: list[FinancialFact]) -> dict[str, object]:
         ratios["return_on_assets_unaveraged"] = {"value": float(net_income.value / assets.value), "period_end": assets.period_end, "document_ids": [net_income.document_id, assets.document_id], "warning": "Uses period-end assets because average assets are unavailable."}
     if compatible(net_income, equity):
         ratios["return_on_equity_unaveraged"] = {"value": float(net_income.value / equity.value), "period_end": equity.period_end, "document_ids": [net_income.document_id, equity.document_id], "warning": "Uses period-end equity because average equity is unavailable."}
+    for entry in growth.values():
+        entry["provenance"] = _group_provenance(provenance, entry["document_ids"])
+    for entry in ratios.values():
+        entry["provenance"] = _group_provenance(provenance, entry["document_ids"])
     return {
-        "latest": {key: {"value": value.value, "unit": value.unit, "currency": value.currency, "period_end": value.period_end, "document_id": value.document_id, "page_number": value.page_number} for key, value in latest.items()},
+        "latest": {key: {"value": value.value, "unit": value.unit, "currency": value.currency, "period_end": value.period_end, "document_id": value.document_id, "page_number": value.page_number, "provenance": _fact_provenance(provenance, value.document_id)} for key, value in latest.items()},
         "growth": growth,
         "ratios": ratios,
         "valuation": {"available": False, "reason": "Canonical share-count and fully diluted valuation inputs are not available."},
@@ -161,6 +194,7 @@ def company_overview(db: Session, user: User, instrument_id: str):
     if instrument is None: raise HTTPException(status_code=404, detail="Instrument not found")
     latest = latest_price(db, instrument.symbol)
     facts = list(db.scalars(select(FinancialFact).where(FinancialFact.instrument_id == instrument.id).order_by(FinancialFact.period_end.desc()).limit(100)))
+    provenance = _document_provenance(db, {fact.document_id for fact in facts if fact.document_id})
     market_research = _market_research(db, instrument)
     documents = list(db.scalars(select(Document).where(Document.symbol == instrument.symbol, or_(Document.visibility == "public", Document.owner_user_id == user.id)).order_by(Document.published_date.desc()).limit(20)))
     event_links = list(db.scalars(select(EventEntityLink).where(EventEntityLink.entity_key == instrument.symbol)))
@@ -196,11 +230,12 @@ def company_overview(db: Session, user: User, instrument_id: str):
         "instrument": serialize_instrument(instrument).model_dump(),
         "market": None if latest is None else {"date": latest.trade_date, "close": latest.close, "volume": latest.volume, "change_percent": latest.change_percent, "source": latest.source, "source_url": latest.source_url, "artifact_id": latest.artifact_id, "artifact_sha256": latest.artifact_sha256, "quality_status": latest.quality_status, "adjustment_state": latest.adjustment_state},
         "market_research": market_research,
-        "fundamentals": [{"taxonomy_key": fact.taxonomy_key, "period_type": fact.period_type, "period_end": fact.period_end, "filing_date": fact.filing_date, "value": fact.value, "unit": fact.unit, "currency": fact.currency, "document_id": fact.document_id, "page_number": fact.page_number} for fact in facts],
-        "derived_fundamentals": _derived_fundamentals(facts),
-        "documents": [{"id": document.id, "title": document.title, "document_type": document.document_type, "published_date": document.published_date, "source_url": document.source_url} for document in documents],
+        "fundamentals": [{"taxonomy_key": fact.taxonomy_key, "period_type": fact.period_type, "period_end": fact.period_end, "filing_date": fact.filing_date, "value": fact.value, "unit": fact.unit, "currency": fact.currency, "document_id": fact.document_id, "page_number": fact.page_number, "provenance": _fact_provenance(provenance, fact.document_id)} for fact in facts],
+        "derived_fundamentals": _derived_fundamentals(facts, provenance),
+        "documents": [{"id": document.id, "title": document.title, "document_type": document.document_type, "published_date": document.published_date, "source_url": document.source_url, "is_synthetic": document.document_type == "synthetic_demo_facts"} for document in documents],
         "events": [{"id": event.id, "title": event.title, "event_type": event.event_type, "occurred_at": event.occurred_at, "direction": event.direction, "confidence": event.confidence} for event in events if event],
         "portfolio_relevance": relevance,
+        "has_synthetic_data": any(item["is_synthetic"] for item in provenance.values()) or any(document.document_type == "synthetic_demo_facts" for document in documents),
     }
 
 

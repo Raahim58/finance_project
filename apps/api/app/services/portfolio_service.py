@@ -12,6 +12,7 @@ from app.models.market import Company
 from app.models.portfolio import Portfolio, PortfolioHolding, PortfolioTransaction
 from app.models.user import User
 from app.models.workstation import AllocationItem, AllocationSet, PortfolioIPS, PortfolioIPSVersion, Recommendation
+from app.services.audit_service import record_event
 from app.services.ledger_service import (
     cash_balance,
     cash_balance_from_transactions,
@@ -603,8 +604,20 @@ def create_allocation_set(db: Session, user: User, portfolio_id: str, payload: A
         latest = latest_price_for_symbol(db, item.symbol) if instrument else None
         quantity = amount / latest.close if amount is not None and latest and latest.close else None
         db.add(AllocationItem(allocation_set_id=row.id, symbol="CASH" if item.is_cash else instrument.symbol, instrument_id=instrument.id if instrument else None, is_cash=item.is_cash, target_weight=item.target_weight, target_amount=amount, target_quantity=quantity, locked=item.locked))
+    record_event(
+        db, user, event_type="proposal_saved", entity_type="allocation_set", entity_id=row.id, portfolio_id=portfolio.id,
+        entity_version=row.version,
+        new_state={"kind": row.kind, "status": row.status, "base_value": str(row.base_value) if row.base_value is not None else None},
+        note=f"Proposal saved with {len(payload.items)} line item(s).",
+    )
     if recommendation is not None:
+        previous_recommendation_status = recommendation.status
         recommendation.status = "reviewed"
+        record_event(
+            db, user, event_type="recommendation_transition", entity_type="recommendation", entity_id=recommendation.id, portfolio_id=portfolio.id,
+            previous_state={"status": previous_recommendation_status}, new_state={"status": recommendation.status},
+            note=f"Automatically reviewed via linked proposal {row.id}.",
+        )
     db.commit(); db.refresh(row)
     return _serialize_allocation(db, row)
 

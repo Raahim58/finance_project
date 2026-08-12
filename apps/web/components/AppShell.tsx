@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { Icon, IconName } from "@/components/Icon";
 
 type NavEntry = [string, string, IconName];
@@ -49,9 +50,59 @@ function currentScope(pathname: string) {
   return "Investment workspace";
 }
 
+function MobileNavDrawer({ pathname, onClose }: { pathname: string; onClose: () => void }) {
+  const drawerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const drawer = drawerRef.current;
+    const focusable = drawer ? Array.from(drawer.querySelectorAll<HTMLElement>('a[href], button:not([disabled])')) : [];
+    focusable[0]?.focus();
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") { onClose(); return; }
+      if (event.key !== "Tab" || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="mobile-nav-overlay">
+      <button type="button" className="mobile-nav-backdrop" aria-label="Close primary navigation" onClick={onClose} />
+      <div className="mobile-nav-drawer" id="mobile-nav-drawer" role="dialog" aria-modal="true" aria-label="Primary navigation" ref={drawerRef}>
+        <div className="flex items-center justify-between px-5 py-4">
+          <span className="text-[13px] font-semibold">PSX Workstation</span>
+          <button type="button" className="icon-btn" aria-label="Close primary navigation" onClick={onClose}><Icon name="close" /></button>
+        </div>
+        <nav className="flex-1 overflow-y-auto pb-5" aria-label="Primary navigation links">
+          {groups.map(group => (
+            <div key={group.label}>
+              <p className="nav-section">{group.label}</p>
+              {group.items.map(([label, href, icon]) => (
+                <Link key={href} href={href as never} aria-current={isActive(pathname, href) ? "page" : undefined} className="nav-item" onClick={onClose}>
+                  <Icon name={icon} size={17} />
+                  <span>{label}</span>
+                </Link>
+              ))}
+            </div>
+          ))}
+        </nav>
+      </div>
+    </div>
+  );
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const publicRoute = pathname === "/" || pathname === "/login" || pathname === "/signup" || pathname === "/onboarding";
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { setMenuOpen(false); }, [pathname]);
+  const closeMenu = () => { setMenuOpen(false); menuTriggerRef.current?.focus(); };
   if (publicRoute) return <>{children}</>;
 
   return (
@@ -80,6 +131,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="app-main">
         <header className="app-topbar">
           <div className="flex min-w-0 items-center gap-3">
+            <button type="button" ref={menuTriggerRef} className="mobile-menu-btn icon-btn" aria-label="Open primary navigation" aria-haspopup="dialog" aria-expanded={menuOpen} aria-controls="mobile-nav-drawer" onClick={() => setMenuOpen(true)}>
+              <Icon name="menu" />
+            </button>
             <span className="truncate text-[12px] font-semibold text-ink">{currentScope(pathname)}</span>
             <span className="desktop-only h-4 w-px bg-line" />
             <span className="desktop-only flex items-center gap-2 text-[11px] text-muted">
@@ -95,6 +149,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </header>
         <main>{children}</main>
       </div>
+      {menuOpen ? <MobileNavDrawer pathname={pathname} onClose={closeMenu} /> : null}
     </div>
   );
 }

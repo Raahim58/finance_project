@@ -1,5 +1,6 @@
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from sqlalchemy import Select, func, select
@@ -253,6 +254,37 @@ def get_company_history(
     return [serialize_price(row) for row in rows[-limit:]]
 
 
+PSX_TZ = ZoneInfo("Asia/Karachi")
+PSX_SESSION_OPEN = time(9, 15)
+PSX_SESSION_CLOSE = time(15, 30)
+EXCHANGE_SESSION_NOTE = "Approximate PSX Mon-Fri 09:15-15:30 Asia/Karachi session window; does not account for exchange holidays."
+
+
+def _last_expected_business_day(reference_date: date) -> date:
+    cursor = reference_date
+    while cursor.weekday() >= 5:
+        cursor -= timedelta(days=1)
+    return cursor
+
+
+def _exchange_session_status(now_karachi: datetime) -> str:
+    if now_karachi.weekday() >= 5:
+        return "closed"
+    return "open" if PSX_SESSION_OPEN <= now_karachi.time() <= PSX_SESSION_CLOSE else "closed"
+
+
+def _trade_date_status(latest_trade_date: date | None, now_karachi: datetime) -> str:
+    if latest_trade_date is None:
+        return "unknown"
+    expected = _last_expected_business_day(now_karachi.date())
+    if latest_trade_date == expected:
+        return "current"
+    previous_expected = _last_expected_business_day(expected - timedelta(days=1))
+    if latest_trade_date == previous_expected:
+        return "prior_session"
+    return "stale"
+
+
 def get_market_freshness(db: Session) -> MarketFreshnessResponse:
     latest_run = db.scalar(
         select(MarketIngestionRun)
@@ -265,6 +297,7 @@ def get_market_freshness(db: Session) -> MarketFreshnessResponse:
     last_successful = latest_run.finished_at if latest_run else (latest_snapshot.ingested_at if latest_snapshot else None)
     latest_trade_date = latest_run.latest_trade_date if latest_run else (latest_snapshot.snapshot_date if latest_snapshot else None)
     latest_source = latest_run.used_provider if latest_run else (latest_snapshot.source if latest_snapshot else None)
+    now_karachi = datetime.now(PSX_TZ)
     if last_successful is None:
         return MarketFreshnessResponse(
             market_data_mode=settings.market_data_mode,
@@ -277,18 +310,25 @@ def get_market_freshness(db: Session) -> MarketFreshnessResponse:
             is_stale=True,
             stale_warning="No successful market ingestion has completed yet.",
             backup_warning=None,
+            ingestion_age_seconds=None,
+            provider_mode_warning="Current market data mode is mock. Use psxdata, yahoo, or auto mode for live/current ingestion." if settings.market_data_mode == "mock" else None,
+            ingestion_staleness_warning="No successful market ingestion has completed yet.",
+            fallback_provider_active=False,
+            trade_date_status="unknown",
+            exchange_session_status=_exchange_session_status(now_karachi),
+            exchange_session_note=EXCHANGE_SESSION_NOTE,
         )
 
     last_successful_utc = last_successful.astimezone(UTC) if last_successful.tzinfo else last_successful.replace(tzinfo=UTC)
     age_seconds = (datetime.now(UTC) - last_successful_utc).total_seconds()
     is_stale = age_seconds > settings.market_data_refresh_seconds
-    warning: str | None = None
-    if latest_source == "mock":
-        warning = "Current market data mode is mock. Use psxdata, yahoo, or auto mode for live/current ingestion."
-    elif is_stale:
-        warning = "Market data is older than MARKET_DATA_REFRESH_SECONDS. Refresh ingestion before relying on the latest view."
+    provider_mode_warning: str | None = "Current market data mode is mock. Treat all prices, quotes, and index values as synthetic, not observed market data." if latest_source == "mock" or settings.market_data_mode == "mock" else None
+    ingestion_staleness_warning: str | None = "Market data is older than MARKET_DATA_REFRESH_SECONDS. Refresh ingestion before relying on the latest view." if is_stale else None
+    # Backward-compatible combined message; prefer the split fields above for new UI.
+    warning = provider_mode_warning or ingestion_staleness_warning
     backup_warning: str | None = None
-    if latest_run and latest_run.attempted_provider in {"auto", "psxdata"} and latest_run.used_provider == "yahoo":
+    fallback_provider_active = bool(latest_run and latest_run.attempted_provider in {"auto", "psxdata"} and latest_run.used_provider == "yahoo")
+    if fallback_provider_active:
         backup_warning = "Primary PSX source was unavailable. Yahoo Finance fallback data is currently in use."
 
     return MarketFreshnessResponse(
@@ -302,4 +342,11 @@ def get_market_freshness(db: Session) -> MarketFreshnessResponse:
         is_stale=is_stale,
         stale_warning=warning,
         backup_warning=backup_warning,
+        ingestion_age_seconds=age_seconds,
+        provider_mode_warning=provider_mode_warning,
+        ingestion_staleness_warning=ingestion_staleness_warning,
+        fallback_provider_active=fallback_provider_active,
+        trade_date_status=_trade_date_status(latest_trade_date, now_karachi),
+        exchange_session_status=_exchange_session_status(now_karachi),
+        exchange_session_note=EXCHANGE_SESSION_NOTE,
     )

@@ -45,6 +45,7 @@ from app.models.workstation import (
     ScenarioRun,
 )
 from app.schemas.workstation import IPSDraft, OptimizerRequest, RebalanceRequest, ScenarioRequest, VersionDraft
+from app.services.audit_service import record_event
 from app.services.ledger_service import cash_balance, replay_positions
 from app.services.scenario_service import resolve_shock
 from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_performance, get_portfolio_summary
@@ -264,8 +265,16 @@ def save_ips_version(db: Session, user: User, portfolio_id: str, payload: IPSDra
         header = PortfolioIPS(portfolio_id=portfolio.id)
         db.add(header)
     if confirm:
+        previous_version = db.get(PortfolioIPSVersion, header.current_version_id) if header.current_version_id else None
         header.current_version_id = row.id
         portfolio.selected_ips_version_id = row.id
+        record_event(
+            db, user, event_type="ips_confirmed", entity_type="ips_version", entity_id=row.id, portfolio_id=portfolio.id,
+            entity_version=row.version,
+            previous_state={"version": previous_version.version, "constraints": json.loads(previous_version.constraints_json)} if previous_version else None,
+            new_state={"version": row.version, "constraints": constraints, "required_return": float(row.required_return) if row.required_return is not None else None},
+            note="IPS mandate confirmed as a new immutable version.",
+        )
     header.updated_at = datetime.now(UTC)
     db.commit(); db.refresh(row)
     analysis = {
@@ -736,6 +745,12 @@ def run_optimizer(db: Session, user: User, portfolio_id: str, payload: Optimizer
             elif symbol in instruments:
                 db.add(OptimizerAllocation(optimizer_run_id=row.id, instrument_id=instruments[symbol].id, weight=Decimal(str(weight))))
                 db.add(AllocationItem(allocation_set_id=proposal.id, symbol=symbol, instrument_id=instruments[symbol].id, is_cash=False, target_weight=Decimal(str(weight)), locked=False))
+    record_event(
+        db, user, event_type="optimizer_run", entity_type="optimizer_run", entity_id=row.id, portfolio_id=portfolio.id,
+        data_cutoff=days[-1],
+        new_state={"objective": payload.objective, "expected_return_method": payload.expected_return_method, "status": result.status, "assumptions": assumptions_data, "allocation_set_id": proposal.id if proposal else None},
+        note="Expected-return/covariance assumption inputs for this run are recorded in new_state.assumptions.",
+    )
     db.commit(); db.refresh(row)
     return {"id": row.id, "status": result.status, "objective": payload.objective, "expected_return_method": payload.expected_return_method, "data_cutoff": days[-1], "symbols": symbols, "weights": dict(zip(symbols, result.weights, strict=True)) if result.weights else {}, "expected_return": result.expected_return, "volatility": result.volatility, "diagnostics": result.diagnostics, "assumptions": assumptions_data, "allocation_set_id": proposal.id if proposal else None}
 
@@ -884,7 +899,14 @@ def run_scenario(db: Session, user: User, portfolio_id: str, payload: ScenarioRe
     result = {"portfolio_value": total, "stressed_portfolio_value": stressed_total, "pnl": pnl, "pnl_percent": pnl / total if total else 0, "positions": positions, "sector_contributions": sector_contributions, "compliance": compliance, "assumptions": assumptions}
     all_shocks = {"instruments": payload.shocks, "sectors": payload.sector_shocks, "factors": payload.factor_shocks}
     row = ScenarioRun(portfolio_id=portfolio.id, name=payload.name, shocks_json=_json(all_shocks), result_json=_json(result), data_cutoff=cutoff, assumptions_json=_json({"scenario_type": payload.scenario_type, "mapping_order": ["instrument", "sector", "factor"]}), status="completed")
-    db.add(row); db.commit(); db.refresh(row)
+    db.add(row); db.flush()
+    record_event(
+        db, user, event_type="scenario_run", entity_type="scenario_run", entity_id=row.id, portfolio_id=portfolio.id,
+        data_cutoff=cutoff,
+        new_state={"name": row.name, "scenario_type": payload.scenario_type, "pnl": pnl, "compliance_status": compliance.get("status")},
+        note="Deterministic shocks applied; see shocks_json on the run for the full input.",
+    )
+    db.commit(); db.refresh(row)
     return {"id": row.id, "name": row.name, "data_cutoff": cutoff, "shocks": payload.shocks, **result}
 
 
