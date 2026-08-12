@@ -25,4 +25,5 @@ class AssistantResponse(BaseModel):
     source_citations: list[dict[str, object]]
     freshness_warnings: list[str]
     tool_trace: list[dict[str, object]]
+    synthesis: dict[str, object]
     created_at: datetime

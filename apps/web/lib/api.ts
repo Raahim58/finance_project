@@ -365,6 +365,7 @@ export type AssistantResult = {
   source_citations: Array<Record<string, unknown>>;
   freshness_warnings: string[];
   tool_trace: Array<Record<string, unknown>>;
+  synthesis: {mode:"llm_grounded"|"deterministic_fallback";provider?:string|null;model?:string|null;reason?:string|null};
   created_at: string;
 };
 
@@ -458,8 +459,9 @@ async function request<T>(path: string, options: RequestInit = {}, ttlMs: number
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       const detail = body.detail;
-      const fallback = `Request failed: ${response.status} (${method} ${path})`;
-      throw new Error(typeof detail === "string" ? `${detail} (${method} ${path})` : detail ? `${JSON.stringify(detail)} (${method} ${path})` : fallback);
+      const fallback = response.status >= 500 ? "The service could not complete this request. Please try again." : `Request could not be completed (${response.status}).`;
+      const message = typeof detail === "string" ? detail : detail && typeof detail.message === "string" ? detail.message : fallback;
+      throw new Error(message);
     }
     if (response.status === 204) return undefined as T;
     const value = await response.json() as T;

@@ -263,7 +263,9 @@ def seed_workstation() -> dict[str, object]:
                 existing_rule.threshold_json = json.dumps(threshold, sort_keys=True)
                 existing_rule.enabled = True
         db.commit()
-        run_monitoring(db, user, portfolio.id)
+        existing_monitoring_run = db.scalar(select(MonitoringRun.id).where(MonitoringRun.portfolio_id == portfolio.id, MonitoringRun.status == "completed", MonitoringRun.started_at >= seed_cutoff))
+        if existing_monitoring_run is None:
+            run_monitoring(db, user, portfolio.id)
 
         return {"market": market, "macro_observations_added": macro_count, "research": research, "user_email": DEMO_EMAIL, "portfolio_id": portfolio.id, "seed_version": DEMO_SEED_VERSION, "mock_data": True}
 

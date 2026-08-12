@@ -422,6 +422,12 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         .join(Citation, Citation.chunk_id == DocumentChunk.id)
     )
     query = query.where(Document.visibility == "public" if user is None else or_(Document.visibility == "public", Document.owner_user_id == user.id))
+    # Demo documents exist only to make local portfolio workflows navigable. They
+    # are never admissible research evidence for user-facing retrieval.
+    query = query.where(
+        Document.document_type != "synthetic_demo_facts",
+        Document.source_name != "Deterministic Demo Seed",
+    )
     if payload.symbols:
         symbols = [symbol.upper() for symbol in payload.symbols]
         query = query.where(func.upper(DocumentChunk.symbol).in_(symbols))

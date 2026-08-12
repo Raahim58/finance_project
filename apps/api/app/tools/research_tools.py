@@ -70,7 +70,7 @@ def _refresh_company(db, _user, payload: CompanyRefreshInput):
 def register_research_tools(registry: ToolRegistry) -> None:
     registry.register(ToolDefinition("research.search", "1.0", "Ownership-filtered document retrieval with page citations", ResearchInput, "research:read", True, False, 10, "medium", _search))
     registry.register(ToolDefinition("research.company", "1.0", "Company market, fundamental, filing, event, and portfolio context", CompanyInput, "research:read", True, False, 12, "medium", _company))
-    registry.register(ToolDefinition("intelligence.security_context", "1.0", "Security intelligence composed with the selected portfolio and IPS", SecurityContextInput, "research:read", True, False, 15, "medium", _security_context))
+    registry.register(ToolDefinition("intelligence.security_context", "1.0", "Security intelligence composed with the selected portfolio and IPS", SecurityContextInput, "research:read", True, False, 30, "medium", _security_context))
     registry.register(ToolDefinition("research.events", "1.0", "Observed events with source links and entity filters", EventInput, "research:read", True, False, 8, "low", _events))
     registry.register(ToolDefinition("research.instruments", "1.0", "Resolve a company name or PSX symbol to structured instrument IDs", InstrumentSearchInput, "research:read", True, False, 5, "low", _instruments))
     registry.register(ToolDefinition("research.refresh_company", "1.0", "Acquire and index newly observed official PSX company reports before retrieval", CompanyRefreshInput, "research:refresh", False, False, 30, "high", _refresh_company))

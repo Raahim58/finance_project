@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -9,10 +9,12 @@ from sqlalchemy.orm import Session
 from app.ai.providers.registry import get_provider
 from app.core.config import settings
 from app.models.llm_key import LLMApiKey
+from app.models.document import Document
 from app.models.user import User
-from app.models.workstation import AssistantMessage, Conversation
+from app.models.workstation import AssistantMessage, Conversation, Instrument
 from app.schemas.assistant import AssistantMessageCreate
 from app.services.llm_key_service import get_decrypted_key_for_call
+from app.services.ingestion_service import refresh_company_research
 from app.services.portfolio_service import get_portfolio_or_404
 from app.services.rag_service import MIN_RELEVANCE_SCORE
 from app.services.workstation_service import ips_compliance
@@ -37,7 +39,7 @@ INTENT_PATTERNS = (
 # Narrative document search is only useful for these question shapes; a purely
 # structured question (e.g. "where is my risk concentrated") should never pull
 # unrelated filings just to pad the response.
-NARRATIVE_TRIGGER_RE = re.compile(r"\bwhy\b|what changed|\bfiling|\bmanagement\b|\bevent", re.I)
+NARRATIVE_TRIGGER_RE = re.compile(r"\bwhy\b|what changed|\bfiling|\bmanagement\b|\bevent|contradict", re.I)
 
 
 def _detect_intent(question: str) -> str:
@@ -209,7 +211,7 @@ def _answer_scenario(scenario_history: dict[str, object] | None) -> tuple[list[s
     return lines, [], evidence
 
 
-def _answer_security_fit(context: dict[str, object] | None) -> tuple[list[str], list[str], list[dict[str, object]]]:
+def _answer_security_fit(context: dict[str, object] | None, citations: list[dict[str, object]]) -> tuple[list[str], list[str], list[dict[str, object]]]:
     if not context:
         return ["Security fit cannot be evaluated without a security and selected portfolio context."], ["Missing input: Intelligence V1 security context."], []
     security = context.get("security") or {}
@@ -220,18 +222,123 @@ def _answer_security_fit(context: dict[str, object] | None) -> tuple[list[str], 
     ownership = relevance.get("ownership") or {}
     sector = relevance.get("sector_exposure") or {}
     correlation = relevance.get("correlation") or {}
+    risk_contribution = relevance.get("risk_contribution") or {}
     symbol = str(security.get("symbol") or "Security")
-    lines = [f"You currently own {float(ownership.get('weight', 0)):.2%} {symbol}. Current {sector.get('sector') or 'sector'} exposure is {float(sector.get('current_weight', 0)):.2%}."]
-    if sector.get("headroom") is not None:
-        lines.append(f"Confirmed IPS sector headroom is {float(sector['headroom']):.2%}; position headroom is {float(relevance.get('position_headroom')):.2%} when configured.")
-    if correlation.get("available"):
-        lines.append(f"Average aligned-return correlation with current holdings is {float(correlation.get('average_with_holdings')):.2f}. Run a candidate evaluation before drawing a diversification conclusion.")
+    observed = context.get("observed_facts") if isinstance(context.get("observed_facts"), dict) else {}
+    market = observed.get("market") if isinstance(observed.get("market"), dict) else {}
+    derived = outputs.get("derived_fundamentals") if isinstance(outputs.get("derived_fundamentals"), dict) else {}
+    market_research = outputs.get("market_research") if isinstance(outputs.get("market_research"), dict) else {}
+    market_risk = market_research.get("risk") if isinstance(market_research.get("risk"), dict) else {}
+    regime = outputs.get("regime") if isinstance(outputs.get("regime"), dict) else {}
+    dimensions = regime.get("dimensions") if isinstance(regime.get("dimensions"), dict) else {}
+    preferences = context.get("personal_context") if isinstance(context.get("personal_context"), dict) else {}
+    security_weight = float(ownership.get("weight", 0) or 0)
+    sector_weight = float(sector.get("current_weight", 0) or 0)
+    risk_share = float(risk_contribution.get("percentage", 0) or 0) if isinstance(risk_contribution, dict) and risk_contribution.get("available") else None
+    average_correlation = float(correlation.get("average_with_holdings")) if isinstance(correlation, dict) and correlation.get("available") else None
+    compliance = relevance.get("compliance") if isinstance(relevance.get("compliance"), dict) else {}
+    is_synthetic = bool((context.get("evidence") or {}).get("has_synthetic_data")) if isinstance(context.get("evidence"), dict) else False
+
+    fit_signals = []
+    if sector.get("headroom") is not None and float(sector["headroom"]) > 0:
+        fit_signals.append(f"{float(sector['headroom']):.2%} of confirmed sector headroom")
+    if average_correlation is not None and average_correlation < 0.5:
+        fit_signals.append(f"moderate average holding correlation ({average_correlation:.2f})")
+    counter_signals = []
+    if regime.get("regime") == "risk_off":
+        counter_signals.append("the structured macro/market regime is risk-off")
+    if risk_share is not None and security_weight > 0 and risk_share > security_weight:
+        counter_signals.append(f"risk contribution ({risk_share:.2%}) exceeds capital weight ({security_weight:.2%})")
+    if compliance.get("status") == "BREACH":
+        counter_signals.append("the current portfolio already has an active IPS breach")
+    if is_synthetic:
+        counter_signals.append("company fundamentals and documents are demo data, not observed filings")
+    if not (derived.get("valuation") or {}).get("available"):
+        counter_signals.append("decision-grade valuation inputs are unavailable")
+
+    if security_weight:
+        bottom_line = f"{symbol} is already a meaningful holding at {security_weight:.2%}, so the question is whether it still earns that risk budget—not whether it is merely interesting."
     else:
-        lines.append("Diversification impact is not evaluated because aligned candidate/holding history is unavailable.")
+        bottom_line = f"{symbol} is not currently held, so fit depends on whether its diversification and return case justify using available sector and position headroom."
+    if fit_signals:
+        bottom_line += f" The fit case is supported by {', and '.join(fit_signals)}."
+    if counter_signals:
+        bottom_line += f" The case remains conditional because {'; '.join(counter_signals)}."
+
+    setup_parts = []
+    if market:
+        setup_parts.append(f"last price {float(market.get('close')):.2f} on {market.get('date')} with a {float(market.get('change_percent', 0) or 0):+.2f}% daily move")
+    if market_risk.get("annual_volatility") is not None:
+        setup_parts.append(f"modeled annual volatility {float(market_risk['annual_volatility']):.2%}")
+    growth = derived.get("growth") if isinstance(derived.get("growth"), dict) else {}
+    growth_parts = []
+    for key in ("revenue", "net_income", "ebit"):
+        item = growth.get(key)
+        if isinstance(item, dict) and item.get("value") is not None:
+            growth_parts.append(f"{key.replace('_', ' ')} {float(item['value']):+.1%}")
+    ratios = derived.get("ratios") if isinstance(derived.get("ratios"), dict) else {}
+    ratio_parts = []
+    for key in ("operating_margin", "net_margin"):
+        item = ratios.get(key)
+        if isinstance(item, dict) and item.get("value") is not None:
+            ratio_parts.append(f"{key.replace('_', ' ')} {float(item['value']):.1%}")
+    company_text = "; ".join(setup_parts) or "current market setup is unavailable"
+    if growth_parts: company_text += f". Normalized fact growth: {', '.join(growth_parts)}"
+    if ratio_parts: company_text += f"; derived profitability: {', '.join(ratio_parts)}"
+    if is_synthetic: company_text += ". Those company figures are demo-only and cannot support an investment conclusion"
+
+    portfolio_parts = [f"{sector.get('sector') or 'Sector'} exposure is {sector_weight:.2%}"]
+    if sector.get("headroom") is not None: portfolio_parts.append(f"sector headroom is {float(sector['headroom']):.2%}")
+    if relevance.get("position_headroom") is not None: portfolio_parts.append(f"position headroom is {float(relevance['position_headroom']):.2%}")
+    if average_correlation is not None: portfolio_parts.append(f"average correlation is {average_correlation:.2f}")
+    if risk_share is not None: portfolio_parts.append(f"current risky-sleeve variance contribution is {risk_share:.2%}")
+
+    macro_parts = []
+    for key in ("market_breadth", "rates", "currency", "inflation", "oil"):
+        item = dimensions.get(key)
+        if isinstance(item, dict): macro_parts.append(f"{key.replace('_', ' ')} {item.get('status', 'not evaluated')}")
+    macro_text = f"Regime: {str(regime.get('regime') or 'not evaluated').replace('_', ' ')}. " + (", ".join(macro_parts) + "." if macro_parts else "No selected structured macro dimensions are available.")
+    if "oil" not in dimensions: macro_text += " Broader global-market and geopolitical context is not available in the selected structured data, so it is not inferred."
+
+    preferred = {str(item).lower() for item in preferences.get("preferred_sectors", [])}
+    avoided = {str(item).lower() for item in preferences.get("avoided_sectors", [])}
+    sector_name = str(sector.get("sector") or security.get("sector") or "")
+    tilt = "matches a recorded preferred-sector tilt" if sector_name.lower() in preferred else "conflicts with a recorded avoided-sector preference" if sector_name.lower() in avoided else "has no recorded personal sector tilt"
+    personal_text = f"Recorded profile: {preferences.get('risk_tolerance', 'unspecified')} risk tolerance, {preferences.get('investment_horizon', 'unspecified')} horizon; {sector_name or symbol} {tilt}. The confirmed IPS remains the binding constraint."
+
+    observed_citations = [item for item in citations if not str(item.get("source_url") or "").startswith("demo://") and "synthetic" not in str(item.get("title") or "").lower()]
+    if observed_citations:
+        contrary_text = f"{len(observed_citations)} candidate-scoped observed document passage(s) met the relevance threshold. Their excerpts are shown below; document retrieval establishes evidence, while any causal interpretation remains an assistant interpretation."
+    else:
+        contrary_text = "No candidate-scoped observed document passage established a contrary case. That is an evidence gap—not evidence that the downside case is absent."
+
+    lines = [
+        f"Integrated outlook\n\nBottom line\n{bottom_line}",
+        f"\n\nSecurity and company setup\n{company_text}.",
+        f"\n\nPortfolio and sector fit\n{'; '.join(portfolio_parts)}. A candidate evaluation is still required to establish the actual before/after diversification and concentration effect.",
+        f"\n\nMacro and global backdrop\n{macro_text}",
+        f"\n\nPersonal fit\n{personal_text}",
+        f"\n\nEvidence against the case\n{contrary_text} " + ("Key structured counter-signals: " + "; ".join(counter_signals) + "." if counter_signals else "No structured counter-signal was strong enough to resolve the decision."),
+        "\n\nDecision boundary\nThis context does not justify an automatic add, reduce, or remove. Evaluate a candidate allocation and compare expected return, volatility, risk contribution, stress losses, cash and IPS compliance before saving a proposal for review.",
+    ]
     evidence = [
         {"evidence_id": f"calc:ownership:{symbol}", "metric": "current_weight", "symbol": symbol, "value": ownership.get("weight"), "unit": "decimal", "as_of": (relevance.get("portfolio") or {}).get("data_cutoff")},
         {"evidence_id": f"calc:sector_headroom:{symbol}", "metric": "sector_headroom", "symbol": symbol, "value": sector.get("headroom"), "limit": sector.get("limit"), "unit": "decimal"},
+        {"evidence_id": f"calc:ips_status:{symbol}", "metric": "ips_compliance", "symbol": symbol, "value": compliance.get("status"), "violations": compliance.get("violations"), "as_of": compliance.get("evaluated_at")},
+        {"evidence_id": f"context:personal_profile:{symbol}", "metric": "recorded_investor_preferences", "symbol": symbol, "value": preferences},
     ]
+    if market:
+        evidence.append({"evidence_id": f"observed:market:{symbol}", "metric": "canonical_market_observation", "symbol": symbol, "value": market, "as_of": market.get("date")})
+    observed_fundamentals = observed.get("fundamentals") if isinstance(observed.get("fundamentals"), list) else []
+    if observed_fundamentals:
+        evidence.append({"evidence_id": f"observed:fundamentals:{symbol}", "metric": "normalized_company_facts", "symbol": symbol, "value": observed_fundamentals[:20]})
+    if average_correlation is not None:
+        evidence.append({"evidence_id": f"calc:average_correlation:{symbol}", "metric": "average_holding_correlation", "symbol": symbol, "value": average_correlation, "unit": "ratio", "as_of": correlation.get("data_cutoff")})
+    if market_risk.get("annual_volatility") is not None:
+        evidence.append({"evidence_id": f"calc:annual_volatility:{symbol}", "metric": "annual_volatility", "symbol": symbol, "value": market_risk.get("annual_volatility"), "unit": "decimal", "as_of": market_research.get("end_date")})
+    evidence.append({"evidence_id": f"calc:regime:{symbol}", "metric": "macro_regime", "symbol": symbol, "value": regime.get("regime"), "as_of": next((item.get("effective_date") or item.get("trade_date") for item in dimensions.values() if isinstance(item, dict) and (item.get("effective_date") or item.get("trade_date"))), None)})
+    if isinstance(risk_contribution, dict) and risk_contribution.get("available"):
+        evidence.append({"evidence_id": f"calc:risk_contribution:{symbol}", "metric": "percentage_risk_contribution", "symbol": symbol, "value": risk_contribution.get("percentage"), "unit": "decimal", "as_of": risk_contribution.get("data_cutoff")})
     return lines, list(context.get("missing_data") or []), evidence
 
 
@@ -247,10 +354,10 @@ def _deterministic_answer(
     citations: list[dict[str, object]],
     security_context: dict[str, object] | None = None,
 ) -> tuple[str, list[str], list[dict[str, object]], set[str]]:
-    base_lines, evidence = _base_portfolio_evidence(summary)
+    base_lines, evidence = ([], []) if intent == "security_fit" else _base_portfolio_evidence(summary)
     intent_evidence: list[dict[str, object]] = []
     if intent == "security_fit":
-        intent_lines, uncertainty, intent_evidence = _answer_security_fit(security_context)
+        intent_lines, uncertainty, intent_evidence = _answer_security_fit(security_context, citations)
     elif intent == "decision_request":
         intent_lines, uncertainty, intent_evidence = _answer_decision_request(compliance, risk_budget)
     elif intent == "risk_concentration":
@@ -277,8 +384,10 @@ def _deterministic_answer(
 
     evidence.extend(intent_evidence)
     lines = intent_lines + base_lines
-    if intent != "holding_evidence" and citations:
+    if intent not in ("holding_evidence", "security_fit") and citations:
         lines.append(f"I found {len(citations)} symbol-scoped document citation(s) relevant to this question.")
+    elif intent == "security_fit" and NARRATIVE_TRIGGER_RE.search(question):
+        uncertainty.append("No contrary company-document passage met the relevance threshold; this is missing evidence, not confirmation of the case.")
     if compliance is not None and intent != "compliance":
         if compliance.get("status") == "BREACH":
             uncertainty.append("Note: this portfolio has an active mandate breach; ask a mandate-compliance question for details.")
@@ -404,9 +513,10 @@ def _validated_claim_answer(candidate: str, context: str, evidence_ids: set[str]
         if not isinstance(claim, dict) or not isinstance(claim.get("text"), str):
             return None, "The model draft contained an invalid claim object."
         cited = claim.get("evidence_ids")
-        if not isinstance(cited, list) or not cited or any(str(item) not in evidence_ids for item in cited):
+        valid_cited = {str(item) for item in cited if str(item) in evidence_ids} if isinstance(cited, list) else set()
+        if not valid_cited:
             return None, "At least one model claim lacked a valid evidence ID."
-        cited_all.update(str(item) for item in cited)
+        cited_all.update(valid_cited)
         if ADVICE_RE.search(claim["text"]) and not cited:
             return None, "An advice-like model claim lacked supporting evidence."
     if required_evidence_ids and not (cited_all & required_evidence_ids):
@@ -426,11 +536,28 @@ async def run_assistant(db: Session, user: User, payload: AssistantMessageCreate
     freshness = _invoke(trace, registry, "market.freshness", db, user, {})
     summary = quant = compliance = risk_budget = scenario_history = None
     holding_symbols: list[str] = []
+    security_symbol: str | None = None
     security_context = None
     if payload.instrument_id:
+        instrument = db.get(Instrument, payload.instrument_id)
+        if instrument is not None:
+            security_symbol = instrument.symbol
+        if settings.scheduled_research_enabled and settings.market_data_mode != "mock":
+            recently_refreshed = instrument is not None and db.scalar(
+                select(Document.id).where(
+                    Document.symbol == instrument.symbol,
+                    Document.source_name != "Deterministic Demo Seed",
+                    Document.created_at >= datetime.now(UTC) - timedelta(hours=6),
+                ).limit(1)
+            )
+            if recently_refreshed:
+                trace.append({"tool": "research.refresh_company", "version": "1.0", "arguments": {"instrument_id": payload.instrument_id}, "status": "skipped", "reason": "Official company evidence was refreshed within the last six hours."})
+            else:
+                refresh = refresh_company_research(db, payload.instrument_id, settings.research_report_limit_per_run)
+                trace.append({"tool": "research.refresh_company", "version": "1.0", "arguments": {"instrument_id": payload.instrument_id}, "status": refresh.get("status"), "accepted": refresh.get("accepted"), "rejected": refresh.get("rejected")})
         security_context = _invoke(trace, registry, "intelligence.security_context", db, user, {"instrument_id": payload.instrument_id, "portfolio_id": payload.portfolio_id})
-        if security_context and security_context.get("instrument"):
-            holding_symbols.append(str(security_context["instrument"]["symbol"]))
+        if security_context and isinstance(security_context.get("security"), dict):
+            security_symbol = str(security_context["security"]["symbol"])
     if payload.portfolio_id:
         summary = _invoke(trace, registry, "portfolio.summary", db, user, {"portfolio_id": payload.portfolio_id})
         if summary:
@@ -446,8 +573,9 @@ async def run_assistant(db: Session, user: User, payload: AssistantMessageCreate
     citations: list[dict[str, object]] = []
     if should_search_narrative:
         search_arguments: dict[str, object] = {"query": payload.question, "portfolio_id": payload.portfolio_id, "limit": settings.assistant_max_retrieved_chunks}
-        if holding_symbols:
-            search_arguments["symbols"] = holding_symbols
+        narrative_symbols = [security_symbol] if security_symbol else holding_symbols
+        if narrative_symbols:
+            search_arguments["symbols"] = narrative_symbols
         research = _invoke(trace, registry, "research.search", db, user, search_arguments)
         citations = (research or {}).get("citations", [])
     else:
@@ -457,15 +585,21 @@ async def run_assistant(db: Session, user: User, payload: AssistantMessageCreate
     if freshness:
         for key in ("stale_warning", "backup_warning"):
             if freshness.get(key): warnings.append(freshness[key])
-    if payload.provider:
-        api_key, key_row = get_decrypted_key_for_call(db, user, payload.provider)
-        provider = get_provider(payload.provider)
-        selected_model = payload.model or key_row.default_model
+    selected_provider = payload.provider
+    if selected_provider is None and user.preferences and user.preferences.default_llm_provider != "mock":
+        configured = db.scalar(select(LLMApiKey.id).where(LLMApiKey.user_id == user.id, LLMApiKey.provider == user.preferences.default_llm_provider, LLMApiKey.is_active.is_(True)))
+        if configured:
+            selected_provider = user.preferences.default_llm_provider
+    synthesis: dict[str, object] = {"mode": "deterministic_fallback", "provider": None, "model": None, "reason": "No active external LLM provider is configured."}
+    if selected_provider:
         tool_results = []
         try:
+            api_key, key_row = get_decrypted_key_for_call(db, user, selected_provider)
+            provider = get_provider(selected_provider)
+            selected_model = payload.model or key_row.default_model
             seen_calls: set[str] = set()
             planner_history = [*prior_history, {"role": "user", "content": payload.question}]
-            for _round in range(3):
+            for _round in range(0 if intent == "security_fit" else 3):
                 remaining = settings.assistant_max_tool_iterations - len(trace)
                 if remaining <= 0:
                     break
@@ -500,23 +634,27 @@ async def run_assistant(db: Session, user: User, payload: AssistantMessageCreate
                 for index, item in enumerate(tool_results)
             ]
             citation_evidence = [{"evidence_id": f"citation:{item.get('id')}", **item} for item in citations]
-            grounded_context = json.dumps({"question": payload.question, "intent": intent, "conversation_history": prior_history, "security_context": security_context, "calculated_evidence": evidence, "source_citations": citation_evidence, "tool_evidence": tool_evidence, "uncertainty": uncertainty}, default=str)
-            response = await provider.chat(api_key, [
-                {"role": "system", "content": "Use only supplied evidence. Return JSON with answer and claims. Each claim is {text, evidence_ids}; every claim must cite one or more supplied evidence_id values. The response must address the supplied intent using the intent-specific calculated_evidence. Do not introduce numbers or financial facts."},
-                {"role": "user", "content": grounded_context},
-            ], selected_model)
-            evidence_ids = (
+            allowed_evidence_ids = sorted(
                 {str(item["evidence_id"]) for item in evidence}
                 | {str(item["evidence_id"]) for item in citation_evidence}
                 | {str(item["evidence_id"]) for item in tool_evidence}
             )
+            grounded_context = json.dumps({"question": payload.question, "intent": intent, "conversation_history": prior_history, "security_context": security_context, "calculated_evidence": evidence, "source_citations": citation_evidence, "tool_evidence": tool_evidence, "uncertainty": uncertainty, "allowed_evidence_ids": allowed_evidence_ids}, default=str)
+            response = await provider.chat(api_key, [
+                {"role": "system", "content": "You are the synthesis layer of a portfolio intelligence application. Use only supplied evidence; never calculate portfolio facts or introduce numbers. Do not repeat numeric values in prose; interpret their decision relevance qualitatively because deterministic evidence cards remain the numerical authority. Integrate the security, company filings, market/sector setup, macro and available global proxies, selected portfolio, IPS, investor preferences, supporting evidence, contradictions, and missing data into a decision-useful outlook. Distinguish observed facts, model outputs, assumptions, and interpretation. If evidence is synthetic or unavailable, say so and do not use it to support the thesis. For security-fit questions, structure the answer with: Bottom line; Security and company evidence; Market, sector and macro backdrop; Portfolio and personal fit; Evidence against the case; Decision boundary. Keep the answer under 700 words and use no more than 10 claims. Return one complete JSON object only, with no markdown fence or text outside it: {\"answer\":\"sectioned prose with blank lines\",\"claims\":[{\"text\":\"claim\",\"evidence_ids\":[\"id\"]}]}. Copy evidence IDs exactly from allowed_evidence_ids. Every claim must include at least one applicable allowed ID; combine related sentences into a claim when needed."},
+                {"role": "user", "content": grounded_context},
+            ], selected_model)
+            evidence_ids = set(allowed_evidence_ids)
             validated, failure = _validated_claim_answer(response.content, grounded_context + payload.question, evidence_ids, required_evidence_ids)
             if validated:
                 answer = validated
+                synthesis = {"mode": "llm_grounded", "provider": response.provider, "model": response.model, "reason": None}
             elif failure:
                 uncertainty.append(f"{failure} Deterministic output was used.")
+                synthesis = {"mode": "deterministic_fallback", "provider": selected_provider, "model": selected_model, "reason": failure}
         except Exception as exc:
             uncertainty.append(f"LLM provider was unavailable ({type(exc).__name__}); deterministic output was used.")
+            synthesis = {"mode": "deterministic_fallback", "provider": selected_provider, "model": payload.model, "reason": f"{type(exc).__name__}"}
     assistant = AssistantMessage(conversation_id=conversation.id, role="assistant", content=answer, evidence_json=json.dumps({"calculated_evidence": evidence, "source_citations": citations, "uncertainty": uncertainty, "freshness_warnings": warnings}, default=str), tool_trace_json=json.dumps(trace, default=str))
     db.add(assistant); db.commit(); db.refresh(assistant)
-    return {"conversation_id": conversation.id, "message_id": assistant.id, "answer": answer, "uncertainty": uncertainty, "calculated_evidence": evidence, "source_citations": citations, "freshness_warnings": warnings, "tool_trace": trace, "created_at": assistant.created_at}
+    return {"conversation_id": conversation.id, "message_id": assistant.id, "answer": answer, "uncertainty": uncertainty, "calculated_evidence": evidence, "source_citations": citations, "freshness_warnings": warnings, "tool_trace": trace, "synthesis": synthesis, "created_at": assistant.created_at}

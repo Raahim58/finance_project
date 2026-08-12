@@ -82,6 +82,23 @@ def test_assistant_uses_security_and_portfolio_context_without_llm(client):
     response = client.post("/assistant/messages", headers=headers, json={"question": "Does MEBL fit my portfolio?", "portfolio_id": portfolio_id, "instrument_id": instrument_id})
     assert response.status_code == 201, response.text
     body = response.json()
-    assert "currently own 0.00% MEBL" in body["answer"]
+    assert "Integrated outlook" in body["answer"]
+    assert "MEBL is not currently held" in body["answer"]
+    assert "Portfolio and sector fit" in body["answer"]
+    assert "Macro and global backdrop" in body["answer"]
+    assert "Personal fit" in body["answer"]
     assert any(row["tool"] == "intelligence.security_context" for row in body["tool_trace"])
     assert any(row["metric"] == "sector_headroom" for row in body["calculated_evidence"])
+
+
+def test_security_assistant_document_search_is_candidate_scoped(client):
+    headers = _auth(client)
+    portfolio_id = _portfolio(client, headers)
+    with SessionLocal() as db:
+        instrument_id = db.query(Instrument).filter_by(symbol="MEBL").one().id
+    response = client.post("/assistant/messages", headers=headers, json={"question": "Does MEBL fit, and what evidence contradicts the case?", "portfolio_id": portfolio_id, "instrument_id": instrument_id})
+    assert response.status_code == 201, response.text
+    body = response.json()
+    search = next(row for row in body["tool_trace"] if row["tool"] == "research.search")
+    assert search["arguments"]["symbols"] == ["MEBL"]
+    assert all(row["symbol"] == "MEBL" for row in body["source_citations"])

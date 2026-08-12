@@ -44,6 +44,32 @@ def _normalized_taxonomy(key: str) -> str:
     return key.lower().replace(".", "_").replace("-", "_").strip("_")
 
 
+def _display_facts(rows: list[FinancialFact]) -> list[FinancialFact]:
+    """Return the latest filed version of each economic fact for user-facing research."""
+    result: list[FinancialFact] = []
+    seen: set[tuple[object, ...]] = set()
+    for row in sorted(rows, key=lambda item: (item.period_end, item.version, item.filing_date or item.period_end), reverse=True):
+        normalized = _normalized_taxonomy(row.taxonomy_key)
+        canonical = next((name for name, aliases in FACT_ALIASES.items() if normalized in aliases), normalized)
+        key = (canonical, row.period_type, row.period_end, row.unit, row.currency, row.consolidated)
+        if key not in seen:
+            result.append(row)
+            seen.add(key)
+    return result
+
+
+def _display_documents(rows: list[Document]) -> list[Document]:
+    """Collapse re-ingested versions of the same reporting period in the research UI."""
+    result: list[Document] = []
+    seen: set[tuple[object, ...]] = set()
+    for row in rows:
+        key = (row.document_type, row.published_date, row.fiscal_year, row.quarter)
+        if key not in seen:
+            result.append(row)
+            seen.add(key)
+    return result
+
+
 def _document_provenance(db: Session, document_ids: set[str]) -> dict[str, dict[str, object]]:
     if not document_ids:
         return {}
@@ -189,19 +215,23 @@ def macro_releases(db: Session, series_id: str | None = None):
     return [{"series_id": series.id, "series_key": series.key, "effective_date": observation.effective_date, "release_at": observation.release_at, "value": observation.value, "unit": series.unit, "revision": observation.revision, "artifact_id": observation.artifact_id} for observation, series in db.execute(statement.order_by(MacroObservation.effective_date.desc()).limit(500))]
 
 
-def company_overview(db: Session, user: User, instrument_id: str):
+def company_overview(db: Session, user: User, instrument_id: str, *, include_portfolio_relevance: bool = True):
     instrument = db.get(Instrument, instrument_id)
     if instrument is None: raise HTTPException(status_code=404, detail="Instrument not found")
     latest = latest_price(db, instrument.symbol)
-    facts = list(db.scalars(select(FinancialFact).where(FinancialFact.instrument_id == instrument.id).order_by(FinancialFact.period_end.desc()).limit(100)))
+    all_facts = list(db.scalars(select(FinancialFact).where(FinancialFact.instrument_id == instrument.id).order_by(FinancialFact.period_end.desc(), FinancialFact.version.desc()).limit(200)))
+    all_provenance = _document_provenance(db, {fact.document_id for fact in all_facts if fact.document_id})
+    observed_facts = [fact for fact in all_facts if not all_provenance.get(fact.document_id or "", {}).get("is_synthetic", False)]
+    facts = _display_facts(observed_facts)
     provenance = _document_provenance(db, {fact.document_id for fact in facts if fact.document_id})
     market_research = _market_research(db, instrument)
-    documents = list(db.scalars(select(Document).where(Document.symbol == instrument.symbol, or_(Document.visibility == "public", Document.owner_user_id == user.id)).order_by(Document.published_date.desc()).limit(20)))
+    documents = _display_documents(list(db.scalars(select(Document).where(Document.symbol == instrument.symbol, Document.document_type != "synthetic_demo_facts", Document.source_name != "Deterministic Demo Seed", or_(Document.visibility == "public", Document.owner_user_id == user.id)).order_by(Document.published_date.desc(), Document.created_at.desc()).limit(50))))[:20]
     event_links = list(db.scalars(select(EventEntityLink).where(EventEntityLink.entity_key == instrument.symbol)))
     events = [db.get(Event, link.event_id) for link in event_links]
     relevance = []
     from app.models.portfolio import Portfolio, PortfolioHolding
-    for portfolio, holding in db.execute(select(Portfolio, PortfolioHolding).join(PortfolioHolding, PortfolioHolding.portfolio_id == Portfolio.id).where(Portfolio.user_id == user.id, PortfolioHolding.symbol == instrument.symbol)):
+    relevance_rows = db.execute(select(Portfolio, PortfolioHolding).join(PortfolioHolding, PortfolioHolding.portfolio_id == Portfolio.id).where(Portfolio.user_id == user.id, PortfolioHolding.symbol == instrument.symbol)) if include_portfolio_relevance else []
+    for portfolio, holding in relevance_rows:
         summary = get_portfolio_summary(db, user, portfolio.id)
         item = next((value for value in summary.holdings if value.symbol == instrument.symbol), None)
         risk_context: dict[str, object] = {"available": False, "reason": "Portfolio quant inputs are unavailable."}
@@ -233,9 +263,10 @@ def company_overview(db: Session, user: User, instrument_id: str):
         "fundamentals": [{"taxonomy_key": fact.taxonomy_key, "period_type": fact.period_type, "period_end": fact.period_end, "filing_date": fact.filing_date, "value": fact.value, "unit": fact.unit, "currency": fact.currency, "document_id": fact.document_id, "page_number": fact.page_number, "provenance": _fact_provenance(provenance, fact.document_id)} for fact in facts],
         "derived_fundamentals": _derived_fundamentals(facts, provenance),
         "documents": [{"id": document.id, "title": document.title, "document_type": document.document_type, "published_date": document.published_date, "source_url": document.source_url, "is_synthetic": document.document_type == "synthetic_demo_facts"} for document in documents],
-        "events": [{"id": event.id, "title": event.title, "event_type": event.event_type, "occurred_at": event.occurred_at, "direction": event.direction, "confidence": event.confidence} for event in events if event],
+        "events": [{"id": event.id, "title": event.title, "event_type": event.event_type, "occurred_at": event.occurred_at, "direction": event.direction, "confidence": event.confidence} for event in events if event and db.scalar(select(EventSource.id).where(EventSource.event_id == event.id, EventSource.source_name != "Deterministic Demo Seed"))],
         "portfolio_relevance": relevance,
-        "has_synthetic_data": any(item["is_synthetic"] for item in provenance.values()) or any(document.document_type == "synthetic_demo_facts" for document in documents),
+        "has_synthetic_data": False,
+        "excluded_synthetic_research": len(observed_facts) != len(all_facts),
     }
 
 

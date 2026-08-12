@@ -6,26 +6,30 @@ IPS compliance, and existing proposal persistence around one security decision.
 """
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import numpy as np
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.domain.quant import optimize
+from app.domain.quant import optimize, regression_metrics, risk_contributions
 from app.models.user import User
 from app.models.workstation import Instrument
 from app.schemas.intelligence import CandidateEvaluationRequest, SaveCandidateProposalRequest
 from app.schemas.portfolio import AllocationItemInput, AllocationSetCreate
 from app.schemas.workstation import PortfolioComparisonRequest
 from app.services.compliance_service import evaluate_ips_constraints
-from app.services.decision_analytics_service import _market_inputs, compare_portfolio
-from app.services.portfolio_service import create_allocation_set, get_portfolio_exposure, get_portfolio_summary
+from app.services.decision_analytics_service import _benchmark_returns, _market_inputs, compare_portfolio
+from app.services.portfolio_service import create_allocation_set, get_portfolio_summary
+from app.services.preferences_service import ensure_preferences, serialize_preferences
 from app.services.regime_service import macro_regime
 from app.services.research_service import company_overview
 from app.services.scenario_service import list_scenario_templates, resolve_shock
-from app.services.workstation_service import _selected_ips_constraints, ips_compliance
+from app.services.workstation_service import _selected_ips_constraints
 
 
 def _instrument(db: Session, symbol: str) -> Instrument:
@@ -37,20 +41,45 @@ def _instrument(db: Session, symbol: str) -> Instrument:
 
 def _portfolio_context(db: Session, user: User, portfolio_id: str, instrument: Instrument) -> dict[str, object]:
     summary = get_portfolio_summary(db, user, portfolio_id)
-    exposure = get_portfolio_exposure(db, user, portfolio_id)
-    compliance = ips_compliance(db, user, portfolio_id)
     total = float(summary.total_value)
     holding = next((row for row in summary.holdings if row.symbol == instrument.symbol), None)
     current_weight = float(holding.market_value) / total if holding and total else 0.0
-    sector_weight = next((float(row.weight_percent) / 100 for row in exposure.by_sector if row.sector == instrument.sector), 0.0)
+    sector_weight = sum(float(row.market_value) for row in summary.holdings if row.sector == instrument.sector) / total if total else 0.0
     constraints = _selected_ips_constraints(db, summary.portfolio)
     sector_limit = constraints.get("max_sector_weight")
     position_limit = constraints.get("max_instrument_weight")
     correlation: dict[str, object] = {"available": False, "reason": "At least 31 aligned observations across the candidate and holdings are required."}
+    risk_contribution: dict[str, object] = {"available": False, "reason": "Aligned covariance inputs are unavailable."}
+    modeled_inputs: dict[str, object] = {
+        "liquid_assets": float(summary.cash_balance),
+        "data_cutoff": summary.data_freshness_date,
+        "estimator": "aligned_price_covariance_v1",
+    }
     try:
-        _, symbols, days, returns, _covariance, _expected, *_ = _market_inputs(db, user, portfolio_id, [instrument.symbol])
+        # Reuse the portfolio-alignment cache when the security is already held.
+        # Candidate-only symbols expand the analytical universe without touching holdings.
+        extra_symbols = None if holding else [instrument.symbol]
+        _, symbols, days, returns, covariance, _expected, _constraints, benchmark_symbol, risk_free = _market_inputs(db, user, portfolio_id, extra_symbols)
         matrix = np.corrcoef(returns, rowvar=False)
         index = symbols.index(instrument.symbol)
+        risky_weights = np.asarray([
+            float(next((row.market_value for row in summary.holdings if row.symbol == symbol), 0)) / total if total else 0.0
+            for symbol in symbols
+        ])
+        contribution = risk_contributions(risky_weights, covariance)
+        modeled_inputs.update({
+            "portfolio_volatility": float(np.sqrt(max(float(risky_weights @ covariance @ risky_weights), 0))),
+            "risk_contributions": dict(zip(symbols, [float(value) for value in contribution["percentage"]], strict=True)),
+            "data_cutoff": days[-1],
+        })
+        benchmark_returns = _benchmark_returns(db, benchmark_symbol, days)
+        if benchmark_returns is not None and len(benchmark_returns) >= 60:
+            portfolio_returns = returns @ risky_weights
+            modeled_inputs["portfolio_beta"] = regression_metrics(
+                portfolio_returns,
+                benchmark_returns,
+                risk_free_rate=float(risk_free["annual_rate"]) if risk_free else 0.0,
+            )["beta"]
         correlation = {
             "available": True,
             "data_cutoff": days[-1],
@@ -58,21 +87,57 @@ def _portfolio_context(db: Session, user: User, portfolio_id: str, instrument: I
             "average_with_holdings": float(np.mean([matrix[index, offset] for offset, symbol in enumerate(symbols) if symbol != instrument.symbol])),
             "estimator": "aligned_canonical_daily_returns",
         }
+        risk_contribution = {
+            "available": True,
+            "percentage": float(contribution["percentage"][index]),
+            "basis": "risky_sleeve_variance",
+            "data_cutoff": days[-1],
+        }
     except (HTTPException, ValueError):
         pass
+    instrument_rows = {
+        row.symbol: row
+        for row in db.scalars(select(Instrument).where(Instrument.symbol.in_([holding.symbol for holding in summary.holdings])))
+    }
+    positions = []
+    for row in summary.holdings:
+        security = instrument_rows.get(row.symbol)
+        metadata = json.loads(security.metadata_json) if security and security.metadata_json else {}
+        positions.append({
+            "symbol": row.symbol,
+            "weight": float(row.market_value) / total if total else 0.0,
+            "sector": row.sector,
+            "shariah_eligible": metadata.get("shariah_compliant"),
+            "asset_type": security.instrument_type if security else None,
+            "currency": security.currency if security else None,
+        })
+    positions.append({"symbol": "CASH", "weight": float(summary.cash_balance) / total if total else 0.0, "sector": "Cash", "asset_type": "cash", "currency": summary.portfolio.base_currency})
+    compliance_result = evaluate_ips_constraints(
+        constraints,
+        positions,
+        ips_version_id=summary.portfolio.selected_ips_version_id,
+        valuation_complete=summary.valuation_complete,
+        unpriced_symbols=summary.unpriced_symbols,
+        context="current",
+        modeled_inputs=modeled_inputs,
+    )
+    compliance = {"portfolio_id": summary.portfolio.id, **compliance_result, "evaluated_at": datetime.now(UTC)}
     return {
         "portfolio": {"id": summary.portfolio.id, "name": summary.portfolio.name, "value": total, "data_cutoff": summary.data_freshness_date, "source": summary.data_source},
         "ownership": {"weight": current_weight, "market_value": float(holding.market_value) if holding else 0.0, "quantity": float(holding.quantity) if holding else 0.0},
         "sector_exposure": {"sector": instrument.sector, "current_weight": sector_weight, "limit": float(sector_limit) if sector_limit is not None else None, "headroom": max(0.0, float(sector_limit) - sector_weight) if sector_limit is not None else None},
         "position_headroom": max(0.0, float(position_limit) - current_weight) if position_limit is not None else None,
         "correlation": correlation,
+        "risk_contribution": risk_contribution,
         "compliance": compliance,
     }
 
 
 def security_intelligence(db: Session, user: User, symbol: str, portfolio_id: str | None = None) -> dict[str, object]:
     instrument = _instrument(db, symbol)
-    research = company_overview(db, user, instrument.id)
+    # The dedicated portfolio context below is the canonical Intelligence V1 view.
+    # Avoid recomputing the older per-portfolio relevance block inside company research.
+    research = company_overview(db, user, instrument.id, include_portfolio_relevance=False)
     regime = macro_regime(db, user, portfolio_id)
     portfolio = _portfolio_context(db, user, portfolio_id, instrument) if portfolio_id else None
     missing = []
@@ -86,6 +151,7 @@ def security_intelligence(db: Session, user: User, symbol: str, portfolio_id: st
         missing.append("Macro regime lacks enough selected structured observations.")
     return {
         "security": research["instrument"],
+        "personal_context": serialize_preferences(ensure_preferences(db, user)).model_dump(),
         "observed_facts": {"market": research.get("market"), "fundamentals": research.get("fundamentals"), "events": research.get("events"), "documents": research.get("documents"), "macro": regime.get("dimensions")},
         "model_outputs": {"market_research": research.get("market_research"), "derived_fundamentals": research.get("derived_fundamentals"), "regime": regime, "portfolio_relevance": portfolio},
         "assumptions": [regime.get("method_note"), "Candidate analytics use aligned canonical daily prices and the confirmed IPS."],
@@ -139,7 +205,20 @@ def _optimizer_weights(db: Session, user: User, portfolio_id: str, symbol: str) 
     return weights, {"objective": "minimum_variance", "data_cutoff": days[-1], "diagnostics": result.diagnostics, "cash_weight_held_constant": cash_weight, "constraints": ["long_only", "max_instrument_weight", "max_sector_weight when configured"]}
 
 
-def _stress(weights: dict[str, float], instruments: dict[str, Instrument], constraints: dict[str, object], ips_version_id: str | None, suggested: list[str]) -> list[dict[str, object]]:
+def _stress(
+    weights: dict[str, float],
+    instruments: dict[str, Instrument],
+    constraints: dict[str, object],
+    ips_version_id: str | None,
+    suggested: list[str],
+    *,
+    symbols: list[str],
+    days: list,
+    returns: np.ndarray,
+    covariance: np.ndarray,
+    benchmark_returns: np.ndarray | None,
+    total_value: float,
+) -> list[dict[str, object]]:
     template_ids = list(dict.fromkeys([*suggested, "psx_drawdown", "banking_stress"]))[:3]
     templates = {str(item["id"]): item for item in list_scenario_templates()}
     rows = []
@@ -160,7 +239,32 @@ def _stress(weights: dict[str, float], instruments: dict[str, Instrument], const
         portfolio_return = sum(weights.get(symbol, 0.0) * shock for symbol, shock in shocks.items())
         denominator = 1 + portfolio_return
         stressed = {symbol: weights[symbol] * (1 + shocks[symbol]) / denominator if denominator else 0.0 for symbol in weights}
-        compliance = evaluate_ips_constraints(constraints, [{"symbol": symbol, "weight": weight, "sector": "Cash" if symbol == "CASH" else instruments[symbol].sector} for symbol, weight in stressed.items()], ips_version_id=ips_version_id, context="candidate_stressed")
+        risky_weights = np.asarray([stressed.get(symbol, 0.0) for symbol in symbols])
+        contribution = risk_contributions(risky_weights, covariance)
+        contribution_by_symbol = dict(zip(symbols, [float(value) for value in contribution["percentage"]], strict=True))
+        volatility = float(np.sqrt(max(risky_weights @ covariance @ risky_weights, 0.0)))
+        beta = None
+        if benchmark_returns is not None and float(np.var(benchmark_returns, ddof=1)) > 0:
+            variance = float(np.var(benchmark_returns, ddof=1))
+            betas = np.asarray([
+                float(np.cov(returns[:, index], benchmark_returns, ddof=1)[0, 1] / variance)
+                for index in range(len(symbols))
+            ])
+            beta = float(risky_weights @ betas)
+        compliance = evaluate_ips_constraints(
+            constraints,
+            [{"symbol": symbol, "weight": weight, "sector": "Cash" if symbol == "CASH" else instruments[symbol].sector} for symbol, weight in stressed.items()],
+            ips_version_id=ips_version_id,
+            context="candidate_stressed",
+            modeled_inputs={
+                "portfolio_volatility": volatility,
+                "portfolio_beta": beta,
+                "risk_contributions": contribution_by_symbol,
+                "liquid_assets": stressed.get("CASH", 0.0) * total_value * denominator,
+                "data_cutoff": days[-1],
+                "estimator": "scenario_reweighted_historical_shrunk_covariance_v1",
+            },
+        )
         rows.append({"id": template_id, "name": template["name"], "return": portfolio_return, "shocks": shocks, "compliance": compliance, "assumption": template["description"], "version": template["version"]})
     return rows
 
@@ -182,9 +286,21 @@ def evaluate_candidate(db: Session, user: User, symbol: str, payload: CandidateE
     portfolio = summary.portfolio
     constraints = _selected_ips_constraints(db, portfolio)
     instruments = {row.symbol: row for row in db.scalars(select(Instrument).where(Instrument.symbol.in_([key for key in proposed if key != "CASH"])))}
+    _input_portfolio, symbols, days, returns, covariance, _expected, _input_constraints, benchmark_symbol, _risk_free = _market_inputs(
+        db, user, payload.portfolio_id, [instrument.symbol]
+    )
+    benchmark_returns = _benchmark_returns(db, benchmark_symbol, days)
     regime = macro_regime(db, user, payload.portfolio_id)
-    current_stress = _stress(current, instruments, constraints, portfolio.selected_ips_version_id, list(regime.get("suggested_scenario_ids", [])))
-    proposed_stress = _stress(proposed, instruments, constraints, portfolio.selected_ips_version_id, list(regime.get("suggested_scenario_ids", [])))
+    stress_inputs = {
+        "symbols": symbols,
+        "days": days,
+        "returns": returns,
+        "covariance": covariance,
+        "benchmark_returns": benchmark_returns,
+        "total_value": total,
+    }
+    current_stress = _stress(current, instruments, constraints, portfolio.selected_ips_version_id, list(regime.get("suggested_scenario_ids", [])), **stress_inputs)
+    proposed_stress = _stress(proposed, instruments, constraints, portfolio.selected_ips_version_id, list(regime.get("suggested_scenario_ids", [])), **stress_inputs)
     current_weight, proposed_weight = current.get(instrument.symbol, 0.0), proposed.get(instrument.symbol, 0.0)
     construction_assumption = "Minimum-variance optimizer held the current cash weight constant." if optimizer_context else "Manual additions are funded pro rata from every other positive portfolio weight, including cash; reductions and removals are allocated to cash."
     return {
@@ -195,7 +311,7 @@ def evaluate_candidate(db: Session, user: User, symbol: str, payload: CandidateE
         "decision_explanation": {
             "improved": [row for row in comparison["trade_offs"] if row["direction"] == "IMPROVED"],
             "deteriorated": [row for row in comparison["trade_offs"] if row["direction"] == "WORSENED"],
-            "sizing": f"{instrument.symbol} is sized at {proposed_weight:.2%} by the recorded {optimizer_context['objective']} objective and confirmed bounds." if optimizer_context else f"The user-specified sandbox target is {proposed_weight:.2%}.",
+            "sizing": f"{instrument.symbol} is sized at {proposed_weight:.2%} by the recorded minimum-variance objective and confirmed bounds." if optimizer_context else f"The sandbox target is {proposed_weight:.2%}.",
             "assumptions": {**comparison["assumptions"], "candidate_construction": construction_assumption},
             "main_downside_scenarios": sorted(proposed_stress, key=lambda row: float(row["return"]))[:2],
         },
@@ -208,5 +324,6 @@ def save_candidate_proposal(db: Session, user: User, symbol: str, payload: SaveC
     evaluation = evaluate_candidate(db, user, symbol, payload)
     weights = evaluation["comparison"]["proposed_weights"]
     summary = get_portfolio_summary(db, user, payload.portfolio_id)
-    allocation = create_allocation_set(db, user, payload.portfolio_id, AllocationSetCreate(kind="sandbox", base_value=Decimal(str(summary.total_value)), assumptions={"intelligence_v1": True, "label": payload.label, "candidate": evaluation["candidate"], "decision_explanation": evaluation["decision_explanation"], "stress": evaluation["stress"]}, items=[AllocationItemInput(symbol=key, target_weight=Decimal(str(value)), is_cash=key == "CASH") for key, value in weights.items()]))
+    assumptions = jsonable_encoder({"intelligence_v1": True, "label": payload.label, "candidate": evaluation["candidate"], "decision_explanation": evaluation["decision_explanation"], "stress": evaluation["stress"]})
+    allocation = create_allocation_set(db, user, payload.portfolio_id, AllocationSetCreate(kind="sandbox", base_value=Decimal(str(summary.total_value)), assumptions=assumptions, items=[AllocationItemInput(symbol=key, target_weight=Decimal(str(value)), is_cash=key == "CASH") for key, value in weights.items()]))
     return {"proposal": allocation, "evaluation": evaluation, "ledger_mutated": False}

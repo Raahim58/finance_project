@@ -3,6 +3,7 @@ from sqlalchemy import select
 from app.core.security import decrypt_secret
 from app.db.session import SessionLocal
 from app.models.llm_key import LLMApiKey
+from app.models.user import UserPreferences
 
 
 def _auth_headers(client):
@@ -35,6 +36,9 @@ def test_llm_key_is_encrypted_and_masked(client):
         assert stored is not None
         assert stored.encrypted_api_key != "mock-secret-1234"
         assert decrypt_secret(stored.encrypted_api_key) == "mock-secret-1234"
+        preferences = db.scalar(select(UserPreferences).where(UserPreferences.user_id == stored.user_id))
+        assert preferences is not None
+        assert preferences.default_llm_provider == "mock"
 
 
 def test_key_validation_rejects_bad_mock_key(client):

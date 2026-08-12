@@ -82,7 +82,9 @@ class AnthropicProvider(HTTPProvider):
         selected_model = model or self.default_model
         system = "\n\n".join(item["content"] for item in messages if item.get("role") == "system")
         turns = [item for item in messages if item.get("role") in {"user", "assistant"}]
-        payload: dict[str, Any] = {"model": selected_model, "max_tokens": 2048, "messages": turns}
+        # Grounded portfolio synthesis includes claim-level citations after the prose.
+        # A 2K cap can truncate otherwise-valid JSON before the claims array closes.
+        payload: dict[str, Any] = {"model": selected_model, "max_tokens": 4096, "messages": turns, "temperature": 0}
         if system:
             payload["system"] = system
         data = await self._post(self.chat_url, api_key, payload)

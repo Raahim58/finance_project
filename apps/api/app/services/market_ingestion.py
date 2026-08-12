@@ -198,11 +198,13 @@ def upsert_company_from_price_row(db: Session, row: LatestPriceRow) -> Company:
 
     exchange = ensure_psx_exchange(db)
     company = db.scalar(select(Company).where(Company.symbol == row.symbol))
+    row_name = getattr(row, "name", None)
+    row_sector = getattr(row, "sector", None)
     if not company:
         company = Company(
             symbol=row.symbol,
-            name=row.name or row.symbol,
-            sector=row.sector or "Unknown",
+            name=row_name or row.symbol,
+            sector=row_sector or "Unknown",
             exchange_id=exchange.id,
             psx_url=f"https://dps.psx.com.pk/company/{row.symbol}",
             description=f"Market data company record for {row.symbol}.",
@@ -211,12 +213,12 @@ def upsert_company_from_price_row(db: Session, row: LatestPriceRow) -> Company:
         db.add(company)
         db.flush()
 
-    if row.name:
-        company.name = row.name
+    if row_name:
+        company.name = row_name
     elif not company.name:
         company.name = row.symbol
-    if row.sector:
-        company.sector = row.sector
+    if row_sector:
+        company.sector = row_sector
     elif not company.sector:
         company.sector = "Unknown"
     company.exchange_id = exchange.id

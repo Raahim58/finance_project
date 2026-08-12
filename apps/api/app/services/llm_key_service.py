@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.ai.providers.registry import get_provider
 from app.core.security import decrypt_secret, encrypt_secret, mask_api_key
 from app.models.llm_key import LLMApiKey
-from app.models.user import User
+from app.models.user import User, UserPreferences
 from app.schemas.settings import LLMKeyCreate, LLMKeyResponse, LLMKeyTest, LLMKeyTestResponse
 
 
@@ -60,6 +60,11 @@ async def create_key(db: Session, user: User, payload: LLMKeyCreate) -> LLMKeyRe
         default_model=payload.default_model or provider.default_model,
     )
     db.add(key)
+    preferences = user.preferences
+    if preferences is None:
+        preferences = UserPreferences(user_id=user.id)
+        db.add(preferences)
+    preferences.default_llm_provider = provider.name
     db.commit()
     db.refresh(key)
     return serialize_key(key)
