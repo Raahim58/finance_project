@@ -346,6 +346,7 @@ const GET_CACHE_TTL_MS = 60_000;
 type CachedResponse = { expiresAt: number; value: unknown };
 const responseCache = new Map<string, CachedResponse>();
 const pendingRequests = new Map<string, Promise<unknown>>();
+let sampleSessionPromise: Promise<string> | null = null;
 
 export function clearApiCache() {
   responseCache.clear();
@@ -367,8 +368,28 @@ export function clearToken() {
   window.localStorage.removeItem(TOKEN_KEY);
 }
 
+async function ensureSampleToken(): Promise<string> {
+  const existing = getToken();
+  if (existing) return existing;
+  if (!sampleSessionPromise) {
+    sampleSessionPromise = fetch(`${API_BASE_URL}/auth/sample-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }).then(async response => {
+      if (!response.ok) throw new Error(`Sample workspace unavailable (${response.status})`);
+      const session = await response.json() as AuthResponse;
+      setToken(session.access_token);
+      return session.access_token;
+    }).finally(() => { sampleSessionPromise = null; });
+  }
+  return sampleSessionPromise;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getToken();
+  let token = getToken();
+  if (!token && typeof window !== "undefined" && !path.startsWith("/auth/")) {
+    token = await ensureSampleToken();
+  }
   const method = (options.method ?? "GET").toUpperCase();
   const cacheKey = `${token ? "authenticated" : "anonymous"}:${path}`;
   if (method === "GET") {
@@ -419,6 +440,10 @@ export function login(email: string, password: string) {
     method: "POST",
     body: JSON.stringify({ email, password })
   });
+}
+
+export function startSampleSession() {
+  return request<AuthResponse>("/auth/sample-session", { method: "POST" });
 }
 
 export function getPreferences() {

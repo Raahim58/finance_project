@@ -32,6 +32,7 @@ def test_duplicate_signup_is_rejected(client):
 def test_demo_login_is_disabled_by_default(client):
     response = client.get("/auth/demo-login", params={"token": "demo-secret"})
     assert response.status_code == 404
+    assert client.post("/auth/sample-session").status_code == 404
 
 
 def test_demo_login_requires_matching_token_and_active_demo_user(client, monkeypatch):
@@ -53,3 +54,10 @@ def test_demo_login_requires_matching_token_and_active_demo_user(client, monkeyp
     me = client.get("/auth/me", headers={"Authorization": f"Bearer {jwt}"})
     assert me.status_code == 200
     assert me.json()["email"] == "portfolio.manager@example.com"
+    sample = client.post("/auth/sample-session")
+    assert sample.status_code == 200
+    sample_me = client.get(
+        "/auth/me",
+        headers={"Authorization": f"Bearer {sample.json()['access_token']}"},
+    )
+    assert sample_me.json()["email"] == "portfolio.manager@example.com"

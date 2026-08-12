@@ -16,8 +16,8 @@ export default function HomePage() {
           <span className="hidden sm:block"><strong className="block text-[13px] font-semibold tracking-[-.01em]">PSX Workstation</strong><span className="block text-[11px] text-muted">Evidence-led investing</span></span>
         </Link>
         <div className="flex items-center gap-2">
-          <span className="hidden sm:inline"><Link className="btn btn-quiet" href="/login">Sign in</Link></span>
-          <Link className="btn btn-primary whitespace-nowrap px-3 sm:px-4" href="/signup">Build your mandate</Link>
+          <span className="hidden sm:inline"><Link className="btn btn-quiet" href="/dashboard">Open sample</Link></span>
+          <Link className="btn btn-primary whitespace-nowrap px-3 sm:px-4" href="/dashboard">Build your mandate</Link>
         </div>
       </header>
 
@@ -30,8 +30,8 @@ export default function HomePage() {
           <div className="border-l-2 border-accent pl-6">
             <p className="max-w-sm text-[15px] leading-7 text-muted">Portfolio construction, risk, stress testing and cited research—organized around your mandate, with source and freshness visible.</p>
             <div className="mt-7 flex flex-wrap gap-2">
-              <Link className="btn btn-primary min-h-11 px-5" href="/signup">Build your portfolio <Icon name="chevron" size={15}/></Link>
-              <Link className="btn btn-secondary min-h-11 px-5" href="/login">Open workstation</Link>
+              <Link className="btn btn-primary min-h-11 px-5" href="/dashboard">Build your portfolio <Icon name="chevron" size={15}/></Link>
+              <Link className="btn btn-secondary min-h-11 px-5" href="/dashboard">Open workstation</Link>
             </div>
           </div>
         </div>

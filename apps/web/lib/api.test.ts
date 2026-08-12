@@ -9,6 +9,7 @@ describe("API GET cache", () => {
   });
 
   it("deduplicates concurrent requests and reuses the response", async () => {
+    localStorage.setItem("psx_ai_token", "test-session");
     const response = { ok: true, status: 200, json: vi.fn().mockResolvedValue({ id: "portfolio-1" }) };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(response as unknown as Response);
 

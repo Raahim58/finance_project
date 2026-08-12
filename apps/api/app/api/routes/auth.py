@@ -53,6 +53,20 @@ def demo_login(token: str, db: Session = Depends(get_db)) -> TokenResponse:
     return TokenResponse(access_token=create_access_token(user.id))
 
 
+@router.post("/sample-session", response_model=TokenResponse)
+def sample_session(db: Session = Depends(get_db)) -> TokenResponse:
+    """Issue the enabled demo user's session for the temporary public workspace."""
+    if not settings.enable_demo_access:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    user = db.scalar(select(User).where(User.email == settings.demo_access_email.lower()))
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Sample portfolio unavailable; run the demo seed first",
+        )
+    return TokenResponse(access_token=create_access_token(user.id))
+
+
 @router.post("/logout")
 def logout() -> dict[str, str]:
     return {"status": "ok"}
