@@ -1,10 +1,11 @@
 """Deterministic macro/market regime classification from structured observations."""
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.user import User
-from app.models.workstation import MacroObservation, MacroSeries
+from app.core.config import settings
+from app.models.workstation import DataSource, MacroObservation, MacroSeries, SourceArtifact
 from app.services.market_service import get_sectors
 from app.services.portfolio_service import get_portfolio_summary
 
@@ -23,7 +24,15 @@ def _series_dimension(series: MacroSeries) -> str | None:
 
 
 def _latest_pair(db: Session, series: MacroSeries) -> list[MacroObservation]:
-    return list(db.scalars(select(MacroObservation).where(MacroObservation.series_id == series.id, MacroObservation.is_selected.is_(True)).order_by(MacroObservation.effective_date.desc(), MacroObservation.revision.desc()).limit(2)))
+    statement = select(MacroObservation).where(MacroObservation.series_id == series.id, MacroObservation.is_selected.is_(True))
+    if not settings.is_synthetic_environment:
+        statement = (
+            statement
+            .join(SourceArtifact, SourceArtifact.id == MacroObservation.artifact_id)
+            .join(DataSource, DataSource.id == SourceArtifact.data_source_id)
+            .where(~func.lower(DataSource.name).contains("demo"), ~func.lower(SourceArtifact.source_url).like("demo://%"))
+        )
+    return list(db.scalars(statement.order_by(MacroObservation.effective_date.desc(), MacroObservation.revision.desc()).limit(2)))
 
 
 def macro_regime(db: Session, user: User, portfolio_id: str | None = None) -> dict[str, object]:

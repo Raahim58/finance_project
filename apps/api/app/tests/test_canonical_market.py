@@ -1,11 +1,13 @@
 from datetime import date
 from decimal import Decimal
+import json
 
 from sqlalchemy import func, select
 
 from app.db.session import SessionLocal
 from app.models.market import MarketPrice
-from app.models.workstation import DataQualityIssue, MarketObservation
+from app.models.workstation import DataQualityIssue, Instrument, MarketObservation
+from app.core.config import settings
 from app.services.canonical_market_service import price_series
 from app.services.market_ingestion import persist_market_data
 from app.services.market_providers import LatestPriceRow
@@ -43,3 +45,29 @@ def test_invalid_observed_ohlc_is_rejected_not_synthesized():
     assert result["rejected"] == 1
     assert legacy == 0
     assert issue is not None
+
+
+def test_live_mode_never_returns_mock_as_canonical(monkeypatch):
+    monkeypatch.setattr(settings, "market_data_mode", "auto")
+    with SessionLocal() as db:
+        persist_market_data(db, latest_prices=[_row("normalized://mock/fixture")], source="mock")
+        assert price_series(db, "TEST") == []
+
+
+def test_live_mode_prefers_observed_and_excludes_mock_only_dates(monkeypatch):
+    monkeypatch.setattr(settings, "market_data_mode", "auto")
+    observed = _row("https://dps.psx.com.pk/historical", close="105", high="106")
+    mock_only = LatestPriceRow(
+        symbol="TEST", trade_date=date(2026, 8, 6), close=Decimal("99"),
+        previous_close=Decimal("98"), open=Decimal("98"), high=Decimal("100"),
+        low=Decimal("97"), volume=10, name="Test Limited", sector="Test",
+        source_url="normalized://mock/fixture",
+    )
+    with SessionLocal() as db:
+        persist_market_data(db, latest_prices=[mock_only], source="mock")
+        persist_market_data(db, latest_prices=[observed], source="dps")
+        rows = price_series(db, "TEST")
+        metadata = json.loads(db.scalar(select(Instrument).where(Instrument.symbol == "TEST")).metadata_json)
+    assert [(row.trade_date, row.source) for row in rows] == [(date(2026, 8, 7), "dps")]
+    assert metadata["data_classification"] == "observed"
+    assert metadata["identity_source"] == "dps"

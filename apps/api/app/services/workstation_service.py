@@ -10,6 +10,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.domain.quant import (
     correlation_matrix,
     covariance_matrix,
@@ -30,6 +31,7 @@ from app.models.workstation import (
     AllocationItem,
     AllocationSet,
     CorporateAction,
+    DataSource,
     Instrument,
     InvestorFinancialProfile,
     InvestorFinancialProfileVersion,
@@ -43,6 +45,7 @@ from app.models.workstation import (
     PortfolioIPS,
     Recommendation,
     ScenarioRun,
+    SourceArtifact,
 )
 from app.schemas.workstation import IPSDraft, OptimizerRequest, RebalanceRequest, ScenarioRequest, VersionDraft
 from app.services.audit_service import record_event
@@ -386,13 +389,20 @@ def _effective_risk_free_rate(db: Session, as_of: date, series_key: str | None =
         priority = preferred_keys.index(series.key) if series.key in preferred_keys else len(preferred_keys)
         ranked.append((priority, series))
     for _, series in sorted(ranked, key=lambda item: item[0]):
-        observation = db.scalar(
-            select(MacroObservation)
-            .where(
-                MacroObservation.series_id == series.id,
-                MacroObservation.is_selected.is_(True),
-                MacroObservation.effective_date <= as_of,
+        statement = select(MacroObservation).where(
+            MacroObservation.series_id == series.id,
+            MacroObservation.is_selected.is_(True),
+            MacroObservation.effective_date <= as_of,
+        )
+        if not settings.is_synthetic_environment:
+            statement = (
+                statement
+                .join(SourceArtifact, SourceArtifact.id == MacroObservation.artifact_id)
+                .join(DataSource, DataSource.id == SourceArtifact.data_source_id)
+                .where(~func.lower(DataSource.name).contains("demo"), ~func.lower(SourceArtifact.source_url).like("demo://%"))
             )
+        observation = db.scalar(
+            statement
             .order_by(MacroObservation.effective_date.desc(), MacroObservation.revision.desc())
         )
         if observation is None:

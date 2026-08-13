@@ -1,7 +1,8 @@
-"""Deterministic development seed for the complete portfolio-decision workflow.
+"""Idempotent demo-investor seed for hybrid live testing.
 
-All market observations remain explicitly mock data. The seed never stores an API
-key and requires the operator to supply the development login password.
+The default command creates only user-owned hypothetical state.  Synthetic
+external-world fixtures remain available behind an explicit opt-in for offline
+tests and isolated development databases.
 """
 
 import json
@@ -21,7 +22,11 @@ from app.schemas.auth import SignupRequest
 from app.schemas.portfolio import AllocationItemInput, AllocationSetCreate, PortfolioCreate, TransactionCreate
 from app.schemas.workstation import IPSDraft, OptimizerRequest, ScenarioRequest, VersionDraft
 from app.services.auth_service import create_user
-from app.services.market_ingestion import generate_mock_market_data, record_market_ingestion_run
+from app.services.market_ingestion import (
+    ensure_psx_reference_companies,
+    generate_mock_market_data,
+    record_market_ingestion_run,
+)
 from app.services.monitoring_service import run_monitoring
 from app.services.portfolio_service import add_transaction, create_allocation_set, create_portfolio, get_portfolio_summary
 from app.services.workstation_service import create_monitoring_rule, run_optimizer, run_scenario, save_ips_version, save_profile_version
@@ -140,17 +145,31 @@ def _seed_macro_research(db) -> int:
     return 1
 
 
-def seed_workstation() -> dict[str, object]:
+def seed_workstation(*, include_mock_world: bool = False) -> dict[str, object]:
     password = os.environ.get("DEMO_USER_PASSWORD")
     if not password or len(password) < 8:
         raise RuntimeError("Set DEMO_USER_PASSWORD to at least 8 characters before running the demo seed")
     with SessionLocal() as db:
-        market = generate_mock_market_data(db, days=365)
-        macro_count = _seed_macro(db)
-        research = _seed_company_research(db)
-        research["macro_documents"] = _seed_macro_research(db)
-        if not db.scalar(select(func.count()).select_from(MarketIngestionRun).where(MarketIngestionRun.used_provider == "mock")):
-            record_market_ingestion_run(db, mode="mock", attempted_provider="mock", used_provider="mock", status="success", started_at=datetime.now(UTC), latest_trade_date=date.today(), records_written=int(market["prices"]), message=f"Deterministic demo seed {DEMO_SEED_VERSION}; synthetic data only.")
+        investor_symbols = {
+            "MEBL", "SYS", "OGDC", "FFC", "LUCK", "HUBC", "ILP", "MARI",
+            "ENGROH", "HBL", "UBL", "MCB",
+        }
+        reference_companies = ensure_psx_reference_companies(db, investor_symbols)
+        db.commit()
+        market: dict[str, object] = {
+            "companies": len(reference_companies),
+            "prices": 0,
+            "data_classification": "unavailable_pending_live_ingestion",
+        }
+        macro_count = 0
+        research: dict[str, int] = {"documents": 0, "facts": 0, "events": 0, "macro_documents": 0}
+        if include_mock_world:
+            market = generate_mock_market_data(db, days=365)
+            macro_count = _seed_macro(db)
+            research = _seed_company_research(db)
+            research["macro_documents"] = _seed_macro_research(db)
+            if not db.scalar(select(func.count()).select_from(MarketIngestionRun).where(MarketIngestionRun.used_provider == "mock")):
+                record_market_ingestion_run(db, mode="mock", attempted_provider="mock", used_provider="mock", status="success", started_at=datetime.now(UTC), latest_trade_date=date.today(), records_written=int(market["prices"]), message=f"Deterministic demo seed {DEMO_SEED_VERSION}; synthetic external-world fixtures.")
         user = db.scalar(select(User).where(User.email == DEMO_EMAIL))
         if user is None:
             user = create_user(db, SignupRequest(email=DEMO_EMAIL, password=password, full_name="Demo Portfolio Manager"))
@@ -231,9 +250,10 @@ def seed_workstation() -> dict[str, object]:
         ]
         seed_cutoff = selected_ips.confirmed_at if selected_ips and selected_constraints.get("notes") == f"Synthetic demo seed {DEMO_SEED_VERSION}" else datetime.min.replace(tzinfo=UTC)
         existing_objectives = set(db.scalars(select(OptimizerRun.objective).where(OptimizerRun.portfolio_id == portfolio.id, OptimizerRun.created_at >= seed_cutoff)))
-        for payload in optimizer_payloads:
-            if payload.objective not in existing_objectives:
-                run_optimizer(db, user, portfolio.id, payload)
+        if include_mock_world:
+            for payload in optimizer_payloads:
+                if payload.objective not in existing_objectives:
+                    run_optimizer(db, user, portfolio.id, payload)
         scenario_payloads = [
             ScenarioRequest(name="Demo broad selloff", sector_shocks={"Banking": -0.12, "Technology": -0.16, "Oil & Gas Exploration": -0.10}),
             ScenarioRequest(name="Demo rates +200 bps", factor_shocks={"rates": 0.02}),
@@ -242,9 +262,10 @@ def seed_workstation() -> dict[str, object]:
             ScenarioRequest(name="Demo banking stress", sector_shocks={"Banking": -0.18}),
         ]
         existing_scenarios = set(db.scalars(select(ScenarioRun.name).where(ScenarioRun.portfolio_id == portfolio.id, ScenarioRun.created_at >= seed_cutoff)))
-        for payload in scenario_payloads:
-            if payload.name not in existing_scenarios:
-                run_scenario(db, user, portfolio.id, payload)
+        if include_mock_world:
+            for payload in scenario_payloads:
+                if payload.name not in existing_scenarios:
+                    run_scenario(db, user, portfolio.id, payload)
         monitoring_rules = {
             "concentration": {"maximum": 0.18},
             "stale_data": {},
@@ -264,15 +285,24 @@ def seed_workstation() -> dict[str, object]:
                 existing_rule.enabled = True
         db.commit()
         existing_monitoring_run = db.scalar(select(MonitoringRun.id).where(MonitoringRun.portfolio_id == portfolio.id, MonitoringRun.status == "completed", MonitoringRun.started_at >= seed_cutoff))
-        if existing_monitoring_run is None:
+        if include_mock_world and existing_monitoring_run is None:
             run_monitoring(db, user, portfolio.id)
 
-        return {"market": market, "macro_observations_added": macro_count, "research": research, "user_email": DEMO_EMAIL, "portfolio_id": portfolio.id, "seed_version": DEMO_SEED_VERSION, "mock_data": True}
+        return {"market": market, "macro_observations_added": macro_count, "research": research, "user_email": DEMO_EMAIL, "portfolio_id": portfolio.id, "seed_version": DEMO_SEED_VERSION, "mock_data": include_mock_world, "investor_state": "synthetic_demo"}
 
 
 def main() -> None:
-    result = seed_workstation()
-    print(f"Seeded deterministic development workstation: {result}")
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Seed demo investor state for hybrid live testing")
+    parser.add_argument(
+        "--with-mock-world",
+        action="store_true",
+        help="Also create synthetic market/macro/research fixtures (offline development only)",
+    )
+    args = parser.parse_args()
+    result = seed_workstation(include_mock_world=args.with_mock_world)
+    print(f"Seeded demo investor state: {result}")
 
 
 if __name__ == "__main__":

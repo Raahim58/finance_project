@@ -94,14 +94,28 @@ def serialize_sector_stats(stats: SectorDailyStats) -> SectorDailyStatsResponse:
 
 
 def get_latest_market_date(db: Session) -> date | None:
-    from app.models.workstation import MarketObservation
-    observed = db.scalar(select(func.max(MarketObservation.effective_at)).where(MarketObservation.is_selected.is_(True), MarketObservation.frequency == "daily"))
-    return observed.date() if observed else db.scalar(select(func.max(MarketPrice.trade_date)))
+    from app.models.workstation import DataSource, MarketObservation, SourceArtifact
+    statement = (
+        select(func.max(MarketObservation.effective_at))
+        .join(SourceArtifact, SourceArtifact.id == MarketObservation.artifact_id)
+        .join(DataSource, DataSource.id == SourceArtifact.data_source_id)
+        .where(MarketObservation.is_selected.is_(True), MarketObservation.frequency == "daily")
+    )
+    if not settings.is_synthetic_environment:
+        statement = statement.where(func.lower(DataSource.name) != "mock")
+    observed = db.scalar(statement)
+    legacy = select(func.max(MarketPrice.trade_date))
+    if not settings.is_synthetic_environment:
+        legacy = legacy.where(func.lower(MarketPrice.source) != "mock")
+    return observed.date() if observed else db.scalar(legacy)
 
 
 def resolve_market_date(db: Session, requested_date: date | None) -> date:
     if requested_date:
-        if canonical_prices_for_date(db, requested_date) or db.scalar(select(MarketPrice.id).where(MarketPrice.trade_date == requested_date).limit(1)):
+        fallback = select(MarketPrice.id).where(MarketPrice.trade_date == requested_date)
+        if not settings.is_synthetic_environment:
+            fallback = fallback.where(func.lower(MarketPrice.source) != "mock")
+        if canonical_prices_for_date(db, requested_date) or db.scalar(fallback.limit(1)):
             return requested_date
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -116,9 +130,11 @@ def resolve_market_date(db: Session, requested_date: date | None) -> date:
 
 def get_market_snapshot(db: Session, requested_date: date | None = None) -> MarketSnapshotResponse | None:
     trade_date = resolve_market_date(db, requested_date)
+    statement = select(MarketSnapshot).where(MarketSnapshot.snapshot_date == trade_date)
+    if not settings.is_synthetic_environment:
+        statement = statement.where(func.lower(MarketSnapshot.source) != "mock")
     snapshot = db.scalar(
-        select(MarketSnapshot)
-        .where(MarketSnapshot.snapshot_date == trade_date)
+        statement
         .order_by(MarketSnapshot.index_name)
         .limit(1)
     )
@@ -126,7 +142,10 @@ def get_market_snapshot(db: Session, requested_date: date | None = None) -> Mark
 
 
 def _price_query(trade_date: date) -> Select[tuple[MarketPrice]]:
-    return select(MarketPrice).where(MarketPrice.trade_date == trade_date)
+    statement = select(MarketPrice).where(MarketPrice.trade_date == trade_date)
+    if not settings.is_synthetic_environment:
+        statement = statement.where(func.lower(MarketPrice.source) != "mock")
+    return statement
 
 
 def _prices_for_date(db: Session, trade_date: date) -> list[MarketPrice | CanonicalPrice]:
@@ -172,9 +191,11 @@ def get_sectors(db: Session, requested_date: date | None = None) -> list[SectorD
                 unchanged=sum(row.change == 0 for row in prices), source="canonical_selected_observations",
             ) for sector, prices in grouped.items()
         ], key=lambda row: row.average_change_percent, reverse=True)
+    statement = select(SectorDailyStats).where(SectorDailyStats.trade_date == trade_date)
+    if not settings.is_synthetic_environment:
+        statement = statement.where(func.lower(SectorDailyStats.source) != "mock")
     rows = db.scalars(
-        select(SectorDailyStats)
-        .where(SectorDailyStats.trade_date == trade_date)
+        statement
         .order_by(SectorDailyStats.average_change_percent.desc())
     ).all()
     return [serialize_sector_stats(row) for row in rows]
@@ -200,6 +221,8 @@ def get_sector_performance(
     if canonical_rows:
         return canonical_rows
     query = select(SectorDailyStats).where(func.lower(SectorDailyStats.sector) == sector.lower())
+    if not settings.is_synthetic_environment:
+        query = query.where(func.lower(SectorDailyStats.source) != "mock")
     if start_date:
         query = query.where(SectorDailyStats.trade_date >= start_date)
     if end_date:
@@ -286,13 +309,18 @@ def _trade_date_status(latest_trade_date: date | None, now_karachi: datetime) ->
 
 
 def get_market_freshness(db: Session) -> MarketFreshnessResponse:
+    run_statement = select(MarketIngestionRun)
+    snapshot_statement = select(MarketSnapshot)
+    if not settings.is_synthetic_environment:
+        run_statement = run_statement.where(func.lower(MarketIngestionRun.used_provider) != "mock")
+        snapshot_statement = snapshot_statement.where(func.lower(MarketSnapshot.source) != "mock")
     latest_run = db.scalar(
-        select(MarketIngestionRun)
+        run_statement
         .where(MarketIngestionRun.status == "success")
         .order_by(MarketIngestionRun.finished_at.desc())
         .limit(1)
     )
-    latest_snapshot = db.scalar(select(MarketSnapshot).order_by(MarketSnapshot.ingested_at.desc()).limit(1))
+    latest_snapshot = db.scalar(snapshot_statement.order_by(MarketSnapshot.ingested_at.desc()).limit(1))
 
     last_successful = latest_run.finished_at if latest_run else (latest_snapshot.ingested_at if latest_snapshot else None)
     latest_trade_date = latest_run.latest_trade_date if latest_run else (latest_snapshot.snapshot_date if latest_snapshot else None)

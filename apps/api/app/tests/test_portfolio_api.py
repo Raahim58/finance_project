@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.services.market_ingestion import generate_mock_market_data
 
@@ -133,3 +134,24 @@ def test_portfolio_routes_enforce_user_isolation(client):
         json={"symbol": "MEBL", "quantity": "1", "average_cost": "1"},
     )
     assert other_add.status_code == 404
+
+
+def test_live_portfolio_valuation_does_not_use_mock_prices(client, monkeypatch):
+    _seed_market_data()
+    headers = _signup(client, "hybrid@example.com")
+    portfolio_id = client.post("/portfolios", headers=headers, json={"name": "Hybrid"}).json()["id"]
+    created = client.post(
+        f"/portfolios/{portfolio_id}/holdings",
+        headers=headers,
+        json={"symbol": "MEBL", "quantity": "4000", "average_cost": "200"},
+    )
+    assert created.status_code == 201
+    monkeypatch.setattr(settings, "market_data_mode", "auto")
+
+    summary = client.get(f"/portfolios/{portfolio_id}/summary", headers=headers).json()
+
+    assert summary["valuation_complete"] is False
+    assert summary["unpriced_symbols"] == ["MEBL"]
+    assert summary["holdings"][0]["latest_price"] is None
+    assert Decimal(summary["holdings"][0]["market_value"]) == 0
+    assert summary["holdings"][0]["data_source"] is None

@@ -25,3 +25,16 @@ def test_rejects_facts_without_explicit_currency_scale():
 def test_period_end_parser_is_deterministic():
     assert parse_period_end("year ended 2025") == date(2025, 12, 31)
     assert parse_period_end("30-06-2025") == date(2025, 6, 30)
+    assert parse_period_end("period ended June 30, 2025") == date(2025, 6, 30)
+
+
+def test_per_share_facts_are_not_multiplied_by_statement_scale():
+    facts, diagnostics = extract_facts(
+        [Page(3, "Amounts in PKR '000\nEPS 12.50\nDividend per share 4.00")],
+        date(2025, 12, 31),
+    )
+    assert diagnostics == []
+    assert [(fact.taxonomy_key, fact.value) for fact in facts] == [
+        ("earnings_per_share", 12.5),
+        ("dividend_per_share", 4),
+    ]

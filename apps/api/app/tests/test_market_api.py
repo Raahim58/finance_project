@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from sqlalchemy import text
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.market import MarketIngestionRun, MarketPrice
 from app.services.market_service import serialize_price
@@ -125,3 +126,21 @@ def test_market_overview_returns_200_even_with_nan_in_db(client):
     assert "NaN" not in response.text
     assert "Infinity" not in response.text
     assert "-Infinity" not in response.text
+
+
+def test_live_mode_exposes_mock_only_market_rows_as_unavailable(client, monkeypatch):
+    _seed_market_data()
+    monkeypatch.setattr(settings, "market_data_mode", "auto")
+
+    detail = client.get("/market/company/MEBL")
+    history = client.get("/market/company/MEBL/history")
+    overview = client.get("/market/overview")
+    freshness = client.get("/market/freshness")
+
+    assert detail.status_code == 200
+    assert detail.json()["latest_price"] is None
+    assert history.status_code == 200 and history.json() == []
+    assert overview.status_code == 404
+    assert freshness.status_code == 200
+    assert freshness.json()["latest_source"] is None
+    assert freshness.json()["is_stale"] is True

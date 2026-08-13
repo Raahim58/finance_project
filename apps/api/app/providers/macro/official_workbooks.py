@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import date
 from io import BytesIO
+import math
 import re
 
 import httpx
@@ -43,6 +44,7 @@ class PbsPriceProvider:
             description = str(values.iloc[description_index]).strip()
             try: value = float(values.iloc[average_index])
             except (TypeError, ValueError): continue
+            if not math.isfinite(value): continue
             if description.lower() == "nan": continue
             key = "pbs.spi.item." + re.sub(r"[^a-z0-9]+", "_", description.lower()).strip("_")
             rows.append(MacroObservation(key, effective, value, str(values.iloc[unit_index]).strip(), "pbs"))
@@ -75,6 +77,8 @@ class WorldBankCommodityProvider:
                 name = str(names.iloc[index]).strip()
                 try: value = float(values.iloc[index])
                 except (TypeError, ValueError): continue
+                if not math.isfinite(value) or not name or name.lower() == "nan":
+                    continue
                 key = "world_bank.commodity." + re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
                 rows.append(MacroObservation(key, effective, value, str(units.iloc[index]).strip(), "world_bank"))
         return rows

@@ -26,8 +26,14 @@ cp ../../.env.example .env
 python -m app.core.keys
 alembic upgrade head
 DEMO_USER_PASSWORD='choose-a-local-password' python -m app.seed.demo
+python -m app.jobs.scheduler --once
 uvicorn app.main:app --reload
 ```
+
+The seed creates hypothetical investor-owned state only. The scheduler fills the
+external-world plane from configured real providers. Use
+`python -m app.seed.demo --with-mock-world` only for isolated offline fixture
+development with `MARKET_DATA_MODE=mock`.
 
 ```bash
 cd apps/web

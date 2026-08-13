@@ -19,10 +19,10 @@ def test_generate_mock_market_data_creates_companies_prices_and_stats():
         sector_count = db.scalar(select(func.count()).select_from(SectorDailyStats))
         latest_date = db.scalar(select(func.max(MarketPrice.trade_date)))
 
-    assert result["companies"] == 36
-    assert result["prices"] == 180
-    assert company_count == 36
-    assert price_count == 180
+    assert result["companies"] == 37
+    assert result["prices"] == 185
+    assert company_count == 37
+    assert price_count == 185
     assert snapshot_count == 5
     assert sector_count > 5
     assert latest_date == date(2026, 6, 30)

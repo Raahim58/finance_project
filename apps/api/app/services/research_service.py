@@ -6,17 +6,20 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.document import Document
 from app.models.user import User
 from app.models.workstation import (
     Event,
     EventEntityLink,
     EventSource,
+    DataSource,
     FinancialFact,
     Instrument,
     InstrumentAlias,
     MacroObservation,
     MacroSeries,
+    SourceArtifact,
 )
 from app.schemas.research import InstrumentResponse
 from app.services.portfolio_service import get_portfolio_summary
@@ -77,7 +80,20 @@ def _document_provenance(db: Session, document_ids: set[str]) -> dict[str, dict[
         row.id: {
             "source_name": row.source_name,
             "document_type": row.document_type,
-            "is_synthetic": row.document_type == "synthetic_demo_facts",
+            "is_synthetic": (
+                row.document_type == "synthetic_demo_facts"
+                or "demo" in (row.source_name or "").lower()
+                or (row.source_url or "").lower().startswith("demo://")
+            ),
+            "is_observed": bool(
+                row.source_name
+                and row.source_url
+                and not (
+                    row.document_type == "synthetic_demo_facts"
+                    or "demo" in row.source_name.lower()
+                    or row.source_url.lower().startswith("demo://")
+                )
+            ),
             "ingested_at": row.parsed_at or row.downloaded_at or row.created_at,
         }
         for row in db.scalars(select(Document).where(Document.id.in_(document_ids)))
@@ -87,7 +103,7 @@ def _document_provenance(db: Session, document_ids: set[str]) -> dict[str, dict[
 def _fact_provenance(provenance: dict[str, dict[str, object]], document_id: str | None) -> dict[str, object]:
     if document_id and document_id in provenance:
         return provenance[document_id]
-    return {"source_name": None, "document_type": None, "is_synthetic": False, "ingested_at": None}
+    return {"source_name": None, "document_type": None, "is_synthetic": False, "is_observed": False, "ingested_at": None}
 
 
 def _group_provenance(provenance: dict[str, dict[str, object]], document_ids: list[str | None]) -> dict[str, object]:
@@ -206,11 +222,16 @@ def market_series(db: Session, instrument_id: str, start=None, end=None):
 
 
 def list_macro_series(db: Session):
-    return [{"id": row.id, "key": row.key, "name": row.name, "unit": row.unit, "frequency": row.frequency, "metadata": json.loads(row.metadata_json)} for row in db.scalars(select(MacroSeries).order_by(MacroSeries.key))]
+    statement = select(MacroSeries)
+    if not settings.is_synthetic_environment:
+        statement = statement.join(DataSource, DataSource.id == MacroSeries.source_id).where(~func.lower(DataSource.name).contains("demo"))
+    return [{"id": row.id, "key": row.key, "name": row.name, "unit": row.unit, "frequency": row.frequency, "metadata": json.loads(row.metadata_json)} for row in db.scalars(statement.order_by(MacroSeries.key))]
 
 
 def macro_releases(db: Session, series_id: str | None = None):
     statement = select(MacroObservation, MacroSeries).join(MacroSeries, MacroSeries.id == MacroObservation.series_id).where(MacroObservation.is_selected.is_(True))
+    if not settings.is_synthetic_environment:
+        statement = statement.join(SourceArtifact, SourceArtifact.id == MacroObservation.artifact_id).join(DataSource, DataSource.id == SourceArtifact.data_source_id).where(~func.lower(DataSource.name).contains("demo"), ~func.lower(SourceArtifact.source_url).like("demo://%"))
     if series_id: statement = statement.where(MacroObservation.series_id == series_id)
     return [{"series_id": series.id, "series_key": series.key, "effective_date": observation.effective_date, "release_at": observation.release_at, "value": observation.value, "unit": series.unit, "revision": observation.revision, "artifact_id": observation.artifact_id} for observation, series in db.execute(statement.order_by(MacroObservation.effective_date.desc()).limit(500))]
 
@@ -221,11 +242,15 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
     latest = latest_price(db, instrument.symbol)
     all_facts = list(db.scalars(select(FinancialFact).where(FinancialFact.instrument_id == instrument.id).order_by(FinancialFact.period_end.desc(), FinancialFact.version.desc()).limit(200)))
     all_provenance = _document_provenance(db, {fact.document_id for fact in all_facts if fact.document_id})
-    observed_facts = [fact for fact in all_facts if not all_provenance.get(fact.document_id or "", {}).get("is_synthetic", False)]
+    observed_facts = [
+        fact
+        for fact in all_facts
+        if all_provenance.get(fact.document_id or "", {}).get("is_observed", False)
+    ]
     facts = _display_facts(observed_facts)
     provenance = _document_provenance(db, {fact.document_id for fact in facts if fact.document_id})
     market_research = _market_research(db, instrument)
-    documents = _display_documents(list(db.scalars(select(Document).where(Document.symbol == instrument.symbol, Document.document_type != "synthetic_demo_facts", Document.source_name != "Deterministic Demo Seed", or_(Document.visibility == "public", Document.owner_user_id == user.id)).order_by(Document.published_date.desc(), Document.created_at.desc()).limit(50))))[:20]
+    documents = _display_documents(list(db.scalars(select(Document).where(Document.symbol == instrument.symbol, Document.document_type != "synthetic_demo_facts", ~func.lower(Document.source_name).contains("demo"), or_(Document.source_url.is_(None), ~func.lower(Document.source_url).like("demo://%")), or_(Document.visibility == "public", Document.owner_user_id == user.id)).order_by(Document.published_date.desc(), Document.created_at.desc()).limit(50))))[:20]
     event_links = list(db.scalars(select(EventEntityLink).where(EventEntityLink.entity_key == instrument.symbol)))
     events = [db.get(Event, link.event_id) for link in event_links]
     relevance = []

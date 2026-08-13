@@ -6,7 +6,7 @@ multi-column rows remain in document/RAG storage and are not promoted to exact f
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 
@@ -20,7 +20,8 @@ ALIASES = {
     "equity": {"total equity", "shareholders equity", "shareholders' equity"},
     "cash": {"cash and cash equivalents", "cash & cash equivalents"},
     "debt": {"total debt", "borrowings"},
-    "earnings_per_share": {"earnings per share", "basic earnings per share"},
+    "earnings_per_share": {"eps", "earnings per share", "basic earnings per share"},
+    "dividend_per_share": {"dividend per share", "cash dividend per share"},
 }
 LABELS = {alias: canonical for canonical, aliases in ALIASES.items() for alias in aliases}
 NUMBER = re.compile(r"\(?-?\d[\d,]*(?:\.\d+)?\)?")
@@ -74,6 +75,8 @@ def extract_facts(pages: list[object], period_end: date) -> tuple[list[Extracted
                 value = Decimal(token.strip("()").replace(",", "")) * scale
             except InvalidOperation:
                 continue
+            if taxonomy in {"earnings_per_share", "dividend_per_share"}:
+                value /= scale
             facts.append(ExtractedFact(taxonomy, -value if negative else value, "PKR", "PKR", period_end, page_number, label))
             seen.add(taxonomy)
     diagnostics = [] if facts else ["No unambiguous single-value known financial rows were found; multi-column rows require a structured parser or review."]
@@ -88,5 +91,13 @@ def parse_period_end(value: str) -> date | None:
             parts = [int(item) for item in match.groups()]
             try: return date(parts[0], parts[1], parts[2]) if order == "ymd" else date(parts[2], parts[1], parts[0])
             except ValueError: return None
+    normalized = re.sub(r"\s+", " ", value.replace(",", " ")).strip()
+    for pattern in ("%d %B %Y", "%B %d %Y", "%d %b %Y", "%b %d %Y"):
+        match = re.search(r"\b(?:\d{1,2} [A-Za-z]+ \d{4}|[A-Za-z]+ \d{1,2} \d{4})\b", normalized)
+        if match:
+            try:
+                return datetime.strptime(match.group(0), pattern).date()
+            except ValueError:
+                continue
     year = re.search(r"\b(20\d{2})\b", value)
     return date(int(year.group(1)), 12, 31) if year else None

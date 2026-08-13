@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+import math
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 
@@ -56,6 +57,7 @@ def refresh_provider(db: Session, provider: str, run_key: str | None = None):
     run, reused = start_ingestion_run(db, job_key=f"refresh:{normalized}", run_key=key, provider=normalized)
     if reused:
         return run
+    run_id = run.id
     try:
         if normalized in {"mock", "dps", "yahoo", "auto", "psxdata"}:
             market_run = run_market_data_cycle(db, normalized)
@@ -93,7 +95,10 @@ def refresh_provider(db: Session, provider: str, run_key: str | None = None):
         run = db.get(IngestionRun, run.id)
         return finish_ingestion_run(db, run, result)
     except Exception as exc:
-        fail_ingestion_run(db, run.id, exc)
+        # Preserve the scalar identifier before any flush can expire the ORM
+        # instance; reading ``run.id`` from a failed transaction can itself
+        # raise PendingRollbackError and hide the original provider failure.
+        fail_ingestion_run(db, run_id, exc)
         raise
 
 
@@ -151,7 +156,9 @@ def _refresh_psx_financials(db: Session, symbols: list[str] | None = None, limit
     latest_date: date | None = None
     errors: list[str] = []
     remaining = limit if limit is not None else settings.research_report_limit_per_run
-    for symbol in (symbols or settings.market_data_default_symbols):
+    target_symbols = list(symbols or settings.market_data_default_symbols)
+    per_symbol_limit = max(1, math.ceil(remaining / max(1, len(target_symbols))))
+    for symbol in target_symbols:
         if remaining <= 0:
             break
         try:
@@ -160,9 +167,13 @@ def _refresh_psx_financials(db: Session, symbols: list[str] | None = None, limit
             rejected += 1
             errors.append(f"{symbol} catalog: {type(exc).__name__}: {str(exc)[:240]}")
             continue
+        handled_for_symbol = 0
         for item in sorted(catalog, key=lambda value: value.posting_date, reverse=True):
             if remaining <= 0:
                 break
+            if handled_for_symbol >= per_symbol_limit:
+                break
+            handled_for_symbol += 1
             attempted += 1
             if db.scalar(select(Document.id).where(Document.source_url == item.report_url)):
                 continue

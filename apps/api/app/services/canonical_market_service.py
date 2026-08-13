@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.market import MarketPrice
 from app.models.workstation import (
     DataQualityIssue,
@@ -23,6 +24,18 @@ from app.services.market_numbers import safe_decimal, safe_int
 
 
 SOURCE_PRIORITIES = {"dps": 10, "vendor": 20, "psxdata": 30, "scstrade": 40, "yahoo": 50, "mock": 1000}
+SYNTHETIC_SOURCE_NAMES = {"mock", "deterministic demo seed", "deterministic demo macro"}
+
+
+def synthetic_market_data_allowed() -> bool:
+    """Return true only for the explicit deterministic market fixture mode."""
+    return settings.is_synthetic_environment
+
+
+def _is_synthetic_source(source: DataSource | None, artifact: SourceArtifact | None) -> bool:
+    name = (source.name if source else "").strip().lower()
+    url = (artifact.source_url if artifact else "").strip().lower()
+    return name in SYNTHETIC_SOURCE_NAMES or url.startswith(("demo://", "normalized://mock/"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,7 +246,7 @@ def reconcile_market_observations(
                     DataQualityIssue.selection_status == "rejected",
                 )
             ) or 0
-            ranked.append(((1 if rejected else 0, source.priority if source else 10_000, -(artifact.retrieved_at.timestamp() if artifact else 0)), candidate, artifact, source))
+            ranked.append(((1 if rejected else 0, 1 if _is_synthetic_source(source, artifact) else 0, source.priority if source else 10_000, -(artifact.retrieved_at.timestamp() if artifact else 0)), candidate, artifact, source))
         ranked.sort(key=lambda item: item[0])
         winner = ranked[0][1]
         distinct_values = {candidate.values_json for _, candidate, _, _ in ranked}
@@ -297,11 +310,22 @@ def price_series(
 ) -> list[CanonicalPrice]:
     instrument = db.scalar(select(Instrument).where(func.upper(Instrument.symbol) == symbol.upper()))
     if instrument:
-        statement = select(MarketObservation).where(
+        statement = (
+            select(MarketObservation)
+            .join(SourceArtifact, SourceArtifact.id == MarketObservation.artifact_id)
+            .join(DataSource, DataSource.id == SourceArtifact.data_source_id)
+            .where(
             MarketObservation.instrument_id == instrument.id,
             MarketObservation.is_selected.is_(True),
             MarketObservation.frequency == "daily",
+            )
         )
+        if not synthetic_market_data_allowed():
+            statement = statement.where(
+                ~func.lower(DataSource.name).in_(SYNTHETIC_SOURCE_NAMES),
+                ~func.lower(SourceArtifact.source_url).like("demo://%"),
+                ~func.lower(SourceArtifact.source_url).like("normalized://mock/%"),
+            )
         if start:
             statement = statement.where(MarketObservation.effective_at >= datetime.combine(start, datetime.min.time()))
         if end:
@@ -312,6 +336,8 @@ def price_series(
     if not allow_legacy_fallback:
         return []
     statement = select(MarketPrice).where(func.upper(MarketPrice.symbol) == symbol.upper())
+    if not synthetic_market_data_allowed():
+        statement = statement.where(func.lower(MarketPrice.source) != "mock")
     if start:
         statement = statement.where(MarketPrice.trade_date >= start)
     if end:
@@ -344,8 +370,10 @@ def price_series(
 def canonical_prices_for_date(db: Session, trade_date: date) -> list[CanonicalPrice]:
     start = datetime.combine(trade_date, datetime.min.time())
     end = start + timedelta(days=1)
-    rows = list(db.scalars(
+    statement = (
         select(MarketObservation)
+        .join(SourceArtifact, SourceArtifact.id == MarketObservation.artifact_id)
+        .join(DataSource, DataSource.id == SourceArtifact.data_source_id)
         .where(
             MarketObservation.is_selected.is_(True),
             MarketObservation.frequency == "daily",
@@ -354,7 +382,14 @@ def canonical_prices_for_date(db: Session, trade_date: date) -> list[CanonicalPr
             MarketObservation.instrument_id.is_not(None),
         )
         .order_by(MarketObservation.instrument_id)
-    ))
+    )
+    if not synthetic_market_data_allowed():
+        statement = statement.where(
+            ~func.lower(DataSource.name).in_(SYNTHETIC_SOURCE_NAMES),
+            ~func.lower(SourceArtifact.source_url).like("demo://%"),
+            ~func.lower(SourceArtifact.source_url).like("normalized://mock/%"),
+        )
+    rows = list(db.scalars(statement))
     output = []
     for row in rows:
         instrument = db.get(Instrument, row.instrument_id)

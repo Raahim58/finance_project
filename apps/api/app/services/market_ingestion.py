@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+import json
 from random import Random
 from types import SimpleNamespace
 
@@ -23,7 +24,7 @@ from app.services.canonical_market_service import (
     validate_observed_price,
 )
 
-MOCK_COMPANIES = [
+PSX_REFERENCE_COMPANIES = [
     ("MEBL", "Meezan Bank Limited", "Banking"),
     ("HBL", "Habib Bank Limited", "Banking"),
     ("UBL", "United Bank Limited", "Banking"),
@@ -31,6 +32,7 @@ MOCK_COMPANIES = [
     ("NETSOL", "NetSol Technologies Limited", "Technology"),
     ("FFC", "Fauji Fertilizer Company Limited", "Fertilizer"),
     ("ENGRO", "Engro Corporation Limited", "Fertilizer"),
+    ("ENGROH", "Engro Holdings Limited", "Investment Companies / Securities Companies"),
     ("LUCK", "Lucky Cement Limited", "Cement"),
     ("DGKC", "D.G. Khan Cement Company Limited", "Cement"),
     ("OGDC", "Oil & Gas Development Company Limited", "Oil & Gas"),
@@ -62,6 +64,10 @@ MOCK_COMPANIES = [
     ("ABOT", "Abbott Laboratories Pakistan Limited", "Pharmaceuticals"),
 ]
 
+# Backwards-compatible name for deterministic fixture helpers.  Company identity
+# is configured reference data; only generated prices are synthetic.
+MOCK_COMPANIES = PSX_REFERENCE_COMPANIES
+
 BASE_PRICES = {
     "MEBL": Decimal("245.00"),
     "HBL": Decimal("128.00"),
@@ -70,6 +76,7 @@ BASE_PRICES = {
     "NETSOL": Decimal("156.00"),
     "FFC": Decimal("178.00"),
     "ENGRO": Decimal("352.00"),
+    "ENGROH": Decimal("275.00"),
     "LUCK": Decimal("910.00"),
     "DGKC": Decimal("112.00"),
     "OGDC": Decimal("142.00"),
@@ -152,13 +159,25 @@ def ensure_psx_exchange(db: Session) -> Exchange:
     return exchange
 
 
-def ensure_mock_companies(db: Session) -> list[Company]:
+def ensure_psx_reference_companies(
+    db: Session,
+    symbols: list[str] | set[str] | tuple[str, ...] | None = None,
+) -> list[Company]:
+    """Ensure configured PSX identities without creating market observations.
+
+    DPS ingestion refreshes names, sectors, and active state from the observed
+    symbol universe.  These records merely let demo investor holdings exist
+    before that first live refresh and are never treated as observed prices.
+    """
     from app.models.workstation import Instrument
 
     exchange = ensure_psx_exchange(db)
+    requested = {value.strip().upper() for value in symbols or () if value.strip()}
 
     companies: list[Company] = []
-    for symbol, name, sector in MOCK_COMPANIES:
+    for symbol, name, sector in PSX_REFERENCE_COMPANIES:
+        if requested and symbol not in requested:
+            continue
         company = db.scalar(select(Company).where(Company.symbol == symbol))
         if not company:
             company = Company(
@@ -167,7 +186,9 @@ def ensure_mock_companies(db: Session) -> list[Company]:
                 sector=sector,
                 exchange_id=exchange.id,
                 psx_url=f"https://dps.psx.com.pk/company/{symbol}",
-                description=f"Mock Phase 2 company profile for {name}.",
+                description=(
+                    "Configured PSX identity pending/subject to verification by the live DPS symbol feed."
+                ),
             )
             db.add(company)
             db.flush()
@@ -178,7 +199,7 @@ def ensure_mock_companies(db: Session) -> list[Company]:
             company.is_active = True
         instrument = db.scalar(select(Instrument).where(Instrument.company_id == company.id))
         if instrument is None:
-            db.add(Instrument(company_id=company.id, symbol=company.symbol, name=company.name, instrument_type="equity", currency="PKR", country="PK", sector=company.sector, metadata_json='{"data_classification":"synthetic_demo"}'))
+            db.add(Instrument(company_id=company.id, symbol=company.symbol, name=company.name, instrument_type="equity", currency="PKR", country="PK", sector=company.sector, metadata_json='{"data_classification":"configured_reference","identity_source":"https://dps.psx.com.pk/symbols"}'))
         else:
             instrument.name = company.name
             instrument.sector = company.sector
@@ -187,13 +208,18 @@ def ensure_mock_companies(db: Session) -> list[Company]:
     return companies
 
 
+def ensure_mock_companies(db: Session) -> list[Company]:
+    """Compatibility wrapper used only by the deterministic market fixture."""
+    return ensure_psx_reference_companies(db)
+
+
 def get_active_company_symbols(db: Session) -> list[str]:
     return list(
         db.scalars(select(Company.symbol).where(Company.is_active.is_(True)).order_by(Company.symbol.asc()))
     )
 
 
-def upsert_company_from_price_row(db: Session, row: LatestPriceRow) -> Company:
+def upsert_company_from_price_row(db: Session, row: LatestPriceRow, *, source: str) -> Company:
     from app.models.workstation import Instrument
 
     exchange = ensure_psx_exchange(db)
@@ -226,10 +252,23 @@ def upsert_company_from_price_row(db: Session, row: LatestPriceRow) -> Company:
     db.flush()
     instrument = db.scalar(select(Instrument).where(Instrument.company_id == company.id))
     if instrument is None:
-        db.add(Instrument(company_id=company.id, symbol=company.symbol, name=company.name, instrument_type="equity", currency="PKR", country="PK", sector=company.sector))
+        instrument = Instrument(company_id=company.id, symbol=company.symbol, name=company.name, instrument_type="equity", currency="PKR", country="PK", sector=company.sector)
+        db.add(instrument)
     else:
         instrument.name = company.name
         instrument.sector = company.sector
+    if source.lower() != "mock":
+        metadata = json.loads(instrument.metadata_json or "{}")
+        metadata.update(
+            {
+                "data_classification": "observed",
+                "identity_source": source.lower(),
+                "identity_source_url": (
+                    "https://dps.psx.com.pk/symbols" if source.lower() == "dps" else row.source_url
+                ),
+            }
+        )
+        instrument.metadata_json = json.dumps(metadata, sort_keys=True)
     db.flush()
     return company
 
@@ -372,7 +411,7 @@ def persist_market_data(db: Session, *, latest_prices: list[LatestPriceRow], sou
         cleaned, issues = validate_observed_price(row)
         if issues or cleaned is None:
             continue
-        company = upsert_company_from_price_row(db, row)
+        company = upsert_company_from_price_row(db, row, source=source)
         company_count += 1
 
         price = db.scalar(

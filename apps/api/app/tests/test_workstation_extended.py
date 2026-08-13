@@ -7,6 +7,7 @@ from app.db.session import SessionLocal
 from app.models.user import User
 from app.models.portfolio import Portfolio, PortfolioTransaction
 from app.models.document import Document
+from app.models.market import MarketPrice
 from app.models.workstation import AllocationSet, FinancialFact, Instrument, InvestorFinancialProfileVersion, MacroObservation, MonitoringRule, MonitoringRun, OptimizerRun, PortfolioIPSVersion, Recommendation, ScenarioRun
 from app.seed.demo import seed_workstation
 from app.services.market_ingestion import generate_mock_market_data
@@ -98,8 +99,8 @@ def test_assistant_is_grounded_and_tool_registry_is_allowlisted(client):
 
 def test_demo_seed_is_idempotent_and_populates_the_decision_workflow(monkeypatch):
     monkeypatch.setenv("DEMO_USER_PASSWORD", "local-test-password")
-    first = seed_workstation()
-    second = seed_workstation()
+    first = seed_workstation(include_mock_world=True)
+    second = seed_workstation(include_mock_world=True)
     assert first["portfolio_id"] == second["portfolio_id"]
     assert first["mock_data"] is True
     with SessionLocal() as db:
@@ -109,10 +110,10 @@ def test_demo_seed_is_idempotent_and_populates_the_decision_workflow(monkeypatch
         assert db.query(PortfolioIPSVersion).filter_by(portfolio_id=portfolio.id, status="confirmed").count() == 1
         assert db.query(PortfolioTransaction).filter_by(portfolio_id=portfolio.id).count() == 9
         assert db.query(AllocationSet).filter_by(portfolio_id=portfolio.id, kind="target").count() == 1
-        assert db.query(Instrument).count() == 36
+        assert db.query(Instrument).count() == 37
         assert db.query(MacroObservation).count() == 96
-        assert db.query(Document).filter_by(document_type="synthetic_demo_facts").count() == 72
-        assert db.query(FinancialFact).count() == 504
+        assert db.query(Document).filter_by(document_type="synthetic_demo_facts").count() == 74
+        assert db.query(FinancialFact).count() == 518
         assert db.query(OptimizerRun).filter_by(portfolio_id=portfolio.id).count() == 4
         assert db.query(ScenarioRun).filter_by(portfolio_id=portfolio.id).count() == 5
         assert db.query(MonitoringRule).filter_by(portfolio_id=portfolio.id).count() == 8
@@ -120,3 +121,21 @@ def test_demo_seed_is_idempotent_and_populates_the_decision_workflow(monkeypatch
         recommendations = db.query(Recommendation).filter_by(portfolio_id=portfolio.id).all()
         assert recommendations
         assert all(20 < len(row.trigger) <= 160 for row in recommendations)
+
+
+def test_default_demo_seed_creates_investor_state_without_external_world(monkeypatch):
+    monkeypatch.setenv("DEMO_USER_PASSWORD", "local-test-password")
+    first = seed_workstation()
+    second = seed_workstation()
+    assert first["portfolio_id"] == second["portfolio_id"]
+    assert first["mock_data"] is False
+    assert first["market"]["prices"] == 0
+    with SessionLocal() as db:
+        portfolio = db.query(Portfolio).one()
+        assert db.query(PortfolioTransaction).filter_by(portfolio_id=portfolio.id).count() == 9
+        assert db.query(MacroObservation).count() == 0
+        assert db.query(Document).count() == 0
+        assert db.query(FinancialFact).count() == 0
+        assert db.query(MarketPrice).count() == 0
+        assert db.query(OptimizerRun).count() == 0
+        assert db.query(ScenarioRun).count() == 0

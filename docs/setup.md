@@ -28,20 +28,29 @@ SQLite can be used without Docker:
 DATABASE_URL=sqlite+pysqlite:///./psx_ai_local.db alembic upgrade head
 ```
 
-Seed the deterministic development workstation (36 mock PSX companies, one year
-of prices, 24 months of four macro series, two years of synthetic company facts
-with cited documents, events, a demo investor profile, confirmed IPS,
-ledger-backed portfolio, four optimizer methods, five scenarios, all supported
-monitoring rule types, and recommendations):
+Seed the demo investor state (demo user, ledger-backed holdings and cash,
+historical cost basis, investor profile, confirmed IPS, target allocation, and
+monitoring preferences). This default path creates no market prices, macro
+observations, company reports, financial facts, or events:
 
 ```bash
 DEMO_USER_PASSWORD='choose-a-local-password' python -m app.seed.demo
 ```
 
 The demo login is `portfolio.manager@example.com`. The command is idempotent and
-never seeds an LLM key. Every seeded market observation and workflow assumption is
-labeled synthetic development/demo data and must not be interpreted as an observed
-market price, filing, macro release, or investment recommendation.
+never seeds an LLM key. Run live ingestion after this command to create the
+hybrid environment: synthetic investor state plus observed external-world data.
+
+For isolated offline development only, the old deterministic external-world
+fixtures remain explicitly available:
+
+```bash
+DEMO_USER_PASSWORD='choose-a-local-password' python -m app.seed.demo --with-mock-world
+```
+
+Never use `--with-mock-world` in an `auto`, `dps`, or other live-data database.
+Even if old mock rows exist, live modes exclude them from canonical prices,
+market screens, portfolio valuation, and quant inputs.
 
 Run the API and scheduler:
 
@@ -52,7 +61,10 @@ python -m app.jobs.scheduler
 python -m app.jobs.backfill_market_history --provider dps --symbols MEBL,SYS --start 2021-01-01 --end 2026-08-10
 ```
 
-`MARKET_DATA_MODE=mock` is development-only. `dps` uses the verified direct DPS adapter; `auto` tries DPS and uses Yahoo only as a labeled fallback. NCCPL remains a manual CSV import because ordinary retrieval is blocked; no anti-bot bypass is implemented.
+The current default universe uses `ENGROH`; `ENGRO` is a distinct delisted
+historical identity and is not silently remapped for valuation.
+
+`MARKET_DATA_MODE=mock` is development-only. `dps` uses the verified direct DPS adapter; `auto` tries DPS and uses Yahoo only as a labeled real-data fallback. A failed live refresh retains prior observed rows and records failure/staleness; it never generates mock replacements. NCCPL remains a manual CSV import because ordinary retrieval is blocked; no anti-bot bypass is implemented.
 
 ## Frontend
 

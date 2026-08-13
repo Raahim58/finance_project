@@ -173,10 +173,13 @@ def company_completeness(db: Session, symbol: str) -> dict[str, object]:
     ).one()
     fact_count, latest_period = db.execute(
         select(func.count(FinancialFact.id), func.max(FinancialFact.period_end))
-        .join(Document, Document.id == FinancialFact.document_id, isouter=True)
+        .join(Document, Document.id == FinancialFact.document_id)
         .where(
             FinancialFact.instrument_id == instrument.id,
-            or_(FinancialFact.document_id.is_(None), Document.source_url.is_(None), ~Document.source_url.startswith("demo://")),
+            Document.source_url.is_not(None),
+            ~func.lower(Document.source_url).like("demo://%"),
+            ~func.lower(Document.source_name).contains("demo"),
+            Document.document_type != "synthetic_demo_facts",
         )
     ).one()
     report_count, latest_report = db.execute(

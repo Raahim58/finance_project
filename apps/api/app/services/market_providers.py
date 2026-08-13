@@ -371,6 +371,10 @@ class DpsMarketDataProvider(MarketDataProvider):
         latest_prices = self.fetch_latest_prices()
         if not latest_prices:
             raise RuntimeError("DPS returned no usable market price rows")
+        fetched_symbols = {row.symbol for row in latest_prices}
+        missing_default_symbols = sorted(
+            set(settings.market_data_default_symbols) - fetched_symbols
+        )
         result = persist_market_data(db, latest_prices=latest_prices, source=self.source)
         data_source = db.scalar(select(DataSource).where(DataSource.name == "PSX DPS"))
         if data_source is None:
@@ -420,7 +424,7 @@ class DpsMarketDataProvider(MarketDataProvider):
         db.flush()
         reconcile_market_observations(db)
         db.commit()
-        result.update({"attempted_provider": self.source, "used_provider": self.source, "artifacts_written": artifact_count, "observations_written": observation_count, "message": "Refreshed verified DPS market data with immutable raw artifacts."})
+        result.update({"attempted_provider": self.source, "used_provider": self.source, "artifacts_written": artifact_count, "observations_written": observation_count, "missing_default_symbols": missing_default_symbols, "message": "Refreshed verified DPS market data with immutable raw artifacts." + (f" Missing configured symbols: {', '.join(missing_default_symbols)}." if missing_default_symbols else "")})
         return result
 
     def fetch_symbol_history(

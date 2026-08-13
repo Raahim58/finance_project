@@ -87,7 +87,13 @@ class Settings(BaseSettings):
 
     @property
     def is_synthetic_environment(self) -> bool:
-        return self.market_data_mode == "mock" or self.app_env.lower().strip() not in PRODUCTION_APP_ENVS | {"staging"}
+        """Whether configured external-world data is intentionally synthetic.
+
+        Localhost is a deployment location, not data provenance.  A local app in
+        ``auto``/live mode must therefore apply the same observed-data rules as a
+        hosted deployment.
+        """
+        return self.market_data_mode == "mock"
 
 
 @lru_cache

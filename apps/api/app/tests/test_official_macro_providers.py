@@ -1,5 +1,6 @@
 from datetime import date
 from pathlib import Path
+import math
 import pandas as pd
 
 from app.providers.macro.official_workbooks import PbsPriceProvider, WorldBankCommodityProvider
@@ -27,3 +28,11 @@ def test_world_bank_observed_pink_sheet_contract():
     assert latest_oil.value == 79.8
     assert latest_oil.unit == "($/bbl)"
     assert latest_urea.value == 170
+
+
+def test_world_bank_skips_missing_numeric_cells():
+    frame = pd.read_csv(FIXTURES / "world_bank" / "commodity_monthly.sample.csv", header=None)
+    frame.iloc[6, 1] = float("nan")
+    rows = WorldBankCommodityProvider.parse_monthly_prices(frame)
+    assert rows
+    assert all(math.isfinite(row.value) for row in rows)
