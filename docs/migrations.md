@@ -1,6 +1,6 @@
 # Migration and Recovery Notes
 
-Workstation checkpoints are `0006_domain_data`, `0007_quant_optimizer`, `0008_research_scenarios`, and `0009_assistant_monitoring`.
+Workstation checkpoints include `0006_domain_data` through `0012_audit_events`. Phase-1 ingestion observability is migration `0013_ingestion_observability`; it adds update counts, structured diagnostics, and resulting-observation timestamps to canonical ingestion runs.
 
 ```bash
 cd apps/api

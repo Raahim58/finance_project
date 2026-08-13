@@ -47,4 +47,4 @@ The orchestrator bounds iterations, retrieved chunks, and request time; gathers 
 
 ## Scheduling and future boundaries
 
-The current in-process scheduler invokes ingestion and monitoring services using stable run keys. Redis may later improve caching/locking but is not a correctness dependency. The service/tool interfaces can later move to workers or expose selected read-only tools over MCP without changing finance logic. Broker automation, trade execution, derivatives, and external MCP runtime are intentionally absent.
+The current in-process scheduler invokes ingestion and monitoring services using stable run keys. Provider families are failure-isolated and write canonical run accounting; source health is derived from both the latest attempt and actual structured observations under source-specific freshness SLAs. Redis may later improve caching/locking but is not a correctness dependency. The service/tool interfaces can later move to workers or expose selected read-only tools over MCP without changing finance logic. Broker automation, trade execution, derivatives, and external MCP runtime are intentionally absent.

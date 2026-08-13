@@ -7,6 +7,7 @@ import { ComplianceTable, ComparisonTable, Diagnostic } from "@/components/Decis
 import { formatMetric, normalizeWeights, weightSummary } from "@/lib/analytics";
 import { Icon } from "@/components/Icon";
 import { PortfolioWorkspace } from "@/components/PortfolioWorkspace";
+import { useWorkspaceData, WorkspaceCompliance as Compliance, WorkspaceData } from "@/components/workspace/useWorkspaceData";
 import { BarChart, DonutChart, HistogramChart, LineChart, ModelCurveChart, MultiLineChart, ScatterChart } from "@/components/WorkstationChart";
 import {
   AllocationSet, AuditEvent, CapitalMarketAssumptions, CapmSml, EfficientFrontier, HistoricalReplay, IpsVersion,
@@ -18,15 +19,6 @@ import {
   getRollingRisk, getScenarioRuns, getScenarioTemplates, getTransactions, MacroRegime, runHistoricalReplay, runOptimizer, runScenario, searchRag, ScenarioTemplate,
 } from "@/lib/api";
 
-type Compliance={compliant:boolean;status?:"PASS"|"BREACH"|"NOT_EVALUATED";checks?:Array<Record<string,unknown>>;violations:Array<Record<string,unknown>>;not_evaluated?:Array<Record<string,unknown>>;ips_version_id?:string|null};
-type WorkspaceData={
-  summary:PortfolioSummary|null; exposure:PortfolioExposure|null; performance:PortfolioPerformancePoint[];
-  quant:PortfolioQuant|null; flags:PortfolioRiskFlag[]; allocations:AllocationSet[]; transactions:Transaction[];
-  scenarios:ScenarioResult[]; compliance:Compliance|null; ips:IpsVersion[]; assumptions:CapitalMarketAssumptions|null;
-  frontier:EfficientFrontier|null; capm:CapmSml|null; rolling:RollingRisk|null; distribution:ReturnDistribution|null;
-  riskBudget:RiskBudget|null; auditEvents:AuditEvent[];
-};
-const blank:WorkspaceData={summary:null,exposure:null,performance:[],quant:null,flags:[],allocations:[],transactions:[],scenarios:[],compliance:null,ips:[],assumptions:null,frontier:null,capm:null,rolling:null,distribution:null,riskBudget:null,auditEvents:[]};
 const money=(v:unknown)=>v==null?"—":`PKR ${new Intl.NumberFormat("en-PK",{maximumFractionDigits:0}).format(Number(v))}`;
 const compactMoney=(v:unknown)=>v==null?"—":`PKR ${new Intl.NumberFormat("en-PK",{notation:"compact",maximumFractionDigits:2}).format(Number(v))}`;
 const pctPoints=(v:unknown,digits=2)=>v==null||Number.isNaN(Number(v))?"—":`${Number(v)>0?"+":""}${Number(v).toFixed(digits)}%`;
@@ -36,65 +28,7 @@ const number=(record:Record<string,unknown>|undefined,key:string)=>record?.[key]
 
 export function WorkspacePage({mode}:{mode:string}){
   const {portfolioId}=useParams<{portfolioId:string}>();
-  const [data,setData]=useState<WorkspaceData>(blank);const [loading,setLoading]=useState(true);const [message,setMessage]=useState("");
-  const [failures,setFailures]=useState<string[]>([]);
-  const [analyticsLoading,setAnalyticsLoading]=useState(false);
-  const dataRef=useRef(data);dataRef.current=data;
-  const previousPortfolioIdRef=useRef<string|null>(null);
-  useEffect(()=>{
-    const portfolioChanged=previousPortfolioIdRef.current!==portfolioId;previousPortfolioIdRef.current=portfolioId;
-    let active=true;
-    // Only wipe already-loaded state on an actual portfolio switch. A mode-only
-    // switch (e.g. Overview -> Build on the same portfolio) keeps prior data
-    // visible instead of flashing a full skeleton for data that is still cache-warm.
-    if(portfolioChanged){setData(blank);dataRef.current=blank}
-    setAnalyticsLoading(false);setMessage("");setFailures([]);
-    const update=(values:Partial<WorkspaceData>)=>active&&setData(current=>({...current,...values}));
-    const fail=(slice:string)=>(error:unknown)=>{if(active)setFailures(current=>[...current,`${slice}: ${error instanceof Error?error.message:"request failed"}`])};
-    const tasks:Promise<unknown>[]=[];
-    const started=typeof performance!=="undefined"?performance.now():0;
-    const needsSummary=["overview","build","risk","stress","scenarios"].includes(mode);
-    const summaryAlreadyLoaded=!portfolioChanged&&Boolean(dataRef.current.summary);
-    if(needsSummary){
-      setLoading(!summaryAlreadyLoaded);
-      tasks.push(getPortfolioSummary(portfolioId).then(summary=>update({summary})).catch((error:Error)=>active&&setMessage(error.message)).finally(()=>active&&setLoading(false)));
-    } else setLoading(false);
-    if(mode==="overview")tasks.push(
-      getPortfolioExposure(portfolioId).then(exposure=>update({exposure})).catch(fail("Exposure request failed")),
-      getPortfolioPerformance(portfolioId).then(performance=>update({performance})).catch(fail("Performance request failed")),
-      getIpsCompliance(portfolioId).then(compliance=>update({compliance})).catch(fail("Compliance request failed")),
-      getIpsVersions(portfolioId).then(ips=>update({ips})).catch(fail("IPS request failed")),
-    );
-    if(mode==="build")tasks.push(
-      getIpsVersions(portfolioId).then(ips=>update({ips})).catch(fail("IPS request failed")),
-      getAllocations(portfolioId).then(allocations=>update({allocations})).catch(fail("Allocation request failed")),
-      getCapitalMarketAssumptions(portfolioId).then(assumptions=>update({assumptions})).catch(fail("Assumptions request failed")),
-      getRiskBudget(portfolioId).then(riskBudget=>update({riskBudget})).catch(fail("Risk budget request failed")),
-    );
-    if(["overview","quant","risk"].includes(mode)){
-      setAnalyticsLoading(true);
-      tasks.push(getPortfolioQuant(portfolioId).then(quant=>update({quant})).catch(fail("Analytics request failed")).finally(()=>active&&setAnalyticsLoading(false)));
-    }
-    if(mode==="quant")tasks.push(getRiskBudget(portfolioId).then(riskBudget=>update({riskBudget})).catch(fail("Risk budget request failed")));
-    if(mode==="risk")tasks.push(
-      getPortfolioExposure(portfolioId).then(exposure=>update({exposure})).catch(fail("Exposure request failed")),
-      getIpsCompliance(portfolioId).then(compliance=>update({compliance})).catch(fail("Compliance request failed")),
-      getRiskBudget(portfolioId).then(riskBudget=>update({riskBudget})).catch(fail("Risk budget request failed")),
-    );
-    if(mode==="activity")tasks.push(
-      getTransactions(portfolioId).then(transactions=>update({transactions})).catch(fail("Transaction request failed")),
-      getAuditEvents(portfolioId).then(auditEvents=>update({auditEvents})).catch(fail("Audit trail request failed")),
-    );
-    if(mode==="stress"||mode==="scenarios")tasks.push(getScenarioRuns(portfolioId).then(scenarios=>update({scenarios})).catch(fail("Scenario history request failed")));
-    if(mode==="settings"||mode==="ips")tasks.push(
-      getIpsCompliance(portfolioId).then(compliance=>update({compliance})).catch(fail("Compliance request failed")),
-      getIpsVersions(portfolioId).then(ips=>update({ips})).catch(fail("IPS request failed")),
-    );
-    void Promise.all(tasks).catch((error:Error)=>active&&setMessage(error.message)).finally(()=>{
-      if(process.env.NODE_ENV!=="production"&&typeof performance!=="undefined")console.debug(`[workspace] ${mode} (${tasks.length} request(s)) settled in ${(performance.now()-started).toFixed(0)}ms`);
-    });
-    return()=>{active=false};
-  },[portfolioId,mode]);
+  const {data,loading,message,setMessage,failures,analyticsLoading}=useWorkspaceData(portfolioId,mode);
   const activeMode=mode==="scenarios"?"stress":mode==="ips"?"settings":mode;
   return <PortfolioWorkspace portfolioId={portfolioId} active={activeMode}>{message?<div className="notice notice-warn mb-3"><Icon name="warning"/><span>{message}</span></div>:null}{failures.length?<div className="notice notice-error mb-3" role="alert"><Icon name="warning"/><span><strong>Some data requests failed.</strong> {failures.join(" · ")} Empty sections below must not be interpreted as confirmed absence.</span></div>:null}{loading?<Loading/>:<Mode mode={mode} portfolioId={portfolioId} data={data} setMessage={setMessage} analyticsLoading={analyticsLoading}/>}</PortfolioWorkspace>;
 }

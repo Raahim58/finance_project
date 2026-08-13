@@ -6,23 +6,17 @@ from hashlib import sha256
 
 from fastapi import HTTPException
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.ingestion.artifact_store import LocalArtifactStore
 from app.models.document import Document
 from app.models.workstation import (
-    DataSource,
     Event,
     EventEntityLink,
     EventSource,
     IngestionRun,
     Instrument,
     FinancialFact,
-    MacroObservation,
-    MacroSeries,
-    SourceArtifact,
 )
 from app.providers.macro.official_workbooks import MacroObservation as ParsedMacroObservation
 from app.providers.macro.official_workbooks import PbsPriceProvider, WorldBankCommodityProvider
@@ -31,45 +25,8 @@ from app.services.market_ingestion import persist_market_data
 from app.services.market_providers import get_market_data_provider
 from app.services.canonical_market_service import price_series
 from app.services.trading_calendar_service import sessions_between
-
-
-def source(db: Session, name: str, source_type: str, base_url: str | None, priority: int, sla: int | None, notes: str) -> DataSource:
-    row = db.scalar(select(DataSource).where(DataSource.name == name))
-    if row is None:
-        row = DataSource(name=name, source_type=source_type, base_url=base_url, priority=priority, freshness_sla_minutes=sla, enabled=True, use_notes=notes)
-        db.add(row); db.flush()
-    return row
-
-
-def store_artifact(db: Session, data_source: DataSource, content: bytes, *, url: str, method: str, parser_version: str, content_type: str, effective_at: datetime | None = None) -> SourceArtifact:
-    digest = sha256(content).hexdigest()
-    existing = db.scalar(select(SourceArtifact).where(SourceArtifact.sha256 == digest))
-    if existing: return existing
-    suffix = next((value for marker, value in (("pdf", ".pdf"), ("json", ".json"), ("csv", ".csv"), ("excel", ".xlsx")) if marker in content_type.lower()), ".bin")
-    stored = LocalArtifactStore(settings.source_artifact_root).put(content, suffix)
-    row = SourceArtifact(data_source_id=data_source.id, source_url=url, http_method=method, request_fingerprint=sha256(f"{method}:{url}".encode()).hexdigest(), effective_at=effective_at, sha256=digest, content_type=content_type, storage_path=stored.storage_path, parser_version=parser_version, status="parsed", response_metadata_json=json.dumps({"bytes": len(content)}))
-    db.add(row); db.flush(); return row
-
-
-def persist_macro(db: Session, observations: list[ParsedMacroObservation], data_source: DataSource, artifact: SourceArtifact) -> int:
-    count = 0
-    for item in observations:
-        series = db.scalar(select(MacroSeries).where(MacroSeries.key == item.series_key))
-        if series is None:
-            is_sbp = item.series_key.startswith("sbp.")
-            metadata = {
-                "is_risk_free": item.series_key == "sbp.tbill.3m_yield",
-                "freshness_sla_minutes": 2880 if is_sbp else data_source.freshness_sla_minutes,
-                "observation_source": item.source,
-            }
-            series = MacroSeries(key=item.series_key, name=item.series_key.replace(".", " ").title(), unit=item.unit, frequency="daily" if is_sbp else "monthly", source_id=data_source.id, metadata_json=json.dumps(metadata))
-            db.add(series); db.flush()
-        existing = db.scalar(select(MacroObservation).where(MacroObservation.series_id == series.id, MacroObservation.effective_date == item.effective_date, MacroObservation.is_selected.is_(True)))
-        if existing and float(existing.value) == item.value: continue
-        if existing: existing.is_selected = False
-        revision = (existing.revision + 1) if existing else 1
-        db.add(MacroObservation(series_id=series.id, effective_date=item.effective_date, release_at=datetime.now(UTC), value=item.value, revision=revision, artifact_id=artifact.id, is_selected=True)); count += 1
-    return count
+from app.services.ingestion_run_service import fail_ingestion_run, finish_ingestion_run, start_ingestion_run
+from app.services.ingestion_persistence import persist_macro, source, store_artifact
 
 
 def import_nccpl_csv(db: Session, content: bytes) -> dict[str, object]:
@@ -96,21 +53,15 @@ def import_nccpl_csv(db: Session, content: bytes) -> dict[str, object]:
 def refresh_provider(db: Session, provider: str, run_key: str | None = None):
     normalized = provider.strip().lower()
     key = run_key or date.today().isoformat()
-    existing = db.scalar(select(IngestionRun).where(IngestionRun.job_key == f"refresh:{normalized}", IngestionRun.run_key == key))
-    if existing and existing.status in {"running", "completed"}:
-        return existing
-    if existing:
-        run = existing
-        run.status = "running"; run.retry_count += 1; run.error_class = None; run.error_message = None
-        run.started_at = datetime.now(UTC); run.finished_at = None
-        run.attempted_count = run.accepted_count = run.rejected_count = 0
-    else:
-        run = IngestionRun(job_key=f"refresh:{normalized}", run_key=key, provider=normalized, status="running")
-        db.add(run)
-    db.commit(); db.refresh(run)
+    run, reused = start_ingestion_run(db, job_key=f"refresh:{normalized}", run_key=key, provider=normalized)
+    if reused:
+        return run
     try:
         if normalized in {"mock", "dps", "yahoo", "auto", "psxdata"}:
-            result = run_market_data_cycle(db, normalized); run.attempted_count = result.records_written; run.accepted_count = result.records_written; run.rejected_count = 0
+            market_run = run_market_data_cycle(db, normalized)
+            if market_run.status == "failed":
+                raise RuntimeError(market_run.message or f"{normalized} market refresh failed")
+            result = {"attempted": market_run.records_written, "accepted": market_run.records_written, "rejected": 0, "latest_observation_at": datetime.combine(market_run.latest_trade_date, datetime.min.time(), tzinfo=UTC) if market_run.latest_trade_date else None, "diagnostics": {"used_provider": market_run.used_provider, "message": market_run.message}}
         elif normalized in {"pbs", "world_bank"}:
             provider_object = PbsPriceProvider() if normalized == "pbs" else WorldBankCommodityProvider()
             observations = provider_object.fetch()
@@ -118,14 +69,16 @@ def refresh_provider(db: Session, provider: str, run_key: str | None = None):
             # The provider validates the live workbook; the parsed canonical rows are preserved as a bounded JSON artifact for audit.
             content = json.dumps([{"series_key": row.series_key, "effective_date": row.effective_date.isoformat(), "value": row.value, "unit": row.unit} for row in observations], sort_keys=True).encode()
             artifact = store_artifact(db, data_source, content, url=provider_object.workbook_url, method="GET", parser_version=provider_object.parser_version, content_type="application/json")
-            run.attempted_count = len(observations); run.accepted_count = persist_macro(db, observations, data_source, artifact)
+            accepted = persist_macro(db, observations, data_source, artifact)
+            result = {"attempted": len(observations), "accepted": accepted, "rejected": 0, "latest_observation_at": datetime.combine(max((row.effective_date for row in observations), default=date.min), datetime.min.time(), tzinfo=UTC) if observations else None}
         elif normalized == "sbp":
             from app.providers.macro.sbp import SbpKeyIndicatorsProvider
             provider_object = SbpKeyIndicatorsProvider()
             content, observations = provider_object.fetch()
             data_source = source(db, "SBP", "macro", provider_object.page_url, 10, 2880, "Official SBP observed key indicators; raw HTML is retained for audit.")
             artifact = store_artifact(db, data_source, content, url=provider_object.page_url, method="GET", parser_version=provider_object.parser_version, content_type="text/html")
-            run.attempted_count = len(observations); run.accepted_count = persist_macro(db, observations, data_source, artifact)
+            accepted = persist_macro(db, observations, data_source, artifact)
+            result = {"attempted": len(observations), "accepted": accepted, "rejected": 0, "latest_observation_at": datetime.combine(max((row.effective_date for row in observations), default=date.min), datetime.min.time(), tzinfo=UTC) if observations else None}
         elif normalized == "scstrade":
             result = _refresh_scstrade(db)
             run.attempted_count = result["attempted"]; run.accepted_count = result["accepted"]; run.rejected_count = result["rejected"]
@@ -137,29 +90,32 @@ def refresh_provider(db: Session, provider: str, run_key: str | None = None):
             run.attempted_count = result["attempted"]; run.accepted_count = result["accepted"]; run.rejected_count = result["rejected"]
         else:
             raise HTTPException(status_code=422, detail="Provider is not enabled for refresh")
-        run.status = "completed"; run.finished_at = datetime.now(UTC)
+        run = db.get(IngestionRun, run.id)
+        return finish_ingestion_run(db, run, result)
     except Exception as exc:
-        run_id = run.id
-        db.rollback()
-        run = db.get(IngestionRun, run_id)
-        run.status = "failed"; run.error_class = type(exc).__name__; run.error_message = str(exc)[:2000]; run.finished_at = datetime.now(UTC); db.commit(); raise
-    db.commit(); db.refresh(run); return run
+        fail_ingestion_run(db, run.id, exc)
+        raise
 
 
-def _refresh_scstrade(db: Session) -> dict[str, int]:
+def _refresh_scstrade(db: Session) -> dict[str, object]:
     from app.providers.market.scstrade import ScsTradeProvider
     from app.services.market_providers import LatestPriceRow
 
     provider = ScsTradeProvider()
     end = date.today(); start = end - timedelta(days=120)
     attempted = accepted = rejected = 0
+    latest_date: date | None = None
+    errors: list[str] = []
     for symbol in settings.market_data_default_symbols:
         try:
             rows = provider.fetch_history(symbol, start, end)
-        except Exception:
+        except Exception as exc:
             rejected += 1
+            errors.append(f"{symbol}: {type(exc).__name__}: {str(exc)[:240]}")
             continue
         attempted += len(rows)
+        if rows:
+            latest_date = max(latest_date or rows[-1].trade_date, max(row.trade_date for row in rows))
         normalized = []
         for index, row in enumerate(rows):
             previous = rows[index - 1].close if index else row.close - row.change
@@ -170,7 +126,7 @@ def _refresh_scstrade(db: Session) -> dict[str, int]:
         if normalized:
             result = persist_market_data(db, latest_prices=normalized, source="scstrade")
             accepted += int(result["canonical_observations"]); rejected += int(result["rejected"])
-    return {"attempted": attempted, "accepted": accepted, "rejected": rejected}
+    return {"attempted": attempted, "accepted": accepted, "rejected": rejected, "latest_observation_at": datetime.combine(latest_date, datetime.min.time(), tzinfo=UTC) if latest_date else None, "diagnostics": {"errors": errors}}
 
 
 def _report_document_type(report_type: str) -> tuple[str, str | None]:
@@ -184,7 +140,7 @@ def _report_document_type(report_type: str) -> tuple[str, str | None]:
     return "company_report", None
 
 
-def _refresh_psx_financials(db: Session, symbols: list[str] | None = None, limit: int | None = None) -> dict[str, int]:
+def _refresh_psx_financials(db: Session, symbols: list[str] | None = None, limit: int | None = None) -> dict[str, object]:
     from app.providers.fundamentals.extraction import extract_facts, parse_period_end
     from app.providers.fundamentals.psx_financials import PsxFinancialsProvider
     from app.services.rag_service import create_document_from_pages, parse_pdf
@@ -192,14 +148,17 @@ def _refresh_psx_financials(db: Session, symbols: list[str] | None = None, limit
     provider = PsxFinancialsProvider()
     data_source = source(db, "PSX Financials", "company_reports", provider.base_url, 10, 1440, "Official PSX company-report catalogue and PDFs; newly observed reports are indexed into RAG.")
     attempted = accepted = rejected = 0
+    latest_date: date | None = None
+    errors: list[str] = []
     remaining = limit if limit is not None else settings.research_report_limit_per_run
     for symbol in (symbols or settings.market_data_default_symbols):
         if remaining <= 0:
             break
         try:
             catalog = provider.fetch_company_catalog(symbol)
-        except Exception:
+        except Exception as exc:
             rejected += 1
+            errors.append(f"{symbol} catalog: {type(exc).__name__}: {str(exc)[:240]}")
             continue
         for item in sorted(catalog, key=lambda value: value.posting_date, reverse=True):
             if remaining <= 0:
@@ -224,11 +183,13 @@ def _refresh_psx_financials(db: Session, symbols: list[str] | None = None, limit
                             db.add(FinancialFact(instrument_id=instrument.id, taxonomy_key=fact.taxonomy_key, period_type="annual" if document_type == "annual_report" else "interim", period_end=fact.period_end, filing_date=item.posting_date, value=fact.value, unit=fact.unit, currency=fact.currency, consolidated=True, document_id=document.id, page_number=fact.page_number))
                 db.commit()
                 accepted += 1; remaining -= 1
-            except Exception:
+                latest_date = max(latest_date or item.posting_date, item.posting_date)
+            except Exception as exc:
                 db.rollback()
                 data_source = source(db, "PSX Financials", "company_reports", provider.base_url, 10, 1440, "Official PSX company-report catalogue and PDFs; newly observed reports are indexed into RAG.")
                 rejected += 1
-    return {"attempted": attempted, "accepted": accepted, "rejected": rejected}
+                errors.append(f"{symbol} {item.report_url}: {type(exc).__name__}: {str(exc)[:240]}")
+    return {"attempted": attempted, "accepted": accepted, "rejected": rejected, "latest_observation_at": datetime.combine(latest_date, datetime.min.time(), tzinfo=UTC) if latest_date else None, "diagnostics": {"errors": errors}}
 
 
 def refresh_company_research(db: Session, instrument_id: str, limit: int = 5) -> dict[str, object]:
@@ -257,7 +218,7 @@ def refresh_company_research(db: Session, instrument_id: str, limit: int = 5) ->
     return {"run_id": run.id, "symbol": instrument.symbol, "status": run.status, "attempted": run.attempted_count, "accepted": run.accepted_count, "rejected": run.rejected_count, "idempotent_reuse": False}
 
 
-def _refresh_mettis(db: Session) -> dict[str, int]:
+def _refresh_mettis(db: Session) -> dict[str, object]:
     from decimal import Decimal
     from app.providers.news.mettis import MettisProvider
     from app.services.rag_service import ParsedPage, create_document_from_pages
@@ -269,6 +230,8 @@ def _refresh_mettis(db: Session) -> dict[str, int]:
     artifact = store_artifact(db, data_source, content, url=provider.listing_url, method="GET", parser_version=provider.parser_version, content_type="application/json")
     instruments = list(db.scalars(select(Instrument)))
     attempted = len(articles); accepted = rejected = 0
+    latest_at: datetime | None = None
+    errors: list[str] = []
     for listed in articles:
         if db.scalar(select(EventSource.id).where(EventSource.source_url == listed.url)):
             continue
@@ -279,6 +242,7 @@ def _refresh_mettis(db: Session) -> dict[str, int]:
             if text:
                 document = create_document_from_pages(db, [ParsedPage(1, text)], title=article.title or listed.title, document_type="news_summary", source_name="Mettis Global", source_url=listed.url, published_date=article.published_at.date() if article.published_at else None, visibility="public", artifact_id=artifact.id, commit=False)
             occurred_at = article.published_at or datetime.now(UTC)
+            latest_at = max(latest_at or occurred_at, occurred_at)
             event = Event(event_type="news", title=(article.title or listed.title)[:255], occurred_at=occurred_at, confidence=Decimal("0.750000"), details_json=json.dumps({"summary": text, "author": article.author, "timestamp_observed": article.published_at is not None}))
             db.add(event); db.flush()
             db.add(EventSource(event_id=event.id, source_url=listed.url, source_name="Mettis Global", artifact_id=artifact.id, document_id=document.id if document else None))
@@ -287,9 +251,10 @@ def _refresh_mettis(db: Session) -> dict[str, int]:
                 if instrument.symbol.upper() in searchable.split():
                     db.add(EventEntityLink(event_id=event.id, entity_type="instrument", entity_key=instrument.symbol, link_method="exact_symbol_token", confidence=Decimal("1.000000")))
             db.commit(); accepted += 1
-        except Exception:
+        except Exception as exc:
             db.rollback(); rejected += 1
-    return {"attempted": attempted, "accepted": accepted, "rejected": rejected}
+            errors.append(f"{listed.url}: {type(exc).__name__}: {str(exc)[:240]}")
+    return {"attempted": attempted, "accepted": accepted, "rejected": rejected, "latest_observation_at": latest_at, "diagnostics": {"errors": errors}}
 
 
 def run_due_ingestion_jobs(db: Session) -> list[dict[str, object]]:
@@ -317,7 +282,7 @@ def run_due_ingestion_jobs(db: Session) -> list[dict[str, object]]:
 
 
 def list_ingestion_runs(db: Session, limit: int = 100):
-    return [{"id": row.id, "job_key": row.job_key, "run_key": row.run_key, "provider": row.provider, "status": row.status, "attempted_count": row.attempted_count, "accepted_count": row.accepted_count, "rejected_count": row.rejected_count, "error_class": row.error_class, "error_message": row.error_message, "started_at": row.started_at, "finished_at": row.finished_at} for row in db.scalars(select(IngestionRun).order_by(IngestionRun.started_at.desc()).limit(limit))]
+    return [{"id": row.id, "job_key": row.job_key, "run_key": row.run_key, "provider": row.provider, "status": row.status, "attempted_count": row.attempted_count, "accepted_count": row.accepted_count, "updated_count": row.updated_count, "rejected_count": row.rejected_count, "latest_observation_at": row.latest_observation_at, "error_class": row.error_class, "error_message": row.error_message, "diagnostics": json.loads(row.diagnostics_json or "{}"), "started_at": row.started_at, "finished_at": row.finished_at} for row in db.scalars(select(IngestionRun).order_by(IngestionRun.started_at.desc()).limit(limit))]
 
 
 def historical_gaps(db: Session, symbol: str, start: date, end: date) -> dict[str, object]:

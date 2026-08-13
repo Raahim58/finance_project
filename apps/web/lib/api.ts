@@ -1,3 +1,7 @@
+import { API_BASE_URL, IMMUTABLE_CACHE_TTL_MS, getToken, request } from "@/lib/api/client";
+export { clearApiCache, clearToken, getToken, setToken } from "@/lib/api/client";
+export * from "@/lib/api/market";
+
 export type AuthResponse = {
   access_token: string;
   token_type: string;
@@ -23,70 +27,6 @@ export type LLMKey = {
   last_used_at?: string;
 };
 
-export type Exchange = {
-  code: string;
-  name: string;
-  timezone: string;
-};
-
-export type Company = {
-  id: string;
-  symbol: string;
-  name: string;
-  sector: string;
-  exchange: Exchange;
-  official_website?: string | null;
-  psx_url?: string | null;
-  description?: string | null;
-  is_active: boolean;
-};
-
-export type MarketPrice = {
-  symbol: string;
-  trade_date: string;
-  open: string;
-  high: string;
-  low: string;
-  close: string;
-  previous_close: string;
-  change: string;
-  change_percent: string;
-  volume: number;
-  value: string;
-  market_cap?: string | null;
-  source: string;
-  source_url?: string | null;
-  ingested_at: string;
-};
-
-export type MarketSnapshot = {
-  snapshot_date: string;
-  index_name: string;
-  index_value: string;
-  index_change: string;
-  index_change_percent: string;
-  total_volume: number;
-  total_value: string;
-  source: string;
-  ingested_at: string;
-};
-
-export type SectorDailyStats = {
-  sector: string;
-  trade_date: string;
-  total_volume: number;
-  total_value: string;
-  average_change_percent: string;
-  advancers: number;
-  decliners: number;
-  unchanged: number;
-  source: string;
-};
-
-export type CompanyDetail = {
-  company: Company;
-  latest_price?: MarketPrice | null;
-};
 
 export type FactProvenance = {source_name:string|null;document_type:string|null;is_synthetic:boolean;ingested_at:string|null};
 export type CompanyResearch = {
@@ -118,33 +58,6 @@ export type CandidateEvaluation = {
   warnings:string[];
 };
 
-export type MarketOverview = {
-  snapshot?: MarketSnapshot | null;
-  top_gainers: MarketPrice[];
-  top_losers: MarketPrice[];
-  top_volume: MarketPrice[];
-  sectors: SectorDailyStats[];
-};
-
-export type MarketFreshness = {
-  market_data_mode: string;
-  refresh_seconds: number;
-  last_successful_ingestion_at?: string | null;
-  latest_trade_date?: string | null;
-  latest_source?: string | null;
-  latest_attempted_provider?: string | null;
-  latest_used_provider?: string | null;
-  is_stale: boolean;
-  stale_warning?: string | null;
-  backup_warning?: string | null;
-  ingestion_age_seconds?: number | null;
-  provider_mode_warning?: string | null;
-  ingestion_staleness_warning?: string | null;
-  fallback_provider_active: boolean;
-  trade_date_status: "current" | "prior_session" | "stale" | "unknown";
-  exchange_session_status: "open" | "closed" | "unknown";
-  exchange_session_note?: string | null;
-};
 
 export type Portfolio = {
   id: string;
@@ -369,114 +282,6 @@ export type AssistantResult = {
   created_at: string;
 };
 
-// Keep browser requests on the frontend origin. Next proxies /api to FastAPI,
-// which also makes temporary HTTPS preview tunnels work without CORS or mixed content.
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
-const TOKEN_KEY = "psx_ai_token";
-const GET_CACHE_TTL_MS = 60_000;
-// Records that only change via an explicit confirm/save action (not background
-// ingestion) can be cached longer; a write to that portfolio still invalidates
-// them immediately via invalidateCache, so this is not a staleness risk.
-const IMMUTABLE_CACHE_TTL_MS = 10 * 60_000;
-type CachedResponse = { expiresAt: number; value: unknown };
-const responseCache = new Map<string, CachedResponse>();
-const pendingRequests = new Map<string, Promise<unknown>>();
-let sampleSessionPromise: Promise<string> | null = null;
-
-export function clearApiCache() {
-  responseCache.clear();
-  pendingRequests.clear();
-}
-
-// Mutations under /portfolios/{id}/... only need to invalidate that portfolio's
-// cached data — nuking the whole cache on every write forces every other open
-// portfolio, and unrelated market/monitoring data, to refetch on the next
-// navigation. Mutations outside that scope (monitoring, recommendations, auth)
-// fall back to a full clear since their blast radius isn't derivable from the path.
-function invalidateCache(path: string) {
-  const portfolioScope = path.match(/^\/portfolios\/([^/]+)\//)?.[0];
-  if (!portfolioScope) { clearApiCache(); return; }
-  for (const key of Array.from(responseCache.keys())) if (key.includes(portfolioScope)) responseCache.delete(key);
-  for (const key of Array.from(pendingRequests.keys())) if (key.includes(portfolioScope)) pendingRequests.delete(key);
-}
-
-export function getToken() {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(TOKEN_KEY);
-}
-
-export function setToken(token: string) {
-  clearApiCache();
-  window.localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken() {
-  clearApiCache();
-  window.localStorage.removeItem(TOKEN_KEY);
-}
-
-async function ensureSampleToken(): Promise<string> {
-  const existing = getToken();
-  if (existing) return existing;
-  if (!sampleSessionPromise) {
-    sampleSessionPromise = fetch(`${API_BASE_URL}/auth/sample-session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    }).then(async response => {
-      if (!response.ok) throw new Error(`Sample workspace unavailable (${response.status})`);
-      const session = await response.json() as AuthResponse;
-      setToken(session.access_token);
-      return session.access_token;
-    }).finally(() => { sampleSessionPromise = null; });
-  }
-  return sampleSessionPromise;
-}
-
-async function request<T>(path: string, options: RequestInit = {}, ttlMs: number = GET_CACHE_TTL_MS): Promise<T> {
-  let token = getToken();
-  if (!token && typeof window !== "undefined" && !path.startsWith("/auth/")) {
-    token = await ensureSampleToken();
-  }
-  const method = (options.method ?? "GET").toUpperCase();
-  const cacheKey = `${token ? "authenticated" : "anonymous"}:${path}`;
-  if (method === "GET") {
-    const cached = responseCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) return cached.value as T;
-    if (cached) responseCache.delete(cacheKey);
-    const pending = pendingRequests.get(cacheKey);
-    if (pending) return pending as Promise<T>;
-  } else {
-    // Mutations can affect summaries, analytics, compliance, and market values —
-    // but only within their own portfolio scope; see invalidateCache.
-    invalidateCache(path);
-  }
-  const headers = new Headers(options.headers);
-  headers.set("Content-Type", "application/json");
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-
-  const execute = async () => {
-    const response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      const detail = body.detail;
-      const fallback = response.status >= 500 ? "The service could not complete this request. Please try again." : `Request could not be completed (${response.status}).`;
-      const message = typeof detail === "string" ? detail : detail && typeof detail.message === "string" ? detail.message : fallback;
-      throw new Error(message);
-    }
-    if (response.status === 204) return undefined as T;
-    const value = await response.json() as T;
-    if (method === "GET") responseCache.set(cacheKey, { value, expiresAt: Date.now() + ttlMs });
-    return value;
-  };
-  const result = execute();
-  if (method === "GET") pendingRequests.set(cacheKey, result);
-  try {
-    return await result;
-  } finally {
-    if (method === "GET") pendingRequests.delete(cacheKey);
-  }
-}
-
 export function signup(email: string, password: string, fullName?: string) {
   return request<AuthResponse>("/auth/signup", {
     method: "POST",
@@ -515,29 +320,6 @@ export function createLLMKey(provider: string, apiKey: string, defaultModel?: st
     method: "POST",
     body: JSON.stringify({ provider, api_key: apiKey, default_model: defaultModel || null })
   });
-}
-
-export function getMarketOverview() {
-  return request<MarketOverview>("/market/overview");
-}
-
-export function getMarketFreshness() {
-  return request<MarketFreshness>("/market/freshness");
-}
-
-export function getCompanies(query?: string, options?: { signal?: AbortSignal }) {
-  const params = query ? `?q=${encodeURIComponent(query)}` : "";
-  return request<Company[]>(`/market/companies${params}`, options?.signal ? { signal: options.signal } : {});
-}
-
-export function getCompanyDetail(symbol: string) {
-  return request<CompanyDetail>(`/market/company/${encodeURIComponent(symbol)}`);
-}
-
-export function getCompanyHistory(symbol: string, limit = 180) {
-  return request<MarketPrice[]>(
-    `/market/company/${encodeURIComponent(symbol)}/history?limit=${encodeURIComponent(String(limit))}`
-  );
 }
 
 export function getPortfolios() {

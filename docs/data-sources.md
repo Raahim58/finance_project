@@ -57,3 +57,14 @@ python -m app.jobs.backfill_market_history --provider dps --symbols MEBL,SYS --s
 ```
 
 Manual portfolio entry remains the broker fallback. Never use password scraping or password-based broker automation.
+
+## Health and completeness
+
+Every scheduled provider runs independently. A DPS/market-price failure prevents only its dependent history bootstrap; it does not skip Mettis, PSX Financials, SBP, PBS, World Bank, or SCSTrade. Each provider attempt records a terminal `success`, `partial`, `failed`, or `skipped`-compatible state, counts, an error summary, diagnostics, and the latest resulting observation time when applicable.
+
+Authenticated operational endpoints:
+
+- `GET /ingestion/health` returns source status, last attempt/success, latest observed data, provider-specific freshness SLA, counts, and errors.
+- `GET /ingestion/companies/{symbol}/completeness` returns observed-live coverage for prices, fundamentals, reports, announcements, and news. Mock/demo rows do not count.
+
+Status is intentionally conservative: no run is `never_run`; a successful run with no stored observation is `stale`; expired source-specific freshness is `stale`; rejected rows with usable accepted data are `partial`; and the latest failed attempt remains `failed` even if an older success exists. Phase 1 has no announcements provider, so announcements remain honestly unavailable.

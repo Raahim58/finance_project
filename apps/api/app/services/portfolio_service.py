@@ -29,7 +29,9 @@ from app.services.ledger_service import (
     reverse_transaction,
 )
 from app.services.portfolio_providers import describe_portfolio_source, get_portfolio_provider
-from app.services.canonical_market_service import latest_price as canonical_latest_price, price_series
+from app.services.canonical_market_service import price_series
+from app.services.portfolio_access import get_company_by_symbol_or_404, get_holding_or_404, get_portfolio_or_404, get_transaction_or_404
+from app.services.portfolio_valuation import latest_price_for_symbol, price_for_symbol_on_or_before
 from app.schemas.portfolio import (
     AllocationItemResponse,
     AllocationSetCreate,
@@ -120,54 +122,6 @@ def serialize_transaction(transaction: PortfolioTransaction) -> TransactionRespo
         reversal_of_id=transaction.reversal_of_id,
         created_at=transaction.created_at,
     )
-
-
-def get_portfolio_or_404(db: Session, user: User, portfolio_id: str) -> Portfolio:
-    portfolio = db.scalar(
-        select(Portfolio).where(Portfolio.id == portfolio_id, Portfolio.user_id == user.id)
-    )
-    if not portfolio:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Portfolio not found")
-    return portfolio
-
-
-def get_holding_or_404(db: Session, user: User, holding_id: str) -> PortfolioHolding:
-    holding = db.scalar(
-        select(PortfolioHolding)
-        .join(Portfolio, Portfolio.id == PortfolioHolding.portfolio_id)
-        .where(PortfolioHolding.id == holding_id, Portfolio.user_id == user.id)
-    )
-    if not holding:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Holding not found")
-    return holding
-
-
-def get_transaction_or_404(db: Session, user: User, transaction_id: str) -> PortfolioTransaction:
-    transaction = db.scalar(
-        select(PortfolioTransaction)
-        .join(Portfolio, Portfolio.id == PortfolioTransaction.portfolio_id)
-        .where(PortfolioTransaction.id == transaction_id, Portfolio.user_id == user.id)
-    )
-    if not transaction:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
-    return transaction
-
-
-def get_company_by_symbol_or_404(db: Session, symbol: str) -> Company:
-    company = db.scalar(
-        select(Company).where(func.upper(Company.symbol) == symbol.upper(), Company.is_active.is_(True))
-    )
-    if not company:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
-    return company
-
-
-def latest_price_for_symbol(db: Session, symbol: str):
-    return canonical_latest_price(db, symbol)
-
-
-def price_for_symbol_on_or_before(db: Session, symbol: str, target_date: date):
-    return canonical_latest_price(db, symbol, target_date)
 
 
 def list_portfolios(db: Session, user: User) -> list[PortfolioResponse]:

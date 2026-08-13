@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
+from app.schemas.data_health import CompanyCompletenessResponse, DataHealthResponse
+from app.services.data_health_service import company_completeness, source_health
 from app.services.ingestion_service import (
     historical_gaps,
     import_nccpl_csv,
@@ -17,6 +19,16 @@ from app.services.ingestion_service import (
 router = APIRouter()
 
 
+@router.get("/ingestion/health", response_model=DataHealthResponse)
+def health(_: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return source_health(db)
+
+
+@router.get("/ingestion/companies/{symbol}/completeness", response_model=CompanyCompletenessResponse)
+def completeness(symbol: str, _: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return company_completeness(db, symbol)
+
+
 @router.get("/ingestion/runs")
 def runs(limit: int = Query(default=100, ge=1, le=500), _: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return list_ingestion_runs(db, limit)
@@ -25,7 +37,7 @@ def runs(limit: int = Query(default=100, ge=1, le=500), _: User = Depends(get_cu
 @router.post("/ingestion/refresh")
 def refresh(provider: str, run_key: str | None = None, _: User = Depends(get_current_user), db: Session = Depends(get_db)):
     row = refresh_provider(db, provider, run_key)
-    return {"id": row.id, "provider": row.provider, "status": row.status, "attempted_count": row.attempted_count, "accepted_count": row.accepted_count, "rejected_count": row.rejected_count, "finished_at": row.finished_at}
+    return {"id": row.id, "provider": row.provider, "status": row.status, "attempted_count": row.attempted_count, "accepted_count": row.accepted_count, "updated_count": row.updated_count, "rejected_count": row.rejected_count, "latest_observation_at": row.latest_observation_at, "error": row.error_message, "finished_at": row.finished_at}
 
 
 @router.post("/ingestion/market-history")

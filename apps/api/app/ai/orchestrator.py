@@ -7,6 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.providers.registry import get_provider
+from app.ai.evidence import gate_citations
+from app.ai.intent import NARRATIVE_TRIGGER_RE, detect_intent
 from app.core.config import settings
 from app.models.llm_key import LLMApiKey
 from app.models.document import Document
@@ -16,61 +18,12 @@ from app.schemas.assistant import AssistantMessageCreate
 from app.services.llm_key_service import get_decrypted_key_for_call
 from app.services.ingestion_service import refresh_company_research
 from app.services.portfolio_service import get_portfolio_or_404
-from app.services.rag_service import MIN_RELEVANCE_SCORE
 from app.services.workstation_service import ips_compliance
 from app.tools import build_tool_registry
 
 
 NUMBER_RE = re.compile(r"(?<![A-Za-z])[-+]?\d+(?:\.\d+)?%?")
 ADVICE_RE = re.compile(r"\b(should|recommend|buy|sell|increase|reduce|rebalance)\b", re.I)
-
-# Checked in priority order; the first match wins. Ordering keeps "risk" questions
-# from being swallowed by the broader performance/return pattern.
-INTENT_PATTERNS = (
-    ("security_fit", re.compile(r"worth adding|interesting right now|fit my portfolio|risks? of|contradict", re.I)),
-    ("decision_request", re.compile(r"what (?:should|can) i do|what do you recommend|recommendation|next (?:step|action)|how (?:should|can) i improve", re.I)),
-    ("risk_concentration", re.compile(r"risk.*concentrat|concentrat.*risk|where.*risk|riskiest|risk contribut|biggest risk", re.I)),
-    ("compliance", re.compile(r"\bmandate\b|\bcompliance\b|\bips\b|\bbreach\b|\bconstraint\b|\bviolat", re.I)),
-    ("scenario", re.compile(r"\bscenario\b|stress test|\bshock\b|what if|hypothetical", re.I)),
-    ("performance", re.compile(r"perform|\breturn\b|attribut|sharpe|\balpha\b|\bcagr\b|drawdown|tracking error|\bbeta\b", re.I)),
-    ("market_overview", re.compile(r"market (overview|breadth)|\bfreshness\b|\bstale\b|market.wide|how is the market|market status", re.I)),
-    ("holding_evidence", re.compile(r"\bfiling|management|\bcompany\b|\bholding\b|position in|\bstock\b|\bevidence\b|\bdocument", re.I)),
-)
-# Narrative document search is only useful for these question shapes; a purely
-# structured question (e.g. "where is my risk concentrated") should never pull
-# unrelated filings just to pad the response.
-NARRATIVE_TRIGGER_RE = re.compile(r"\bwhy\b|what changed|\bfiling|\bmanagement\b|\bevent|contradict", re.I)
-
-
-def _detect_intent(question: str) -> str:
-    for intent, pattern in INTENT_PATTERNS:
-        if pattern.search(question):
-            return intent
-    return "generic"
-
-
-def _gate_citations(chunks: list[dict[str, object]], requested_symbols: object) -> list[dict[str, object]]:
-    """Every citation must satisfy the relevance floor and, when the caller scoped the
-    search to specific symbols, must actually belong to one of those symbols. This runs
-    on every research.search call (deterministic and LLM-planned) so a careless or
-    unscoped call cannot smuggle an off-topic filing into the evidence set."""
-    allowed = {str(symbol).upper() for symbol in requested_symbols} if isinstance(requested_symbols, list) else set()
-    gated: list[dict[str, object]] = []
-    for chunk in chunks:
-        score = chunk.get("score")
-        if not isinstance(score, (int, float)) or score < MIN_RELEVANCE_SCORE:
-            continue
-        symbol = chunk.get("symbol")
-        if allowed and (symbol is None or str(symbol).upper() not in allowed):
-            continue
-        citation = dict(chunk.get("citation") or {})
-        if not citation:
-            continue
-        citation["symbol"] = symbol
-        citation["relevance_score"] = score
-        gated.append(citation)
-    return gated
-
 
 def _base_portfolio_evidence(summary: dict[str, object] | None) -> tuple[list[str], list[dict[str, object]]]:
     if not summary:
@@ -447,7 +400,7 @@ def _invoke(trace, registry, name, db, user, arguments):
             # Every citation, whether from the deterministic search below or a
             # later LLM-planned tool call, is re-gated here so none can bypass
             # the symbol/entity and relevance floor.
-            result = {**result, "citations": _gate_citations(result.get("chunks", []), arguments.get("symbols"))}
+            result = {**result, "citations": gate_citations(result.get("chunks", []), arguments.get("symbols"))}
         trace.append({"tool": name, "version": next(item.version for item in registry.definitions() if item.name == name), "arguments": arguments, "status": "completed"})
         return result
     except Exception as exc:
@@ -532,7 +485,7 @@ async def run_assistant(db: Session, user: User, payload: AssistantMessageCreate
     prior_history = _history(db, conversation.id)
     db.add(AssistantMessage(conversation_id=conversation.id, role="user", content=payload.question))
     registry = build_tool_registry(); trace = []
-    intent = _detect_intent(payload.question)
+    intent = detect_intent(payload.question)
     freshness = _invoke(trace, registry, "market.freshness", db, user, {})
     summary = quant = compliance = risk_budget = scenario_history = None
     holding_symbols: list[str] = []

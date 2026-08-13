@@ -8,12 +8,14 @@ import { LineChart } from "@/components/WorkstationChart";
 import { TermHelp, TermLabel } from "@/components/TermHelp";
 import {
   CandidateEvaluation,
+  CompanyCompleteness,
   CompanyDetail,
   CompanyResearch,
   MarketPrice,
   Portfolio,
   SecurityIntelligence,
   evaluateSecurity,
+  getCompanyCompleteness,
   getCompanyDetail,
   getCompanyHistory,
   getCompanyResearch,
@@ -35,13 +37,14 @@ export default function CompanyPage() {
   const [research, setResearch] = useState<CompanyResearch | null>(null);
   const [history, setHistory] = useState<MarketPrice[]>([]);
   const [portfolios, setPortfolios] = useState<Portfolio[]>([]);
+  const [coverage, setCoverage] = useState<CompanyCompleteness | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    void Promise.all([getCompanyDetail(symbol), getCompanyHistory(symbol, 365), getCompanyResearch(symbol), getPortfolios()])
-      .then(([company, prices, analysis, portfolioRows]) => {
-        setDetail(company); setHistory(prices); setResearch(analysis); setPortfolios(portfolioRows);
+    void Promise.all([getCompanyDetail(symbol), getCompanyHistory(symbol, 365), getCompanyResearch(symbol), getPortfolios(), getCompanyCompleteness(symbol).catch(() => null)])
+      .then(([company, prices, analysis, portfolioRows, completeness]) => {
+        setDetail(company); setHistory(prices); setResearch(analysis); setPortfolios(portfolioRows); setCoverage(completeness);
       })
       .catch((reason: Error) => setError(reason.message))
       .finally(() => setLoading(false));
@@ -61,6 +64,7 @@ export default function CompanyPage() {
       {relevance ? <span className="badge badge-good">Held · {pct(Number(relevance.weight) * 100)} portfolio weight</span> : <span className="badge">Not held</span>}
     </header>
     {research?.has_synthetic_data ? <div className="notice notice-warn mb-4" role="alert"><Icon name="warning" /><span><strong>Demo company data.</strong> Seeded fundamentals and documents are clearly marked and must not be treated as observed filings.</span></div> : null}
+    <section className="panel mb-4"><div className="panel-head"><div><h2 className="panel-title">Data coverage</h2><p className="mt-1 text-[11px] text-muted">Observed live categories only; demo data does not count.</p></div><span className={`badge ${coverage ? "" : "badge-warn"}`}>{coverage ? "Checked" : "Unavailable"}</span></div>{coverage ? <div className="grid gap-px bg-line sm:grid-cols-3 xl:grid-cols-6"><Coverage label="Price" available={coverage.price.available} note={coverage.price.latest_date}/><Coverage label="History" available={coverage.price.observations > 1} note={`${coverage.price.observations} observations`}/><Coverage label="Fundamentals" available={coverage.fundamentals.available} note={`${coverage.fundamentals.fact_count} facts`}/><Coverage label="Reports" available={coverage.reports.available} note={`${coverage.reports.count} reports`}/><Coverage label="Announcements" available={coverage.announcements.available} note={coverage.announcements.reason}/><Coverage label="News" available={coverage.news.available} note={`${coverage.news.count} linked`}/></div> : <div className="p-4 text-xs text-muted">Coverage diagnostics could not be loaded. Empty sections below are not treated as confirmed absence.</div>}</section>
     <div className="source-rail flex flex-wrap items-end justify-between gap-5 px-6 py-5"><div><p className="metric-label">Last traded price</p><p className="data-font mt-2 text-[36px] font-semibold leading-none tracking-[-.045em]">PKR {latest ? num(latest.close) : "—"}</p></div><div className="sm:text-right"><p className={`data-font text-[17px] font-semibold ${Number(latest?.change_percent) >= 0 ? "positive" : "negative"}`}>{signedPct(latest?.change_percent)}</p><p className="mt-1 text-[11px] text-muted">{latest?.trade_date ?? "Date unavailable"} · {latest?.source ?? "Source unavailable"}</p></div></div>
     <div className="metric-strip mt-4 grid-cols-4"><Metric label="Period trajectory" value={signedPct(trajectory)} /><Metric label="Annual volatility" term="Annual volatility" value={marketRisk.annual_volatility == null ? "—" : pct(Number(marketRisk.annual_volatility) * 100)} /><Metric label="Historical VaR 95" term="Historical VaR 95" value={marketRisk.historical_var_95 == null ? "—" : pct(Number(marketRisk.historical_var_95) * 100)} /><Metric label="Current holding value" value={relevance ? `PKR ${num(relevance.market_value, 0)}` : "Not held"} /></div>
     <DecisionWorkbench symbol={symbol} instrumentId={research?.instrument.id} portfolios={portfolios} />
@@ -73,6 +77,8 @@ export default function CompanyPage() {
     </div>
   </div>;
 }
+
+function Coverage({label,available,note}:{label:string;available:boolean;note?:string|null}){return <div className="bg-white p-3"><div className="flex items-center justify-between gap-2"><strong className="text-[12px]">{label}</strong><span className={`badge ${available?"badge-good":"badge-warn"}`}>{available?"Available":"Missing"}</span></div><p className="mt-2 line-clamp-2 text-[10px] text-muted">{note??(available?"Observed data stored":"No observed data")}</p></div>}
 
 function DecisionWorkbench({ symbol, instrumentId, portfolios }: { symbol: string; instrumentId?: string; portfolios: Portfolio[] }) {
   const [portfolioId, setPortfolioId] = useState(portfolios.find(row => row.is_default)?.id ?? portfolios[0]?.id ?? "");

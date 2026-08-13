@@ -21,6 +21,8 @@ from app.models.user import User
 from app.models.workstation import Instrument, PortfolioIPSVersion
 from app.schemas.workstation import PortfolioComparisonRequest
 from app.services.canonical_market_service import price_series
+from app.services.decision_market_inputs import benchmark_returns as _benchmark_returns, market_inputs as _build_market_inputs
+from app.services.decision_risk_analytics import return_distribution_analysis as _return_distribution_analysis, rolling_risk_analysis as _rolling_risk_analysis
 from app.services.compliance_service import evaluate_ips_constraints
 from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_summary
 from app.services.workstation_service import (
@@ -36,34 +38,15 @@ from app.services.workstation_service import (
 
 
 def _market_inputs(db: Session, user: User, portfolio_id: str, extra_symbols: list[str] | None = None):
-    portfolio = get_portfolio_or_404(db, user, portfolio_id)
-    if extra_symbols:
-        summary = get_portfolio_summary(db, user, portfolio.id)
-        universe = [row.symbol for row in summary.holdings] + [symbol.upper() for symbol in extra_symbols if symbol.upper() != "CASH"]
-        symbols, days, prices = _aligned_symbol_prices(db, universe, None, None)
-    else:
-        symbols, days, prices = _aligned_prices(db, portfolio.id, None, None)
-    returns = return_matrix(prices)
-    covariance = covariance_matrix(returns, 0.20)
-    expected = estimate_expected_returns("historical_shrunk", returns, shrinkage=0.50)
-    constraints = _selected_ips_constraints(db, portfolio)
-    benchmark_symbol = _benchmark_symbol(db, portfolio, constraints)
-    risk_free = _effective_risk_free_rate(
-        db,
-        days[-1],
-        str(constraints.get("risk_free_series_key")) if constraints.get("risk_free_series_key") else None,
-    )
-    return portfolio, symbols, days, returns, covariance, expected, constraints, benchmark_symbol, risk_free
+    return _build_market_inputs(db, user, portfolio_id, extra_symbols, _effective_risk_free_rate)
 
 
-def _benchmark_returns(db: Session, symbol: str | None, days: list[date]) -> np.ndarray | None:
-    if not symbol:
-        return None
-    by_date = {row.trade_date: float(row.close) for row in price_series(db, symbol)}
-    if any(day not in by_date for day in days):
-        return None
-    prices = np.asarray([by_date[day] for day in days], dtype=float)
-    return prices[1:] / prices[:-1] - 1
+def rolling_risk_analysis(db: Session, user: User, portfolio_id: str, window: int = 60):
+    return _rolling_risk_analysis(db, user, portfolio_id, window, _effective_risk_free_rate)
+
+
+def return_distribution_analysis(db: Session, user: User, portfolio_id: str, bins: int = 18):
+    return _return_distribution_analysis(db, user, portfolio_id, bins)
 
 
 def capital_market_assumptions(db: Session, user: User, portfolio_id: str):
@@ -252,95 +235,6 @@ def capm_sml_analysis(db: Session, user: User, portfolio_id: str):
         "securities": securities,
         "sml": sml,
         "diagnostics": ["CAPM is shown as an analytical lens and is not the sole allocation method.", *( ["Market risk premium is negative for the aligned sample."] if market_risk_premium < 0 else []), *diagnostics],
-    }
-
-
-def _modeled_portfolio_returns(db: Session, user: User, portfolio_id: str):
-    """Return the current allocation applied to the aligned security-return matrix.
-
-    The workstation uses this series for forward-looking comparison charts.  It is
-    intentionally distinct from the ledger TWR shown on the Overview page and
-    avoids replaying the transaction ledger once per historical date for each
-    chart request.
-    """
-    portfolio, symbols, days, returns, _covariance, _expected, _constraints, _benchmark, _risk_free = _market_inputs(
-        db, user, portfolio_id
-    )
-    summary = get_portfolio_summary(db, user, portfolio.id)
-    total = float(summary.total_value)
-    weights = np.asarray(
-        [next((float(row.market_value) for row in summary.holdings if row.symbol == symbol), 0.0) / total if total else 0.0 for symbol in symbols],
-        dtype=float,
-    )
-    return days, returns @ weights
-
-
-def rolling_risk_analysis(db: Session, user: User, portfolio_id: str, window: int = 60):
-    portfolio = get_portfolio_or_404(db, user, portfolio_id)
-    price_days, values = _modeled_portfolio_returns(db, user, portfolio.id)
-    days = price_days[1:]
-    constraints = _selected_ips_constraints(db, portfolio)
-    benchmark_symbol = _benchmark_symbol(db, portfolio, constraints)
-    benchmark_returns = _benchmark_returns(db, benchmark_symbol, price_days) if days else None
-    if values.size < window:
-        return {"portfolio_id": portfolio.id, "window": window, "observations": int(values.size), "return_basis": "modeled_current_allocation", "benchmark_symbol": benchmark_symbol, "points": [], "diagnostics": [f"At least {window} modeled current-allocation return observations are required."]}
-    wealth = np.cumprod(1 + values)
-    running_peak = np.maximum.accumulate(wealth)
-    points = []
-    for end in range(window, len(values) + 1):
-        sample = values[end - window:end]
-        volatility = float(np.std(sample, ddof=1) * np.sqrt(252))
-        annual_return = float(np.mean(sample) * 252)
-        risk_free = _effective_risk_free_rate(db, days[end - 1], str(constraints.get("risk_free_series_key")) if constraints.get("risk_free_series_key") else None)
-        annual_risk_free = float(risk_free["annual_rate"]) if risk_free else None
-        benchmark_sample = benchmark_returns[end - window:end] if benchmark_returns is not None else None
-        beta = None
-        if benchmark_sample is not None and float(np.var(benchmark_sample, ddof=1)) > 0:
-            beta = float(np.cov(sample, benchmark_sample, ddof=1)[0, 1] / np.var(benchmark_sample, ddof=1))
-        points.append({
-            "date": days[end - 1],
-            "volatility": volatility,
-            "sharpe": (annual_return - annual_risk_free) / volatility if volatility and annual_risk_free is not None else None,
-            "drawdown": float(wealth[end - 1] / running_peak[end - 1] - 1),
-            "beta": beta,
-        })
-    return {
-        "portfolio_id": portfolio.id,
-        "window": window,
-        "observations": int(values.size),
-        "return_basis": "modeled_current_allocation",
-        "benchmark_symbol": benchmark_symbol,
-        "risk_free": _effective_risk_free_rate(db, days[-1], str(constraints.get("risk_free_series_key")) if constraints.get("risk_free_series_key") else None),
-        "points": points,
-        "diagnostics": [
-            "Current-allocation modeled return series; the realized ledger TWR remains on Overview.",
-            *( ["Rolling beta is NOT_EVALUATED because a fully aligned performance-benchmark series is unavailable."] if benchmark_returns is None else []),
-            *( ["Rolling Sharpe is NOT_EVALUATED because no effective-dated risk-free observation is available for one or more windows."] if any(point["sharpe"] is None for point in points) else []),
-        ],
-    }
-
-
-def return_distribution_analysis(db: Session, user: User, portfolio_id: str, bins: int = 18):
-    portfolio = get_portfolio_or_404(db, user, portfolio_id)
-    _days, values = _modeled_portfolio_returns(db, user, portfolio.id)
-    if values.size < 30:
-        return {"portfolio_id": portfolio.id, "sample_size": int(values.size), "bins": [], "estimator": "bias_corrected_fisher_pearson", "diagnostics": ["At least 30 modeled current-allocation return observations are required."]}
-    counts, edges = np.histogram(values, bins=bins)
-    metrics = risk_metrics(values).to_dict()
-    return {
-        "portfolio_id": portfolio.id,
-        "sample_size": int(values.size),
-        "bins": [{"lower": float(edges[index]), "upper": float(edges[index + 1]), "count": int(counts[index])} for index in range(len(counts))],
-        "var_95": metrics["historical_var_95"],
-        "es_95": metrics["historical_es_95"],
-        "var_99": metrics["historical_var_99"],
-        "es_99": metrics["historical_es_99"],
-        "skewness": metrics["skewness"],
-        "excess_kurtosis": metrics["excess_kurtosis"],
-        "estimator": "bias_corrected_fisher_pearson_skew_and_excess_kurtosis",
-        "diagnostics": [
-            "Historical empirical distribution of the current-allocation modeled daily return series; not the realized ledger TWR."
-        ],
     }
 
 

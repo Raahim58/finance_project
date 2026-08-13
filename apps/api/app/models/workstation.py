@@ -88,10 +88,13 @@ class IngestionRun(Base):
     parent_run_id: Mapped[str | None] = mapped_column(ForeignKey("ingestion_runs.id"))
     attempted_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     accepted_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     rejected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_class: Mapped[str | None] = mapped_column(String(160))
     error_message: Mapped[str | None] = mapped_column(Text)
+    diagnostics_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    latest_observation_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
