@@ -20,7 +20,21 @@ Exact market prices, rankings, portfolio values, P&L, risk, optimizer weights, a
 
 Enabled ingestion follows `source -> immutable artifact -> versioned parser -> validation -> canonical observation/fact/event`. Conflicting observations are retained. A selected canonical observation is identified separately, with source priority and quality metadata. Development mock data is labeled and cannot create a synthetic live KSE-100 value.
 
-Global Evidence v1 is deliberately staged. Pass 0 is persistence and contracts only: typed source/fetch/parse boundaries, an explicit candidate state machine, durable source cursor/health state, lightweight discovery candidates, and cluster/selection metadata on the existing `Event` and `EventSource` records. It registers no providers, schedules no evidence work, and performs no network access. Candidate bodies are not stored by the foundation schema; later passes may persist only selected evidence through the existing document pipeline.
+Global Evidence v1 is deliberately staged. Pass 0 established persistence and
+contracts. Pass 1 adds the first synchronous vertical slice: configured discovery
+through RSS/Atom, sitemaps, GDELT, verified listing pages, and the observed PSX
+announcements POST contract; JSON-LD-first HTML extraction; deterministic relevance,
+fingerprinting, bounded deduplication, event clustering, evidence-role selection;
+and indexing only selected evidence through the existing document pipeline. Full
+article text remains ephemeral unless selected. Selected raw responses are gzip
+compressed in the artifact store, while rejected and duplicate candidates retain
+metadata and fingerprints only.
+
+Pass 1 performs no import-time I/O and has a bounded manual runner. Evidence-specific
+Celery queues, scheduling, retries/circuit breakers, historical hydration, candidate
+expiry, queue reconstruction, operational APIs, and live-search refresh remain Pass 2
+work. Phase 4 remains the unstructured retrieval layer; Phases 5–6 entity/event
+intelligence and final assistant reasoning are not pulled into ingestion.
 
 ## Portfolio state
 
@@ -53,4 +67,7 @@ The scheduler keeps the efficient broad DPS current-session refresh in-process. 
 
 The active broad universe is synchronized from observed DPS ordinary-equity identities. Standardized DPS facts are stored separately as `standardized_secondary`; official report `FinancialFact` rows remain issuer-report facts with document/page/row/method provenance. Screening snapshots are deterministic, persisted, sector-aware, and keep completeness separate from performance. Broker automation, trade execution, derivatives, and external MCP runtime remain absent.
 
-Global Evidence workers are intentionally absent in Pass 0. When later passes enable them, they use evidence-specific queues and Postgres candidate/source state rather than sharing Phase 2 queues or treating Redis as durable state.
+Global Evidence workers remain intentionally absent through Pass 1. The manual
+vertical slice writes its cursor, candidates, events, selections, and failures to
+Postgres. Pass 2 workers will use evidence-specific queues and this durable state,
+without sharing Phase 2 queues or treating Redis as the source of truth.

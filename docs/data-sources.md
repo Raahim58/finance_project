@@ -27,7 +27,12 @@ No endpoint, form field, selector, download URL, unit, or date convention may be
 | Mettis Global | Integrated + daily metadata schedule | Headline, canonical URL, timestamp, author, and visible summary become sourced events/documents. Article bodies are not republished. |
 | Yahoo/yfinance | Degraded fallback | Unofficial `.KA` fallback only. The latest live verification hit an explicit rate limit; it must never silently outrank DPS. |
 | NCCPL | Manual import only | Ordinary access returned Cloudflare HTTP 403. No browser automation or anti-bot bypass is used. |
-| IMF RSS | Disabled | The current Social Hub links to an RSS directory that redirects to an error page. Re-enable only after a working official feed is observed and fixture-tested. |
+| Phase 3 PSX announcements | Pass 1 manual vertical slice | Uses the observed `POST /announcements` form/table contract. Symbol, company, category, timestamp, attachment URL/type, and stable announcement ID are normalized. Only high-value attachment categories are fetched; scheduling and PDF routing arrive in Pass 2. |
+| Dawn / Business Recorder | Pass 1 manual vertical slice | Their current public RSS feeds use the generic RSS/Atom adapter. Discovery metadata passes a cheap relevance gate before article retrieval. |
+| SBP releases | Pass 1 manual vertical slice | Official media-center release links use the generic bounded listing adapter. Existing structured SBP observations remain separate and authoritative for exact rates and values. |
+| IMF news | Pass 1 manual vertical slice | Official News release/article links use bounded listing discovery because a stable working official feed contract has not been fixture-verified. This does not reclassify narrative releases as structured macro facts. |
+| GDELT DOC 2 | Pass 1 manual vertical slice | Free broad discovery safety net using bounded configured queries and JSON article lists. Publisher pages remain the evidence source; GDELT is discovery metadata, not an authority for article facts. |
+| Generic sitemap / news sitemap | Pass 1 adapter available | Namespace-safe XML parsing supports ordinary and Google News sitemaps. A source is enabled only after its concrete sitemap URL is verified and fixture-tested. |
 | `psxdata` | Compatibility/comparison only | It wraps DPS and is not canonical. Retire after direct DPS parity is complete. |
 | Vendor | Disabled placeholder | Requires an explicit verified contract and credentials. |
 
@@ -59,6 +64,20 @@ celery -A app.celery_app worker -Q dps_history --concurrency=24
 celery -A app.celery_app worker -Q financial_download --concurrency=12
 celery -A app.celery_app worker -Q financial_extract --concurrency=3
 ```
+
+Pass 1 evidence smoke runs are synchronous and bounded:
+
+```bash
+cd apps/api
+alembic upgrade head
+python -m app.jobs.evidence_pass1 --source psx_announcements --limit 10
+python -m app.jobs.evidence_pass1 --source dawn --limit 10
+python -m app.jobs.evidence_pass1 --source gdelt --limit 25
+```
+
+Available Pass 1 keys are `psx_announcements`, `dawn`, `business_recorder`,
+`mettis`, `sbp_releases`, `imf_news`, and `gdelt`. These commands do not start a
+scheduler and do not modify Phase 2 queue production.
 
 Hybrid demo/live initialization:
 

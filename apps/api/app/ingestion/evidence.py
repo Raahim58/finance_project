@@ -37,7 +37,7 @@ ALLOWED_CANDIDATE_TRANSITIONS: Mapping[CandidateStatus, frozenset[CandidateStatu
         {CandidateStatus.FETCH_READY, CandidateStatus.REJECTED, CandidateStatus.EXPIRED}
     ),
     CandidateStatus.FETCH_READY: frozenset(
-        {CandidateStatus.EVALUATING, CandidateStatus.EXPIRED}
+        {CandidateStatus.EVALUATING, CandidateStatus.REJECTED, CandidateStatus.EXPIRED}
     ),
     CandidateStatus.EVALUATING: frozenset(
         {
@@ -51,7 +51,12 @@ ALLOWED_CANDIDATE_TRANSITIONS: Mapping[CandidateStatus, frozenset[CandidateStatu
         {CandidateStatus.FETCH_READY, CandidateStatus.EXPIRED}
     ),
     CandidateStatus.CLUSTERED: frozenset(
-        {CandidateStatus.SELECTED, CandidateStatus.DUPLICATE, CandidateStatus.REJECTED}
+        {
+            CandidateStatus.SELECTED,
+            CandidateStatus.DUPLICATE,
+            CandidateStatus.REJECTED,
+            CandidateStatus.FAILED,
+        }
     ),
     CandidateStatus.SELECTED: frozenset(),
     CandidateStatus.DUPLICATE: frozenset(),
