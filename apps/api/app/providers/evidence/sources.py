@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from urllib.parse import urljoin, urlsplit
 
@@ -137,6 +137,14 @@ class HttpEvidenceSource:
             historical_days = int((cursor or {}).get("historical_days", 0))
             if historical_days:
                 params["timespan"] = f"{min(historical_days, 90)}d"
+            if (cursor or {}).get("date_from") and (cursor or {}).get("date_to"):
+                start = datetime.fromisoformat(str(cursor["date_from"]))
+                end = datetime.fromisoformat(str(cursor["date_to"]))
+                if (end - start).days > 90:
+                    start = end - timedelta(days=90)
+                params.pop("timespan", None)
+                params["startdatetime"] = start.strftime("%Y%m%d000000")
+                params["enddatetime"] = end.strftime("%Y%m%d235959")
         content, _, _, _ = self.fetcher(self.discovery_url, params=params)
         if self.discovery_kind == "rss":
             candidates = RssAtomDiscovery(self.key, self.publisher, self.topic).parse(content)
@@ -199,16 +207,17 @@ class PsxAnnouncementSource:
     fetcher: Fetcher = bounded_http_fetch
 
     def discover_since(self, cursor: Mapping[str, Any] | None, limit: int) -> DiscoveryBatch:
-        offset = max(0, int((cursor or {}).get("offset", 0)))
+        values = dict(cursor or {})
+        offset = max(0, int(values.get("offset", 0)))
         count = min(max(limit, 1), 50)
         data = {
             "type": "C",
-            "symbol": "",
+            "symbol": str(values.get("symbol") or ""),
             "query": "",
             "count": count,
             "offset": offset,
-            "date_from": "",
-            "date_to": "",
+            "date_from": str(values.get("date_from") or ""),
+            "date_to": str(values.get("date_to") or ""),
             "page": "annc",
         }
         content, _, _, _ = self.fetcher(self.discovery_url, method="POST", data=data)

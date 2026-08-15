@@ -385,6 +385,7 @@ def run_source_once(db: Session, evidence_source: EvidenceSource, *, limit: int 
         batch = evidence_source.discover_since(cursor, limit)
     except Exception as exc:
         state.consecutive_failures += 1
+        state.healthy_since = None
         state.last_error_class = type(exc).__name__
         state.last_error_message = str(exc)[:2000]
         state.diagnostics_json = _json({"stage": "discovery", "failed": 1})
@@ -463,6 +464,8 @@ def run_source_once(db: Session, evidence_source: EvidenceSource, *, limit: int 
             counts["failed"] += 1
     state.cursor_json = _json(batch.next_cursor)
     state.last_success_at = datetime.now(UTC)
+    if state.healthy_since is None or state.consecutive_failures:
+        state.healthy_since = state.last_success_at
     state.consecutive_failures = 0
     state.diagnostics_json = _json(counts)
     db.commit()

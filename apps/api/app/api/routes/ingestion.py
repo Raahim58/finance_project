@@ -26,6 +26,7 @@ from app.services.ingestion_service import (
 from app.ingestion.evidence_catalog import SECTOR_DRIVERS, TOPIC_QUERIES
 from app.jobs.evidence_tasks import historical_hydrate, targeted_refresh
 from app.services.evidence_scheduler_service import evidence_operational_status
+from app.services.evidence_history_service import create_historical_request
 
 router = APIRouter()
 
@@ -161,22 +162,30 @@ def request_evidence_history(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    instrument = db.scalar(select(Instrument).where(Instrument.symbol == payload.symbol))
-    if instrument is None:
-        raise HTTPException(status_code=404, detail="Instrument not found")
-    row = EvidenceRefreshRequest(
-        requested_by_user_id=current_user.id,
-        request_type="historical",
-        scope_key=f"deep_instrument:{instrument.id}",
-        query_text=f'(\"{instrument.symbol}\" OR \"{instrument.name}\") AND Pakistan',
-        source_keys_json='["gdelt"]',
-        status="queued",
-        priority_class="historical",
-        max_candidates=payload.max_candidates,
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
+    instrument = None
+    if payload.symbol:
+        instrument = db.scalar(select(Instrument).where(Instrument.symbol == payload.symbol))
+        if instrument is None:
+            raise HTTPException(status_code=404, detail="Instrument not found")
+    try:
+        row = create_historical_request(
+            db,
+            preset_key=payload.preset,
+            instrument=instrument,
+            requested_by_user_id=current_user.id,
+            date_from=payload.date_from,
+            date_to=payload.date_to,
+            source_keys=tuple(payload.source_keys) if payload.source_keys else None,
+            max_candidates=payload.max_candidates,
+            fetch_budget=payload.fetch_budget,
+            storage_budget_bytes=(
+                payload.storage_budget_mb * 1024 * 1024
+                if payload.storage_budget_mb
+                else None
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     row.status = "running"
     row.started_at = datetime.now(UTC)
     db.commit()

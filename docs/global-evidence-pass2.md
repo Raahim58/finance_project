@@ -35,10 +35,12 @@ visible on the durable row and can be reconstructed.
 ## Historical policy
 
 Holdings, benchmark instruments, promoted screening candidates and explicitly deep
-instruments produce at most one initial low-priority hydration request. Each request
-is bounded to 50 candidates. The free GDELT DOC window is capped at 90 days in this
-implementation; longer 12–24 month hydration requires an additional verified archive
-source in a later pass. It does not trigger unbounded PDF or article ingestion.
+instruments produce at most one initial low-priority hydration request. Pass 3 now
+wraps these requests in durable 12-month PSX/deep-company and 90-day news presets.
+The free GDELT DOC window remains capped at 90 days, so 12-month deep-company work
+uses the existing PSX source for official metadata/documents and does not pretend to
+provide 12 months of general publisher news. It does not trigger unbounded PDF or
+article ingestion.
 
 ## APIs
 
@@ -57,8 +59,8 @@ article text.
 
 ## Intentional later work
 
-Playwright fallback is still absent. DNS-rebinding protection beyond literal/private
-redirect checks requires deployment-level egress controls. Broader historical archive
-connectors, multilingual normalization and source-specific extraction refinements are
-remaining Phase 3 limitations. Phase 4–6 retrieval, entity intelligence, event
-reasoning and final assistant synthesis remain out of scope.
+Playwright fallback, broader source coverage, multilingual normalization, and
+source-specific extraction refinements remain later-pass work. DNS-rebinding
+protection beyond literal/private redirect checks requires deployment-level egress
+controls. Product Phase 4–6 retrieval, entity intelligence, event reasoning, and
+final assistant synthesis remain out of scope.

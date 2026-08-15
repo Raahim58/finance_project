@@ -229,7 +229,7 @@ def test_deep_company_historical_request_is_bounded_and_idempotent():
         assert create_deep_historical_requests(db, max_new=5) == 0
         request = db.scalar(select(EvidenceRefreshRequest))
         assert request.priority_class == "historical"
-        assert request.max_candidates == 50
+        assert request.max_candidates == 100
         assert "Deep Company Limited" in request.query_text
 
 

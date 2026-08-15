@@ -21,6 +21,10 @@ from app.models.evidence import (
 )
 from app.models.workstation import DataSource, Event, EventSource, Instrument
 from app.services.evidence_operations import EvidenceSpool, operational_counts, reconcile_refresh_requests
+from app.services.evidence_history_service import (
+    create_historical_request,
+    live_evidence_pressure,
+)
 from app.services.evidence_pipeline import _transition, ensure_source_config
 from app.services.screening_service import deep_instrument_ids
 
@@ -116,21 +120,12 @@ def create_deep_historical_requests(db: Session, *, max_new: int | None = None) 
         )
         if exists:
             continue
-        query = f'("{instrument.symbol}" OR "{instrument.name}") AND Pakistan'
-        db.add(
-            EvidenceRefreshRequest(
-                request_type="historical",
-                scope_key=scope_key,
-                query_text=query,
-                source_keys_json='["gdelt"]',
-                status="queued",
-                priority_class="historical",
-                max_candidates=50,
-            )
+        create_historical_request(
+            db,
+            preset_key="deep_company_12m",
+            instrument=instrument,
         )
         created += 1
-    if created:
-        db.commit()
     return created
 
 
@@ -274,7 +269,12 @@ def run_evidence_scheduler_once(db: Session) -> SchedulerResult:
     ).all()
     requests.sort(key=lambda request: (request.priority_class == "historical", request.created_at))
     live_queued = 0
+    historical_must_yield = (
+        live_evidence_pressure(db) >= settings.evidence_historical_live_backlog_reserve > 0
+    )
     for request in requests:
+        if request.priority_class == "historical" and historical_must_yield:
+            continue
         if request.priority_class == "historical" and historical_queued >= settings.evidence_historical_queue_target:
             continue
         if request.priority_class == "live" and live_queued >= settings.evidence_discovery_queue_target:
@@ -328,6 +328,23 @@ def evidence_operational_status(db: Session) -> dict[str, object]:
     global_counts["historical_candidates"] = sum(
         json.loads(row.metadata_json or "{}").get("priority_class") == "historical"
         for row in candidates
+    )
+    global_counts["historical_requests"] = dict(
+        db.execute(
+            select(EvidenceRefreshRequest.status, func.count())
+            .where(EvidenceRefreshRequest.priority_class == "historical")
+            .group_by(EvidenceRefreshRequest.status)
+        ).all()
+    )
+    global_counts["historical_fetched_bytes"] = db.scalar(
+        select(func.coalesce(func.sum(EvidenceRefreshRequest.fetched_bytes), 0)).where(
+            EvidenceRefreshRequest.priority_class == "historical"
+        )
+    )
+    global_counts["historical_storage_budget_bytes"] = db.scalar(
+        select(func.coalesce(func.sum(EvidenceRefreshRequest.storage_budget_bytes), 0)).where(
+            EvidenceRefreshRequest.priority_class == "historical"
+        )
     )
     parsed_count = sum(row.parser_version is not None for row in candidates)
     global_counts["extraction_success_rate"] = (

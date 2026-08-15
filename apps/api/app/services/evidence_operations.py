@@ -169,6 +169,50 @@ def _record_request_outcome(db: Session, row: DiscoveryCandidate, outcome: str) 
         request.rejected_count += 1
 
 
+def _reserve_historical_fetch(db: Session, row: DiscoveryCandidate) -> bool:
+    metadata = json.loads(row.metadata_json or "{}")
+    if metadata.get("priority_class") != "historical" or not metadata.get("request_id"):
+        return True
+    request = db.get(
+        EvidenceRefreshRequest,
+        str(metadata["request_id"]),
+        with_for_update=True,
+    )
+    if request is None:
+        return True
+    if request.fetched_count >= request.fetch_budget:
+        progress = json.loads(request.progress_json or "{}")
+        progress["halted_reason"] = "fetch_budget_reached"
+        request.progress_json = _json(progress)
+        request.status = "partial"
+        request.completed_at = datetime.now(UTC)
+        return False
+    request.fetched_count += 1
+    return True
+
+
+def _record_historical_bytes(db: Session, row: DiscoveryCandidate, byte_count: int) -> bool:
+    metadata = json.loads(row.metadata_json or "{}")
+    if metadata.get("priority_class") != "historical" or not metadata.get("request_id"):
+        return True
+    request = db.get(
+        EvidenceRefreshRequest,
+        str(metadata["request_id"]),
+        with_for_update=True,
+    )
+    if request is None:
+        return True
+    if request.fetched_bytes + byte_count > request.storage_budget_bytes:
+        progress = json.loads(request.progress_json or "{}")
+        progress["halted_reason"] = "storage_budget_reached"
+        request.progress_json = _json(progress)
+        request.status = "partial"
+        request.completed_at = datetime.now(UTC)
+        return False
+    request.fetched_bytes += byte_count
+    return True
+
+
 def discover_stage(
     db: Session,
     evidence_source: EvidenceSource,
@@ -200,6 +244,8 @@ def discover_stage(
         if cursor_override is None:
             state.cursor_json = _json(batch.next_cursor)
         state.last_success_at = now
+        if state.healthy_since is None or state.consecutive_failures:
+            state.healthy_since = now
         state.next_poll_at = now + timedelta(seconds=config.poll_interval_seconds)
         state.consecutive_failures = 0
         state.last_error_class = None
@@ -218,6 +264,7 @@ def discover_stage(
         return DiscoveryStageResult(tuple(identifiers), len(batch.candidates), new_count)
     except Exception as exc:
         state.consecutive_failures += 1
+        state.healthy_since = None
         state.last_error_class = type(exc).__name__
         state.last_error_message = str(exc)[:2000]
         circuit_until = None
@@ -263,11 +310,25 @@ def fetch_stage(
         _record_request_outcome(db, row, "rejected")
         db.commit()
         return FetchStageResult(row.id, "rejected")
+    if not _reserve_historical_fetch(db, row):
+        row.scoring_reasons_json = '["historical_fetch_budget_reached"]'
+        _transition(row, CandidateStatus.REJECTED)
+        row.lease_expires_at = None
+        _record_request_outcome(db, row, "rejected")
+        db.commit()
+        return FetchStageResult(row.id, "historical_fetch_budget_reached")
     _transition(row, CandidateStatus.EVALUATING)
     row.lease_expires_at = datetime.now(UTC) + timedelta(seconds=settings.evidence_stage_lease_seconds)
     db.commit()
     try:
         raw = evidence_source.fetch(candidate)
+        if not _record_historical_bytes(db, row, len(raw.content)):
+            row.scoring_reasons_json = '["historical_storage_budget_reached"]'
+            _transition(row, CandidateStatus.REJECTED)
+            row.lease_expires_at = None
+            _record_request_outcome(db, row, "rejected")
+            db.commit()
+            return FetchStageResult(row.id, "historical_storage_budget_reached")
         raw_path = spool.write_raw(row.id, raw.content)
         row = db.get(DiscoveryCandidate, candidate_id)
         metadata, pipeline = _pipeline_metadata(row)

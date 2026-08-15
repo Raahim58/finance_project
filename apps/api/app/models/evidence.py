@@ -1,13 +1,15 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    BigInteger,
     Numeric,
     String,
     Text,
@@ -73,6 +75,7 @@ class EvidenceSourceState(Base):
     next_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    healthy_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_error_class: Mapped[str | None] = mapped_column(String(160))
     last_error_message: Mapped[str | None] = mapped_column(Text)
@@ -171,6 +174,11 @@ class EvidenceRefreshRequest(Base):
             name="ck_evidence_refresh_priority",
         ),
         CheckConstraint("max_candidates > 0", name="ck_evidence_refresh_limit_positive"),
+        CheckConstraint("fetch_budget > 0", name="ck_evidence_refresh_fetch_budget_positive"),
+        CheckConstraint(
+            "storage_budget_bytes > 0",
+            name="ck_evidence_refresh_storage_budget_positive",
+        ),
         Index("ix_evidence_refresh_status_priority", "status", "priority_class", "created_at"),
         Index("ix_evidence_refresh_user_created", "requested_by_user_id", "created_at"),
     )
@@ -184,6 +192,16 @@ class EvidenceRefreshRequest(Base):
     status: Mapped[str] = mapped_column(String(20), default="queued", nullable=False)
     priority_class: Mapped[str] = mapped_column(String(20), default="live", nullable=False)
     max_candidates: Mapped[int] = mapped_column(Integer, nullable=False)
+    preset_key: Mapped[str | None] = mapped_column(String(40))
+    date_from: Mapped[date | None] = mapped_column(Date)
+    date_to: Mapped[date | None] = mapped_column(Date)
+    progress_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    fetch_budget: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    storage_budget_bytes: Mapped[int] = mapped_column(
+        BigInteger, default=250 * 1024 * 1024, nullable=False
+    )
+    fetched_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    fetched_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     discovered_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     selected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     duplicate_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

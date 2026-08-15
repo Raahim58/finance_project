@@ -34,9 +34,16 @@ Pass 1 performs no import-time I/O and retains its bounded manual runner. Pass 2
 adds evidence-only discovery, fetch, parse, PDF, index, and historical Celery queues;
 a dedicated Postgres-led scheduler; bounded leases/backpressure/retries and source
 circuits; candidate/spool retention; deep-company historical requests; operational
-health; and ownership-scoped targeted refresh requests. Phase 4 remains the
-unstructured retrieval layer; Phases 5–6 entity/event intelligence and final
-assistant reasoning are not pulled into ingestion.
+health; and ownership-scoped targeted refresh requests.
+
+Pass 3 adds only conservative historical hydration. Durable presets cover 12
+months of PSX announcement metadata, 12 months of existing-source evidence for
+Deep companies, and 90 days of configured news discovery. Each execution advances
+one bounded Postgres cursor, yields whenever durable live work exists, and enforces
+candidate, fetch, and byte budgets at the worker boundary. Budget increases require
+seven continuous healthy days. Source breadth, new publisher adapters, and
+Playwright remain later-pass work. Product Phases 4–6 retrieval, entity/event
+intelligence, and final assistant reasoning are not pulled into ingestion.
 
 ## Portfolio state
 

@@ -12,10 +12,11 @@ from sqlalchemy import func, select
 from app.celery_app import celery_app
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.ingestion.evidence_catalog import TOPIC_QUERIES, build_pass1_registry
+from app.ingestion.evidence_catalog import build_pass1_registry
 from app.models.evidence import DiscoveryCandidate, EvidenceRefreshRequest, EvidenceSourceConfig
 from app.providers.evidence.sources import HttpEvidenceSource
 from app.services.evidence_operations import discover_stage, fetch_stage, index_stage, parse_stage
+from app.services.evidence_history_service import run_historical_discovery_slice
 
 NETWORK_RETRY = {
     "autoretry_for": (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError),
@@ -175,23 +176,16 @@ def historical_hydrate(request_id: str) -> dict[str, object]:
         request = db.get(EvidenceRefreshRequest, request_id)
         if request is None:
             raise ValueError("Historical evidence request not found")
-        if request.status in {"processing", "complete", "partial"}:
+        if request.status in {"complete", "partial"}:
             return {"request_id": request.id, "status": request.status, "idempotent": True}
         request.status = "running"
         request.started_at = request.started_at or datetime.now(UTC)
         db.commit()
-        query = request.query_text or TOPIC_QUERIES.get(request.scope_key, request.scope_key)
-        source = _gdelt_source(query)
-        result = discover_stage(
-            db,
-            source,
-            limit=request.max_candidates,
-            priority_class="historical",
-            cursor_override={"historical_days": 90},
-            request_id=request.id,
-        )
+        result, outcome = run_historical_discovery_slice(db, request)
+    if result is None:
+        return {"request_id": request_id, "outcome": outcome, "queued": 0}
     queued = sum(
         _publish_with_capacity(candidate_id, fetch, "evidence_fetch", 8, "fetch")
         for candidate_id in result.candidate_ids
     )
-    return {"request_id": request_id, **asdict(result), "queued": queued}
+    return {"request_id": request_id, "outcome": outcome, **asdict(result), "queued": queued}
