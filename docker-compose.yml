@@ -17,8 +17,43 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  worker-network:
+    build:
+      context: ./apps/api
+    command: celery -A app.celery_app worker -Q broad_fundamentals,dps_history,financial_download --concurrency=16 --loglevel=INFO
+    environment:
+      DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      SOURCE_ARTIFACT_ROOT: /data/artifacts
+    volumes:
+      - source_artifacts:/data/artifacts
+    depends_on:
+      - postgres
+      - redis
+
+  worker-extract:
+    build:
+      context: ./apps/api
+    command: celery -A app.celery_app worker -Q financial_extract --concurrency=2 --loglevel=INFO
+    environment:
+      DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      SOURCE_ARTIFACT_ROOT: /data/artifacts
+    volumes:
+      - source_artifacts:/data/artifacts
+    depends_on:
+      - postgres
+      - redis
 
 volumes:
   postgres_data:
+  redis_data:
+  source_artifacts:

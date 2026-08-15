@@ -111,7 +111,8 @@ def _refresh_scstrade(db: Session) -> dict[str, object]:
     attempted = accepted = rejected = 0
     latest_date: date | None = None
     errors: list[str] = []
-    for symbol in settings.market_data_default_symbols:
+    from app.services.market_ingestion import get_active_company_symbols
+    for symbol in get_active_company_symbols(db):
         try:
             rows = provider.fetch_history(symbol, start, end)
         except Exception as exc:
@@ -156,7 +157,8 @@ def _refresh_psx_financials(db: Session, symbols: list[str] | None = None, limit
     latest_date: date | None = None
     errors: list[str] = []
     remaining = limit if limit is not None else settings.research_report_limit_per_run
-    target_symbols = list(symbols or settings.market_data_default_symbols)
+    from app.services.screening_service import deep_instrument_ids
+    target_symbols = list(symbols or db.scalars(select(Instrument.symbol).where(Instrument.id.in_(deep_instrument_ids(db)))))
     per_symbol_limit = max(1, math.ceil(remaining / max(1, len(target_symbols))))
     for symbol in target_symbols:
         if remaining <= 0:
@@ -275,7 +277,6 @@ def run_due_ingestion_jobs(db: Session) -> list[dict[str, object]]:
     today = date.today()
     schedules = [
         ("mettis", today.isoformat()),
-        ("psx_financials", today.isoformat()),
         ("sbp", today.isoformat()),
         ("scstrade", f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"),
         ("pbs", f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"),
@@ -386,7 +387,8 @@ def bootstrap_next_market_history(db: Session) -> IngestionRun | None:
     end = date.today()
     start = end - timedelta(days=settings.market_history_years * 366)
     minimum_rows = int(settings.market_history_years * 252 * 0.80)
-    for symbol in settings.market_data_default_symbols:
+    from app.services.screening_service import deep_instrument_ids
+    for symbol in db.scalars(select(Instrument.symbol).where(Instrument.id.in_(deep_instrument_ids(db)))):
         count = len(price_series(db, symbol, start, end))
         if count < minimum_rows:
             return run_historical_backfill(

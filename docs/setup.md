@@ -52,17 +52,17 @@ Never use `--with-mock-world` in an `auto`, `dps`, or other live-data database.
 Even if old mock rows exist, live modes exclude them from canonical prices,
 market screens, portfolio valuation, and quant inputs.
 
-Run the API and scheduler:
+Run the API, scheduler, and the four Phase 2 queues:
 
 ```bash
 uvicorn app.main:app --reload
+celery -A app.celery_app worker -Q broad_fundamentals,dps_history,financial_download --concurrency=24 --loglevel=INFO
+celery -A app.celery_app worker -Q financial_extract --concurrency=2 --loglevel=INFO
 python -m app.jobs.scheduler --once
 python -m app.jobs.scheduler
-python -m app.jobs.backfill_market_history --provider dps --symbols MEBL,SYS --start 2021-01-01 --end 2026-08-10
 ```
 
-The current default universe uses `ENGROH`; `ENGRO` is a distinct delisted
-historical identity and is not silently remapped for valuation.
+The live universe is synchronized from observed DPS symbol data; there is no configured stock list. Expensive history/report work is reconstructed from Postgres coverage rows after a Redis loss. Docker Compose persists Postgres, Redis AOF data, and source artifacts in named volumes.
 
 `MARKET_DATA_MODE=mock` is development-only. `dps` uses the verified direct DPS adapter; `auto` tries DPS and uses Yahoo only as a labeled real-data fallback. A failed live refresh retains prior observed rows and records failure/staleness; it never generates mock replacements. NCCPL remains a manual CSV import because ordinary retrieval is blocked; no anti-bot bypass is implemented.
 

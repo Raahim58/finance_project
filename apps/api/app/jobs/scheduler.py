@@ -9,8 +9,10 @@ from app.models.user import User
 from app.models.workstation import MonitoringRule
 from app.services.monitoring_service import run_monitoring
 from app.services.ledger_service import apply_recorded_corporate_actions, generate_daily_snapshots
-from app.services.ingestion_service import bootstrap_next_market_history, run_due_ingestion_jobs
+from app.services.ingestion_service import run_due_ingestion_jobs
 from app.services.ingestion_run_service import fail_ingestion_run, finish_ingestion_run, start_ingestion_run
+from app.services.phase2_orchestration import enqueue_reconstructable_phase2_work
+from app.services.screening_service import compute_screening_snapshots
 from sqlalchemy import select
 
 
@@ -45,7 +47,8 @@ def run_once() -> None:
                 finish_ingestion_run(db, health_run, {"attempted": getattr(run, "records_written", 0), "accepted": getattr(run, "records_written", 0), "rejected": 0, "latest_observation_at": latest, "diagnostics": {"attempted_provider": run.attempted_provider, "used_provider": run.used_provider}})
         corporate_actions = apply_recorded_corporate_actions(db)
         snapshot_count = generate_daily_snapshots(db)
-        history_run = bootstrap_next_market_history(db) if run.status == "success" else None
+        phase2_queued = enqueue_reconstructable_phase2_work(db) if run.status == "success" and settings.market_data_mode != "mock" else {}
+        screening_count = len(compute_screening_snapshots(db)) if run.status == "success" and settings.market_data_mode != "mock" else 0
         # Research and macro providers are independent of the market-price job.
         # Each provider records its own terminal state inside run_due_ingestion_jobs.
         background_runs = run_due_ingestion_jobs(db)
@@ -55,9 +58,10 @@ def run_once() -> None:
         f"status={run.status} mode={run.mode} attempted_provider={run.attempted_provider} "
         f"used_provider={run.used_provider} latest_trade_date={run.latest_trade_date}"
         f" portfolio_snapshots={snapshot_count} monitoring_runs={monitoring_runs}"
-        f" history_run={history_run.id if history_run else None}"
         f" background_jobs={len(background_runs)}"
         f" corporate_actions={corporate_actions['applied']}"
+        f" phase2_queued={phase2_queued}"
+        f" screening_snapshots={screening_count}"
     )
 
 

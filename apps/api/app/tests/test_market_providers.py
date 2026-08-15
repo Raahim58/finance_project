@@ -156,9 +156,8 @@ def test_provider_normalization_converts_nan_to_none(monkeypatch):
     assert row.market_cap is None
 
 
-def test_yahoo_provider_uses_market_data_default_symbols(monkeypatch):
+def test_yahoo_provider_requires_observed_or_explicit_symbols(monkeypatch):
     provider = YahooFinanceMarketDataProvider()
-    monkeypatch.setattr("app.services.market_providers.settings.market_data_default_symbols", ["ENGRO", "SYS"])
 
     seen_symbols: list[str] = []
 
@@ -175,7 +174,7 @@ def test_yahoo_provider_uses_market_data_default_symbols(monkeypatch):
     fake_yf = type("FakeYF", (), {"Ticker": FakeTicker})
     monkeypatch.setattr(provider, "_load_yfinance", lambda: fake_yf)
 
-    rows = provider.fetch_latest_prices()
+    rows = provider.fetch_latest_prices(["ENGRO", "SYS"])
 
     assert [row.symbol for row in rows] == ["ENGRO", "SYS"]
     assert seen_symbols == ["ENGRO.KA", "SYS.KA"]
@@ -183,7 +182,6 @@ def test_yahoo_provider_uses_market_data_default_symbols(monkeypatch):
 
 def test_yahoo_provider_skips_invalid_symbols_without_inserting_zero_rows(monkeypatch):
     provider = YahooFinanceMarketDataProvider()
-    monkeypatch.setattr("app.services.market_providers.settings.market_data_default_symbols", ["ENGRO", "ADOS"])
 
     class FakeTicker:
         def __init__(self, yahoo_symbol: str):
@@ -201,7 +199,9 @@ def test_yahoo_provider_skips_invalid_symbols_without_inserting_zero_rows(monkey
     monkeypatch.setattr(provider, "_load_yfinance", lambda: fake_yf)
 
     with SessionLocal() as db:
-        result = provider.refresh_latest(db)
+        rows = provider.fetch_latest_prices(["ENGRO", "ADOS"])
+        from app.services.market_ingestion import persist_market_data
+        result = persist_market_data(db, latest_prices=rows, source="yahoo") | provider.last_ingestion_summary
         prices = db.scalars(select(MarketPrice).order_by(MarketPrice.symbol.asc())).all()
 
     assert result["attempted_symbols"] == ["ENGRO", "ADOS"]
@@ -213,9 +213,8 @@ def test_yahoo_provider_skips_invalid_symbols_without_inserting_zero_rows(monkey
     assert prices[0].close == Decimal("108.0000")
 
 
-def test_yahoo_provider_explicit_symbols_override_default_symbols(monkeypatch):
+def test_yahoo_provider_uses_only_explicit_symbols(monkeypatch):
     provider = YahooFinanceMarketDataProvider()
-    monkeypatch.setattr("app.services.market_providers.settings.market_data_default_symbols", ["ENGRO", "SYS"])
 
     seen_symbols: list[str] = []
 

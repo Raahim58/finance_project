@@ -184,6 +184,7 @@ class DpsMarketDataProvider(MarketDataProvider):
     def __init__(self) -> None:
         self.captured_responses: list[dict[str, Any]] = []
         self.quality_issues: list[dict[str, Any]] = []
+        self.observed_universe: list[dict[str, Any]] = []
 
     def _capture(self, response: httpx.Response, effective_date: date | None = None) -> None:
         self.captured_responses.append({
@@ -335,7 +336,8 @@ class DpsMarketDataProvider(MarketDataProvider):
             universe_response = client.get("/symbols")
             universe_response.raise_for_status()
             self._capture(universe_response)
-            metadata = {row["symbol"]: row for row in self.parse_symbols(universe_response.json())}
+            self.observed_universe = self.parse_symbols(universe_response.json())
+            metadata = {row["symbol"]: row for row in self.observed_universe}
             rows: list[LatestPriceRow] = []
             for _ in range(10):
                 if cursor.weekday() < 5:
@@ -347,8 +349,14 @@ class DpsMarketDataProvider(MarketDataProvider):
                         break
                 cursor = cursor.fromordinal(cursor.toordinal() - 1)
         selected = {_normalize_symbol(value) for value in symbols} if symbols else None
+        ordinary_symbols = {
+            symbol for symbol, details in metadata.items()
+            if not details.get("is_debt") and not details.get("is_etf") and not details.get("is_gem")
+        }
         result = []
         for row in rows:
+            if row.symbol not in ordinary_symbols:
+                continue
             if selected is not None and row.symbol not in selected:
                 continue
             details = metadata.get(row.symbol, {})
@@ -371,10 +379,8 @@ class DpsMarketDataProvider(MarketDataProvider):
         latest_prices = self.fetch_latest_prices()
         if not latest_prices:
             raise RuntimeError("DPS returned no usable market price rows")
-        fetched_symbols = {row.symbol for row in latest_prices}
-        missing_default_symbols = sorted(
-            set(settings.market_data_default_symbols) - fetched_symbols
-        )
+        from app.services.market_ingestion import sync_observed_dps_universe
+        universe_count = sync_observed_dps_universe(db, self.observed_universe)
         result = persist_market_data(db, latest_prices=latest_prices, source=self.source)
         data_source = db.scalar(select(DataSource).where(DataSource.name == "PSX DPS"))
         if data_source is None:
@@ -424,7 +430,7 @@ class DpsMarketDataProvider(MarketDataProvider):
         db.flush()
         reconcile_market_observations(db)
         db.commit()
-        result.update({"attempted_provider": self.source, "used_provider": self.source, "artifacts_written": artifact_count, "observations_written": observation_count, "missing_default_symbols": missing_default_symbols, "message": "Refreshed verified DPS market data with immutable raw artifacts." + (f" Missing configured symbols: {', '.join(missing_default_symbols)}." if missing_default_symbols else "")})
+        result.update({"attempted_provider": self.source, "used_provider": self.source, "artifacts_written": artifact_count, "observations_written": observation_count, "observed_active_universe": universe_count, "message": "Refreshed the observed DPS ordinary-equity universe and verified market data with immutable raw artifacts."})
         return result
 
     def fetch_symbol_history(
@@ -442,6 +448,7 @@ class DpsMarketDataProvider(MarketDataProvider):
             while cursor <= end:
                 response = client.post("/historical", data={"month": str(cursor.month), "year": str(cursor.year), "symbol": symbol})
                 response.raise_for_status()
+                self._capture(response, cursor)
                 for row in self.parse_symbol_history(response.text, symbol):
                     if start <= row.trade_date <= end:
                         rows[row.trade_date] = row
@@ -608,16 +615,14 @@ class YahooFinanceMarketDataProvider(MarketDataProvider):
         return {"ok": True, "provider": self.source}
 
     def _resolve_symbols(self, symbols: list[str] | None = None) -> list[str]:
-        if symbols is not None:
-            return [_normalize_symbol(symbol) for symbol in symbols if _normalize_symbol(symbol)]
-        return [_normalize_symbol(symbol) for symbol in settings.market_data_default_symbols if _normalize_symbol(symbol)]
+        return [_normalize_symbol(symbol) for symbol in (symbols or []) if _normalize_symbol(symbol)]
 
     def fetch_latest_prices(self, symbols: list[str] | None = None) -> list[LatestPriceRow]:
         yf = self._load_yfinance()
         symbols = self._resolve_symbols(symbols)
         if not symbols:
             raise RuntimeError(
-                "Yahoo Finance provider requires explicit symbols or MARKET_DATA_DEFAULT_SYMBOLS; it will not fetch every company by default."
+                "Yahoo Finance provider requires symbols from the observed database universe; it has no static coverage list."
             )
 
         attempted_symbols: list[str] = []
@@ -674,6 +679,16 @@ class YahooFinanceMarketDataProvider(MarketDataProvider):
             "failed_symbols": failed_symbols,
         }
         return rows
+
+    def refresh_latest(self, db: Session) -> dict[str, Any]:
+        from app.services.market_ingestion import get_active_company_symbols, persist_market_data
+        symbols = get_active_company_symbols(db)
+        rows = self.fetch_latest_prices(symbols)
+        if not rows:
+            raise RuntimeError("Yahoo Finance returned no usable rows for the observed active universe")
+        result = persist_market_data(db, latest_prices=rows, source=self.source)
+        result.update(self.last_ingestion_summary)
+        return result
 
     def fetch_symbol_history(
         self,

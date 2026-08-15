@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -25,7 +26,17 @@ def store_artifact(db: Session, data_source: DataSource, content: bytes, *, url:
     suffix = next((value for marker, value in (("pdf", ".pdf"), ("json", ".json"), ("csv", ".csv"), ("excel", ".xlsx")) if marker in content_type.lower()), ".bin")
     stored = LocalArtifactStore(settings.source_artifact_root).put(content, suffix)
     row = SourceArtifact(data_source_id=data_source.id, source_url=url, http_method=method, request_fingerprint=sha256(f"{method}:{url}".encode()).hexdigest(), effective_at=effective_at, sha256=digest, content_type=content_type, storage_path=stored.storage_path, parser_version=parser_version, status="parsed", response_metadata_json=json.dumps({"bytes": len(content)}))
-    db.add(row); db.flush(); return row
+    try:
+        with db.begin_nested():
+            db.add(row); db.flush()
+        return row
+    except IntegrityError:
+        # Parallel company/month tasks can observe identical generic/error
+        # bodies. The SHA key is the idempotency boundary; recover the winner.
+        existing = db.scalar(select(SourceArtifact).where(SourceArtifact.sha256 == digest))
+        if existing is None:
+            raise
+        return existing
 
 
 def persist_macro(db: Session, observations: list[ParsedMacroObservation], data_source: DataSource, artifact: SourceArtifact) -> int:

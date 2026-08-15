@@ -17,9 +17,9 @@ No endpoint, form field, selector, download URL, unit, or date convention may be
 
 | Source | Status | Observed contract and precedence |
 |---|---|---|
-| PSX DPS | Integrated + scheduled, primary prices | Current and historical OHLCV are validated, reconciled, and selected by priority. Invalid rows become quality issues. Index history, announcements, payouts, and corporate-action discovery are not yet certified complete. |
+| PSX DPS | Integrated + scheduled, primary prices | The observed ordinary-equity symbol feed defines the active universe. Current and monthly historical OHLCV are validated, reconciled, selected by priority, and retained with provenance. Company-page financial tables are separate `standardized_secondary` screening inputs. Invalid rows become quality issues. |
 | DPS symbol-price ZIP | Disabled | Its URL was discovered from the live manifest, but ordinary direct and cookie/referer requests returned HTTP 403. No bypass is attempted. |
-| PSX Financials | Integrated + daily schedule | New catalogue PDFs are content-addressed, parsed page-by-page, and indexed. Conservative deterministic extraction promotes only unambiguous normalized `FinancialFact` rows with page/document provenance; missing or ambiguous facts remain unavailable. |
+| PSX Financials | Celery historical + incremental | Catalogue coverage is separate from PDF/extraction coverage. Existing PDFs do not consume historical budgets. Text-native statement pages use layout/table extraction; sparse/image-only reports are marked for selective OCR or unavailable rather than fabricated. |
 | SCSTrade | Integrated + weekly supplemental schedule | Verified JSON history is normalized into canonical observations at lower priority than DPS. |
 | SBP key indicators | Integrated + daily schedule | Raw official page HTML is retained. Policy rate and observed 3-month MTB cut-off yield are effective-dated; the latter is explicitly marked risk-free. Broader EasyData FX/reserve/monetary history still needs stable dataset contracts. |
 | PBS Price Statistics | Integrated + weekly schedule | The current parser covers the official monthly SPI item workbook. Broader CPI/release/revision coverage remains incomplete. |
@@ -37,12 +37,13 @@ Fixture sidecars live under `apps/api/app/tests/fixtures/providers/`. They recor
 
 ```bash
 MARKET_DATA_MODE=auto
-MARKET_DATA_DEFAULT_SYMBOLS=ENGROH,SYS,OGDC,MEBL,LUCK,HBL,UBL,FFC,HUBC,MCB
 MARKET_DATA_REFRESH_SECONDS=300
 MARKET_HISTORY_YEARS=5
 MARKET_HISTORY_BOOTSTRAP_ENABLED=true
 SCHEDULED_RESEARCH_ENABLED=true
 SOURCE_ARTIFACT_ROOT=./data/artifacts
+CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_RESULT_BACKEND=redis://localhost:6379/1
 ```
 
 `auto` tries verified DPS first and uses Yahoo only as a labeled fallback. Exact prices, rankings, freshness, and sector statistics come from database queries. Mock observations are eligible only when `MARKET_DATA_MODE=mock`; local `APP_ENV` does not make data synthetic. No live index value is synthesized from constituent averages.
@@ -53,7 +54,8 @@ SOURCE_ARTIFACT_ROOT=./data/artifacts
 cd apps/api
 python -m app.jobs.scheduler --once
 python -m app.jobs.scheduler
-python -m app.jobs.backfill_market_history --provider dps --symbols MEBL,SYS --start 2021-01-01 --end 2026-08-10
+celery -A app.celery_app worker -Q broad_fundamentals,dps_history,financial_download --concurrency=24
+celery -A app.celery_app worker -Q financial_extract --concurrency=2
 ```
 
 Hybrid demo/live initialization:
@@ -61,12 +63,10 @@ Hybrid demo/live initialization:
 ```bash
 DEMO_USER_PASSWORD='choose-a-local-password' python -m app.seed.demo
 MARKET_DATA_MODE=auto python -m app.jobs.scheduler --once
-python -m app.jobs.backfill_market_history --provider dps --symbols ENGROH,SYS,OGDC,MEBL,LUCK,HBL,UBL,FFC,HUBC,MCB --start 2021-01-01 --end 2026-08-13
 ```
 
 `ENGRO` is retained as its own historical/delisted identity and is never mapped
-to a fresh quote from another security. The default current universe uses
-`ENGROH` (Engro Holdings Limited). Existing portfolios holding `ENGRO` therefore
+to a fresh quote from another security. Existing portfolios holding `ENGRO` therefore
 show an unavailable/stale current valuation until an explicit corporate-action
 workflow migrates that investor-owned position; the application does not silently
 rewrite it.

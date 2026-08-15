@@ -99,6 +99,29 @@ class IngestionRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class IngestionCoverage(Base):
+    """Durable work ledger; brokers may be discarded and rebuilt from this table."""
+
+    __tablename__ = "ingestion_coverage"
+    __table_args__ = (
+        UniqueConstraint("instrument_id", "dataset_type", "period_key", "source", name="uq_ingestion_coverage_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    instrument_id: Mapped[str] = mapped_column(ForeignKey("instruments.id"), index=True, nullable=False)
+    dataset_type: Mapped[str] = mapped_column(String(60), index=True, nullable=False)
+    period_key: Mapped[str] = mapped_column(String(160), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), index=True, default="missing", nullable=False)
+    source: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    item_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_class: Mapped[str | None] = mapped_column(String(160))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    diagnostics_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+
+
 class DataQualityIssue(Base):
     __tablename__ = "data_quality_issues"
 
@@ -412,6 +435,51 @@ class FinancialFact(Base):
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     document_id: Mapped[str | None] = mapped_column(ForeignKey("documents.id"), index=True)
     page_number: Mapped[int | None] = mapped_column(Integer)
+    source_label: Mapped[str | None] = mapped_column(String(255))
+    extraction_method: Mapped[str | None] = mapped_column(String(80))
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    diagnostics_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+
+
+class StandardizedFinancialFact(Base):
+    __tablename__ = "standardized_financial_facts"
+    __table_args__ = (
+        UniqueConstraint("instrument_id", "metric", "period_type", "period_key", "source", name="uq_standardized_fact"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    instrument_id: Mapped[str] = mapped_column(ForeignKey("instruments.id"), index=True, nullable=False)
+    metric: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    period_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    period_key: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    period_end: Mapped[date | None] = mapped_column(Date, index=True)
+    value: Mapped[Decimal] = mapped_column(Numeric(30, 8), nullable=False)
+    unit: Mapped[str] = mapped_column(String(40), nullable=False)
+    currency: Mapped[str | None] = mapped_column(String(10))
+    classification: Mapped[str] = mapped_column(String(40), default="standardized_secondary", nullable=False)
+    source: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    quality_status: Mapped[str] = mapped_column(String(30), default="observed", nullable=False)
+
+
+class CompanyScreeningSnapshot(Base):
+    __tablename__ = "company_screening_snapshots"
+    __table_args__ = (UniqueConstraint("instrument_id", "as_of_date", name="uq_company_screening_date"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    instrument_id: Mapped[str] = mapped_column(ForeignKey("instruments.id"), index=True, nullable=False)
+    as_of_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    sector: Mapped[str | None] = mapped_column(String(120), index=True)
+    score: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    sector_percentile: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    completeness: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False)
+    screenable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    promoted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    growth_flag: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    reasons_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class CorporateAction(Base):

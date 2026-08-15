@@ -19,6 +19,7 @@ from app.models.workstation import (
     AuditEvent,
     Conversation,
     CorporateAction,
+    CompanyScreeningSnapshot,
     DataQualityIssue,
     DataSource,
     Event,
@@ -27,6 +28,7 @@ from app.models.workstation import (
     EventSource,
     FinancialFact,
     IngestionRun,
+    IngestionCoverage,
     Instrument,
     InstrumentAlias,
     InvestorFinancialProfile,
@@ -48,6 +50,7 @@ from app.models.workstation import (
     ScenarioRun,
     ScenarioShock,
     SourceArtifact,
+    StandardizedFinancialFact,
 )
 
 __all__ = [
@@ -75,6 +78,7 @@ __all__ = [
     "AssistantMessage",
     "Conversation",
     "CorporateAction",
+    "CompanyScreeningSnapshot",
     "DataQualityIssue",
     "DataSource",
     "Event",
@@ -83,6 +87,7 @@ __all__ = [
     "EventSource",
     "FinancialFact",
     "IngestionRun",
+    "IngestionCoverage",
     "Instrument",
     "InstrumentAlias",
     "InvestorFinancialProfile",
@@ -104,4 +109,5 @@ __all__ = [
     "ScenarioRun",
     "ScenarioShock",
     "SourceArtifact",
+    "StandardizedFinancialFact",
 ]

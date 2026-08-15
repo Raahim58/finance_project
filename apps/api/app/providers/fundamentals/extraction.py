@@ -1,10 +1,7 @@
-"""Conservative extraction of normalized facts from text-native financial statements.
-
-Only unambiguous single-value rows with an explicit PKR scale are accepted. Ambiguous
-multi-column rows remain in document/RAG storage and are not promoted to exact facts.
-"""
+"""Deterministic, layout-aware normalization of text-native statement rows."""
 
 import re
+import io
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -36,6 +33,39 @@ class ExtractedFact:
     period_end: date
     page_number: int
     source_label: str
+    extraction_method: str = "text_layout"
+    confidence: Decimal = Decimal("0.900000")
+    consolidated: bool = True
+
+
+@dataclass(frozen=True)
+class FinancialPage:
+    page_number: int
+    text: str
+
+
+def parse_financial_pdf(content: bytes) -> tuple[list[FinancialPage], str, list[str]]:
+    """Use positional PDF text plus table extraction; never OCR text-native pages."""
+    import pdfplumber
+
+    pages: list[FinancialPage] = []
+    diagnostics: list[str] = []
+    with pdfplumber.open(io.BytesIO(content)) as pdf:
+        for number, page in enumerate(pdf.pages, start=1):
+            text = page.extract_text(layout=True) or ""
+            table_lines: list[str] = []
+            if any(signal in text.lower() for signal in ("financial position", "balance sheet", "profit and loss", "income statement", "cash flow")):
+                for table in page.extract_tables() or []:
+                    for row in table:
+                        cleaned = [" ".join(str(value or "").split()) for value in row]
+                        if any(cleaned): table_lines.append(" ".join(cleaned))
+            merged = text + (("\n" + "\n".join(table_lines)) if table_lines else "")
+            pages.append(FinancialPage(number, merged))
+    text_chars = sum(len(page.text.strip()) for page in pages)
+    classification = "text_native" if text_chars >= max(500, len(pages) * 100) else "scanned_or_sparse"
+    if classification == "scanned_or_sparse":
+        diagnostics.append("Sparse/image-only PDF detected after normal extraction; selective OCR is required.")
+    return pages, classification, diagnostics
 
 
 def _scale(text: str) -> Decimal | None:
@@ -48,15 +78,28 @@ def _scale(text: str) -> Decimal | None:
 
 
 def extract_facts(pages: list[object], period_end: date) -> tuple[list[ExtractedFact], list[str]]:
-    combined = "\n".join(str(getattr(page, "text", "")) for page in pages)
-    scale = _scale(combined)
-    if scale is None:
-        return [], ["No explicit PKR reporting scale was found; numerical rows were not promoted to structured facts."]
     facts: list[ExtractedFact] = []
-    seen: set[str] = set()
+    diagnostics: list[str] = []
+    seen: set[tuple[str, date]] = set()
+    statement_signals = ("statement of financial position", "balance sheet", "profit and loss", "income statement", "statement of profit or loss", "cash flow statement")
     for page in pages:
         page_number = int(getattr(page, "page_number", 0))
-        for raw_line in str(getattr(page, "text", "")).splitlines():
+        page_text = str(getattr(page, "text", ""))
+        lowered_page = page_text.lower()
+        scale = _scale(page_text) or _scale("\n".join(str(getattr(candidate, "text", "")) for candidate in pages[max(0, page_number - 2):page_number + 1]))
+        if scale is None and any(alias in lowered_page for alias in LABELS):
+            diagnostics.append(f"Page {page_number}: reporting scale unknown; rows were not promoted.")
+            continue
+        # Known financial row labels plus a dense numeric layout are sufficient
+        # when PDF extraction drops the statement heading onto an adjacent page.
+        known_labels = sum(alias in lowered_page for alias in LABELS)
+        if not any(signal in lowered_page for signal in statement_signals) and known_labels < 2:
+            continue
+        if scale is None:
+            diagnostics.append(f"Page {page_number}: reporting scale unknown; rows were not promoted.")
+            continue
+        unconsolidated = "unconsolidated" in lowered_page and "consolidated" not in lowered_page.replace("unconsolidated", "")
+        for raw_line in page_text.splitlines():
             line = " ".join(raw_line.strip().split())
             lowered = line.lower().rstrip(":")
             label = next((alias for alias in sorted(LABELS, key=len, reverse=True) if lowered == alias or lowered.startswith(f"{alias} ")), None)
@@ -64,22 +107,40 @@ def extract_facts(pages: list[object], period_end: date) -> tuple[list[Extracted
                 continue
             suffix = line[len(label):]
             values = NUMBER.findall(suffix)
-            if len(values) != 1:
+            if not values:
                 continue
             taxonomy = LABELS[label]
-            if taxonomy in seen:
-                continue
-            token = values[0]
-            negative = token.startswith("(") and token.endswith(")")
+            # Comparative financial statements conventionally display current
+            # then prior period. We only accept two columns; note-reference
+            # integers are discarded when three numeric tokens are present.
+            value_tokens = values[-2:] if len(values) >= 2 else values
             try:
-                value = Decimal(token.strip("()").replace(",", "")) * scale
-            except InvalidOperation:
-                continue
-            if taxonomy in {"earnings_per_share", "dividend_per_share"}:
-                value /= scale
-            facts.append(ExtractedFact(taxonomy, -value if negative else value, "PKR", "PKR", period_end, page_number, label))
-            seen.add(taxonomy)
-    diagnostics = [] if facts else ["No unambiguous single-value known financial rows were found; multi-column rows require a structured parser or review."]
+                comparative_end = date(period_end.year - 1, period_end.month, period_end.day)
+            except ValueError:
+                comparative_end = date(period_end.year - 1, period_end.month, 28)
+            periods = [period_end, comparative_end] if len(value_tokens) == 2 else [period_end]
+            for token, fact_period in zip(value_tokens, periods, strict=True):
+                key = (taxonomy, fact_period)
+                if key in seen:
+                    continue
+                negative = token.startswith("(") and token.endswith(")")
+                try:
+                    value = Decimal(token.strip("()").replace(",", "")) * scale
+                except InvalidOperation:
+                    continue
+                if taxonomy in {"earnings_per_share", "dividend_per_share"}:
+                    value /= scale
+                facts.append(ExtractedFact(taxonomy, -value if negative else value, "PKR", "PKR", fact_period, page_number, line[:255], consolidated=not unconsolidated))
+                seen.add(key)
+    if not facts:
+        diagnostics.append("No sufficiently unambiguous known financial-statement rows were found; facts remain unavailable.")
+    # Reconciliation is diagnostic only; it never manufactures a balancing fact.
+    latest = {fact.taxonomy_key: fact.value for fact in facts if fact.period_end == period_end}
+    if all(key in latest for key in ("assets", "liabilities", "equity")):
+        delta = abs(latest["assets"] - latest["liabilities"] - latest["equity"])
+        tolerance = max(abs(latest["assets"]) * Decimal("0.03"), Decimal("1"))
+        if delta > tolerance:
+            diagnostics.append("Assets did not approximately reconcile with liabilities plus equity; retained facts require review.")
     return facts, diagnostics
 
 

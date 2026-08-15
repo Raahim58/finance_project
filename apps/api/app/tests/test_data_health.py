@@ -60,7 +60,7 @@ def test_one_scheduled_provider_failure_does_not_block_others(monkeypatch):
     with SessionLocal() as db:
         results = run_due_ingestion_jobs(db)
 
-    assert attempted == ["mettis", "psx_financials", "sbp", "scstrade", "pbs", "world_bank"]
+    assert attempted == ["mettis", "sbp", "scstrade", "pbs", "world_bank"]
     assert results[0]["status"] == "failed"
     assert all(row["status"] == "success" for row in results[1:])
 

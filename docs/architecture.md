@@ -45,6 +45,8 @@ expected return when an observed effective-dated risk-free series is available.
 
 The orchestrator bounds iterations, retrieved chunks, and request time; gathers ownership-scoped calculations and citations; and falls back to an evidence-based deterministic answer when a provider response is ungrounded. Monitoring jobs persist runs and deduplicate alerts by rule/window. Recommendations require a user decision and never auto-apply.
 
-## Scheduling and future boundaries
+## Scheduling and ingestion workers
 
-The current in-process scheduler invokes ingestion and monitoring services using stable run keys. Provider families are failure-isolated and write canonical run accounting; source health is derived from both the latest attempt and actual structured observations under source-specific freshness SLAs. Redis may later improve caching/locking but is not a correctness dependency. The service/tool interfaces can later move to workers or expose selected read-only tools over MCP without changing finance logic. Broker automation, trade execution, derivatives, and external MCP runtime are intentionally absent.
+The scheduler keeps the efficient broad DPS current-session refresh in-process. Celery/Redis coordinate four expensive queues: one company DPS page, one symbol-month of DPS history, one financial catalogue/PDF download, and one PDF extraction per task. Network workers target 16–24 concurrent tasks; PDF extraction targets 2–4. Postgres `ingestion_coverage` rows are the durable work ledger, so Redis is never the source of completeness and lost messages can be reconstructed.
+
+The active broad universe is synchronized from observed DPS ordinary-equity identities. Standardized DPS facts are stored separately as `standardized_secondary`; official report `FinancialFact` rows remain issuer-report facts with document/page/row/method provenance. Screening snapshots are deterministic, persisted, sector-aware, and keep completeness separate from performance. Broker automation, trade execution, derivatives, and external MCP runtime remain absent.

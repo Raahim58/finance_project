@@ -219,6 +219,26 @@ def get_active_company_symbols(db: Session) -> list[str]:
     )
 
 
+def sync_observed_dps_universe(db: Session, rows: list[dict[str, object]]) -> int:
+    """Synchronize active ordinary-board equities from the observed DPS symbol feed."""
+    from app.models.workstation import Instrument
+    observed = {str(row["symbol"]).upper(): row for row in rows if not row.get("is_debt") and not row.get("is_etf") and not row.get("is_gem")}
+    existing = {company.symbol: company for company in db.scalars(select(Company))}
+    for symbol, details in observed.items():
+        upsert_company_from_price_row(db, LatestPriceRow(
+            symbol=symbol, name=str(details.get("name") or symbol), sector=str(details.get("sector") or "Unknown"),
+            trade_date=date.today(), close=None, previous_close=None, open=None, high=None, low=None, volume=None,
+            source_url="https://dps.psx.com.pk/symbols",
+        ), source="dps")
+    for symbol, company in existing.items():
+        instrument = db.scalar(select(Instrument).where(Instrument.company_id == company.id))
+        if symbol not in observed:
+            company.is_active = False
+            if instrument: instrument.active_to = date.today()
+    db.flush()
+    return len(observed)
+
+
 def upsert_company_from_price_row(db: Session, row: LatestPriceRow, *, source: str) -> Company:
     from app.models.workstation import Instrument
 
@@ -257,6 +277,9 @@ def upsert_company_from_price_row(db: Session, row: LatestPriceRow, *, source: s
     else:
         instrument.name = company.name
         instrument.sector = company.sector
+    if source.lower() == "dps":
+        instrument.active_from = instrument.active_from or date.today()
+        instrument.active_to = None
     if source.lower() != "mock":
         metadata = json.loads(instrument.metadata_json or "{}")
         metadata.update(

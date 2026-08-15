@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     app_env: str = "local"
     database_url: str = "sqlite+pysqlite:///./psx_ai_local.db"
     test_database_url: str = "sqlite+pysqlite:///:memory:"
+    database_pool_size: int = Field(default=24, ge=1, le=100)
+    database_max_overflow: int = Field(default=8, ge=0, le=100)
     jwt_secret_key: str = "dev-only-change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
@@ -35,7 +37,10 @@ class Settings(BaseSettings):
     assistant_max_tool_cost_units: int = 18
     assistant_max_retrieved_chunks: int = 8
     assistant_timeout_seconds: int = 30
-    market_data_default_symbols: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/1"
+    screening_completeness_threshold: float = Field(default=0.70, ge=0, le=1)
+    screening_promotion_percentile: float = Field(default=0.82, ge=0, le=1)
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:3000"]
     )
@@ -49,13 +54,6 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
-
-    @field_validator("market_data_default_symbols", mode="before")
-    @classmethod
-    def parse_market_data_default_symbols(cls, value: str | list[str]) -> list[str]:
-        if isinstance(value, str):
-            return [item.strip().upper() for item in value.split(",") if item.strip()]
-        return [str(item).strip().upper() for item in value if str(item).strip()]
 
     @field_validator("market_data_mode")
     @classmethod

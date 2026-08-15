@@ -169,6 +169,7 @@ def persist_normalized_observations(db: Session, rows: Iterable, source_name: st
         db.flush()
 
     accepted = rejected = 0
+    touched: set[tuple[str, datetime]] = set()
     for row in rows:
         cleaned, issues = validate_observed_price(row)
         if issues:
@@ -190,6 +191,7 @@ def persist_normalized_observations(db: Session, rows: Iterable, source_name: st
             db.add(DataQualityIssue(artifact_id=artifact.id, rule="instrument_unresolved", severity="error", details_json=json.dumps({"symbol": row.symbol}), selection_status="rejected"))
             continue
         effective_at = datetime.combine(row.trade_date, datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi"))
+        touched.add((instrument.id, effective_at))
         existing = db.scalar(
             select(MarketObservation).where(
                 MarketObservation.instrument_id == instrument.id,
@@ -215,7 +217,8 @@ def persist_normalized_observations(db: Session, rows: Iterable, source_name: st
             )
             accepted += 1
     db.flush()
-    reconcile_market_observations(db)
+    for instrument_id, effective_at in touched:
+        reconcile_market_observations(db, instrument_id=instrument_id, effective_at=effective_at)
     return accepted, rejected
 
 

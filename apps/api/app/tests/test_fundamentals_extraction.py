@@ -10,10 +10,15 @@ class Page:
     text: str
 
 
-def test_extracts_only_unambiguous_scaled_rows_with_provenance():
+def test_extracts_scaled_single_and_comparative_rows_with_provenance():
     facts, diagnostics = extract_facts([Page(7, "Amounts in PKR '000\nRevenue 1,250\nProfit after tax (125)\nTotal assets 3,000 2,800")], date(2025, 12, 31))
     assert diagnostics == []
-    assert [(fact.taxonomy_key, fact.value, fact.page_number) for fact in facts] == [("revenue", 1_250_000, 7), ("net_income", -125_000, 7)]
+    assert [(fact.taxonomy_key, fact.value, fact.period_end, fact.page_number) for fact in facts] == [
+        ("revenue", 1_250_000, date(2025, 12, 31), 7),
+        ("net_income", -125_000, date(2025, 12, 31), 7),
+        ("assets", 3_000_000, date(2025, 12, 31), 7),
+        ("assets", 2_800_000, date(2024, 12, 31), 7),
+    ]
 
 
 def test_rejects_facts_without_explicit_currency_scale():

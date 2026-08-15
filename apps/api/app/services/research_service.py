@@ -188,8 +188,18 @@ def _market_research(db: Session, instrument: Instrument) -> dict[str, object]:
     else:
         result["risk"] = {"available": False, "reason": "At least 31 price observations are required."}
     result["benchmark_comparison"] = {"available": False, "reason": "No benchmark was supplied for this company-research request."}
+    states = {row.adjustment_state for row in rows}
+    adjustment_state = "adjusted" if states == {"adjusted"} else ("unadjusted" if "unadjusted" in states else "uncertain")
+    result["adjustment_state"] = adjustment_state
+    if len(rows) >= 2 and rows[0].close:
+        result["price_return"] = float(rows[-1].close / rows[0].close - 1)
+        result["price_return_available"] = True
+    else:
+        result["price_return_available"] = False
+    if adjustment_state != "adjusted":
+        result["adjustment_warning"] = "Corporate-action adjustment coverage is incomplete. This result may be distorted by splits, bonus issues, rights issues or other capital actions."
     result["total_return_available"] = False
-    result["total_return_unavailable_reason"] = "Corporate-action coverage is not certified complete."
+    result["total_return_unavailable_reason"] = "Dividend/cash-distribution coverage is not certified complete; observed price return is shown separately."
     return result
 
 
