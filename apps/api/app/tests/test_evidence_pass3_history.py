@@ -111,6 +111,7 @@ def test_psx_history_advances_one_page_and_resumes_from_postgres(monkeypatch):
 
 def test_historical_discovery_yields_while_live_work_exists(monkeypatch):
     monkeypatch.setattr(settings, "evidence_historical_live_backlog_reserve", 1)
+    monkeypatch.setattr(settings, "evidence_fetch_queue_target", 2)
     with SessionLocal() as db:
         request = create_historical_request(db, preset_key="psx_12m")
         _, config, _ = ensure_source_config(db, "dawn")
@@ -137,6 +138,63 @@ def test_historical_discovery_yields_while_live_work_exists(monkeypatch):
         assert outcome == "yielded_to_live"
         assert request.status == "queued"
         assert json.loads(request.progress_json)["halted_reason"] == "yielding_to_live_work"
+
+
+def test_small_live_backlog_does_not_starve_history(monkeypatch):
+    source = PagedPsxSource()
+    monkeypatch.setattr(
+        "app.services.evidence_history_service.build_pass1_registry",
+        lambda: Registry(source),
+    )
+    monkeypatch.setattr(settings, "evidence_historical_live_backlog_reserve", 1)
+    monkeypatch.setattr(settings, "evidence_fetch_queue_target", 80)
+    monkeypatch.setattr(settings, "evidence_historical_batch_candidates", 1)
+    with SessionLocal() as db:
+        request = create_historical_request(db, preset_key="psx_12m", max_candidates=1)
+        _, config, _ = ensure_source_config(db, "dawn")
+        persist_candidate(
+            db,
+            config,
+            Candidate(
+                "dawn",
+                "https://www.dawn.com/news/small-live-pressure",
+                "Pakistan policy rate update",
+                "Dawn",
+                NOW,
+                "rss_atom",
+                external_id="small-live-pressure",
+                metadata={"priority_class": "live"},
+            ),
+        )
+        db.commit()
+
+        result, outcome = run_historical_discovery_slice(db, request)
+
+        assert outcome == "slice_complete"
+        assert result is not None
+        assert result.discovered == 1
+
+
+def test_historical_request_respects_open_source_circuit(monkeypatch):
+    monkeypatch.setattr(settings, "evidence_fetch_queue_target", 80)
+    monkeypatch.setattr(settings, "evidence_historical_live_backlog_reserve", 1)
+    with SessionLocal() as db:
+        request = create_historical_request(db, preset_key="psx_12m")
+        _, _, state = ensure_source_config(db, "psx_announcements")
+        state.consecutive_failures = settings.evidence_circuit_failure_threshold
+        state.next_poll_at = datetime.now(UTC) + timedelta(minutes=10)
+        db.commit()
+
+        result, outcome = run_historical_discovery_slice(db, request)
+        db.refresh(request)
+
+        assert result is None
+        assert outcome == "source_circuit_open"
+        assert request.status == "queued"
+        assert (
+            json.loads(request.progress_json)["halted_reason"]
+            == "source_circuit_open:psx_announcements"
+        )
 
 
 def test_historical_fetch_stops_before_storage_budget_is_exceeded(tmp_path):

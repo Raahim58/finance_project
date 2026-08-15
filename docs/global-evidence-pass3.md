@@ -27,10 +27,12 @@ Postgres `evidence_refresh_requests` row. The scheduler can therefore resume a
 stopped job without Redis state or restarting its completed pages.
 
 Historical requests and candidates use priority `8`; live work uses priority
-`0`. The scheduler does not publish a historical slice while durable live work
-meets `EVIDENCE_HISTORICAL_LIVE_BACKLOG_RESERVE` (one item by default). Worker
-prefetch remains one. Candidate, fetch, and byte ceilings are enforced again at
-the worker boundary so restarts or duplicate delivery cannot bypass them.
+`0`. The scheduler pauses historical slices when durable live work reaches the
+fetch queue target minus `EVIDENCE_HISTORICAL_LIVE_BACKLOG_RESERVE`; a small live
+backlog therefore keeps priority without starving history. Open source circuits
+also pause matching historical work. Worker prefetch remains one. Candidate,
+fetch, and byte ceilings are enforced again at the worker boundary so restarts or
+duplicate delivery cannot bypass them.
 
 Progress is available through:
 

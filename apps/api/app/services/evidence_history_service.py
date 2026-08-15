@@ -213,7 +213,7 @@ def create_historical_request(
 
 
 def live_evidence_pressure(db: Session) -> int:
-    """Count durable live work; any configured reserve makes history yield."""
+    """Count durable live work competing for shared downstream capacity."""
 
     nonterminal = {
         CandidateStatus.DISCOVERED.value,
@@ -237,6 +237,37 @@ def live_evidence_pressure(db: Session) -> int:
         ).all()
     )
     return pressure
+
+
+def historical_must_yield(db: Session) -> bool:
+    """Reserve downstream capacity for live work without starving history."""
+
+    live_limit = max(
+        1,
+        settings.evidence_fetch_queue_target
+        - settings.evidence_historical_live_backlog_reserve,
+    )
+    return live_evidence_pressure(db) >= live_limit
+
+
+def _source_circuit_open(db: Session, source_key: str) -> bool:
+    now = datetime.now(UTC)
+    state = db.scalar(
+        select(EvidenceSourceState)
+        .join(
+            EvidenceSourceConfig,
+            EvidenceSourceConfig.id == EvidenceSourceState.source_config_id,
+        )
+        .where(EvidenceSourceConfig.source_key == source_key)
+    )
+    if state is None or state.consecutive_failures < settings.evidence_circuit_failure_threshold:
+        return False
+    next_poll_at = state.next_poll_at
+    if next_poll_at is None:
+        return False
+    if next_poll_at.tzinfo is None:
+        next_poll_at = next_poll_at.replace(tzinfo=UTC)
+    return next_poll_at > now
 
 
 def _source_for_unit(unit: dict[str, Any]):
@@ -294,7 +325,7 @@ def run_historical_discovery_slice(
     """Run at most one bounded discovery page and persist its resume cursor."""
 
     progress = _initialize_legacy_request(db, request)
-    if live_evidence_pressure(db) >= settings.evidence_historical_live_backlog_reserve > 0:
+    if historical_must_yield(db):
         progress["yield_count"] = int(progress.get("yield_count", 0)) + 1
         progress["halted_reason"] = "yielding_to_live_work"
         request.progress_json = _json(progress)
@@ -320,6 +351,14 @@ def run_historical_discovery_slice(
         return None, "discovery_complete"
 
     unit = dict(units[unit_index])
+    if _source_circuit_open(db, str(unit["source_key"])):
+        progress["yield_count"] = int(progress.get("yield_count", 0)) + 1
+        progress["halted_reason"] = f"source_circuit_open:{unit['source_key']}"
+        request.progress_json = _json(progress)
+        request.status = "queued"
+        request.completed_at = None
+        db.commit()
+        return None, "source_circuit_open"
     batch_limit = min(settings.evidence_historical_batch_candidates, remaining)
     cursor = {
         "historical_days": (request.date_to - request.date_from).days,

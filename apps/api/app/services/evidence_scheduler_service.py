@@ -23,7 +23,7 @@ from app.models.workstation import DataSource, Event, EventSource, Instrument
 from app.services.evidence_operations import EvidenceSpool, operational_counts, reconcile_refresh_requests
 from app.services.evidence_history_service import (
     create_historical_request,
-    live_evidence_pressure,
+    historical_must_yield,
 )
 from app.services.evidence_pipeline import _transition, ensure_source_config
 from app.services.screening_service import deep_instrument_ids
@@ -269,11 +269,9 @@ def run_evidence_scheduler_once(db: Session) -> SchedulerResult:
     ).all()
     requests.sort(key=lambda request: (request.priority_class == "historical", request.created_at))
     live_queued = 0
-    historical_must_yield = (
-        live_evidence_pressure(db) >= settings.evidence_historical_live_backlog_reserve > 0
-    )
+    history_is_yielding = historical_must_yield(db)
     for request in requests:
-        if request.priority_class == "historical" and historical_must_yield:
+        if request.priority_class == "historical" and history_is_yielding:
             continue
         if request.priority_class == "historical" and historical_queued >= settings.evidence_historical_queue_target:
             continue
