@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.ingestion.evidence import Candidate, CandidateStatus, EvidenceSource, ParsedEvidence
@@ -188,12 +189,17 @@ def score_evidence(db: Session, parsed: ParsedEvidence, candidate: Candidate) ->
     instruments = db.scalars(select(Instrument)).all()
     aliases = db.execute(select(InstrumentAlias.alias, Instrument.symbol).join(Instrument, Instrument.id == InstrumentAlias.instrument_id)).all()
     names = [(item.symbol, item.name) for item in instruments] + [(symbol, alias) for alias, symbol in aliases]
-    for symbol, name in names:
-        patterns = (symbol, name)
-        if any(re.search(rf"(?<![a-z0-9]){re.escape(value.lower())}(?![a-z0-9])", text) for value in patterns if len(value) >= 2):
-            entities.add(symbol)
-            relevance += 0.65
-            reasons.append(f"instrument:{symbol}")
+    # PSX supplies the authoritative issuer symbol in discovery metadata. Scanning
+    # boilerplate for every instrument alias here creates false entity links (for
+    # example, "cash" or another issuer mentioned incidentally) and can merge
+    # unrelated official announcements.
+    if candidate.source_key != "psx_announcements":
+        for symbol, name in names:
+            patterns = (symbol, name)
+            if any(re.search(rf"(?<![a-z0-9]){re.escape(value.lower())}(?![a-z0-9])", text) for value in patterns if len(value) >= 2):
+                entities.add(symbol)
+                relevance += 0.65
+                reasons.append(f"instrument:{symbol}")
     matched_macro = sorted(term for term in MACRO_TERMS if term in text)
     if matched_macro:
         relevance += min(0.75, 0.18 * len(matched_macro))
@@ -237,13 +243,22 @@ def score_candidate_metadata(db: Session, candidate: Candidate) -> Score:
 
 
 def _find_duplicate(db: Session, row: DiscoveryCandidate, parsed: ParsedEvidence) -> DiscoveryCandidate | None:
+    row_metadata = json.loads(row.metadata_json or "{}")
+    official_symbol = str(row_metadata.get("symbol") or "").strip().upper()
+
+    def same_official_issuer(other: DiscoveryCandidate) -> bool:
+        if parsed.source_key != "psx_announcements":
+            return True
+        other_metadata = json.loads(other.metadata_json or "{}")
+        return bool(official_symbol) and str(other_metadata.get("symbol") or "").strip().upper() == official_symbol
+
     exact = db.scalar(
         select(DiscoveryCandidate).where(
             DiscoveryCandidate.id != row.id,
             DiscoveryCandidate.body_sha256 == parsed.body_sha256,
         )
     )
-    if exact:
+    if exact and same_official_issuer(exact):
         return exact
     if not parsed.simhash:
         return None
@@ -256,7 +271,14 @@ def _find_duplicate(db: Session, row: DiscoveryCandidate, parsed: ParsedEvidence
             or_(DiscoveryCandidate.published_at.is_(None), DiscoveryCandidate.published_at >= cutoff),
         ).limit(100)
     ).all()
-    return next((item for item in candidates if simhash_distance(parsed.simhash, item.simhash) <= 3), None)
+    return next(
+        (
+            item
+            for item in candidates
+            if same_official_issuer(item) and simhash_distance(parsed.simhash, item.simhash) <= 3
+        ),
+        None,
+    )
 
 
 def _cluster(db: Session, row: DiscoveryCandidate, parsed: ParsedEvidence, score: Score) -> Event:
@@ -267,8 +289,16 @@ def _cluster(db: Session, row: DiscoveryCandidate, parsed: ParsedEvidence, score
     ).all()
     title_tokens = _tokens(parsed.title)
     entity_set = set(score.entity_keys)
+    row_metadata = json.loads(row.metadata_json or "{}")
+    official_symbol = str(row_metadata.get("symbol") or "").strip().upper()
     for event in events:
         details = json.loads(event.details_json or "{}")
+        if parsed.source_key == "psx_announcements":
+            # An official exchange announcement is issuer-scoped. A generic title
+            # match must never join two companies, and legacy clusters without an
+            # explicit official issuer are deliberately not reused.
+            if not official_symbol or details.get("official_entity_key") != official_symbol:
+                continue
         prior_entities = set(details.get("entity_keys", []))
         same_entity = bool(entity_set and prior_entities and entity_set & prior_entities)
         if _jaccard(title_tokens, _tokens(event.title)) >= 0.42 or (
@@ -279,19 +309,45 @@ def _cluster(db: Session, row: DiscoveryCandidate, parsed: ParsedEvidence, score
             return event
     bucket = occurred_at.astimezone(UTC).strftime("%Y-%m-%d")
     signature = " ".join(sorted(title_tokens))
+    identity = official_symbol if parsed.source_key == "psx_announcements" else ""
+    cluster_key = _hash(f"{score.topic}|{bucket}|{identity}|{signature}")
+    # Fast idempotency path. The savepoint below remains necessary because another
+    # parse worker can insert this key after this lookup but before our flush.
+    existing = db.scalar(select(Event).where(Event.cluster_key == cluster_key))
+    if existing is not None:
+        prior_end = _utc_datetime(existing.event_time_end) if existing.event_time_end else occurred_at
+        existing.event_time_end = max(prior_end, occurred_at)
+        return existing
     event = Event(
         event_type="evidence_story",
         title=parsed.title[:255],
         occurred_at=occurred_at,
         event_time_end=occurred_at,
-        cluster_key=_hash(f"{score.topic}|{bucket}|{signature}"),
+        cluster_key=cluster_key,
         topic=score.topic,
         geography="PK" if "pakistan" in parsed.body.lower() or score.topic.startswith("pakistan") else "global",
         confidence=Decimal("0.850000"),
-        details_json=_json({"entity_keys": score.entity_keys, "number_fingerprints": parsed.important_number_fingerprints}),
+        details_json=_json(
+            {
+                "entity_keys": score.entity_keys,
+                "official_entity_key": official_symbol or None,
+                "number_fingerprints": parsed.important_number_fingerprints,
+            }
+        ),
     )
-    db.add(event)
-    db.flush()
+    try:
+        # Isolate the unique-key race so it does not poison the candidate's outer
+        # transaction. The losing worker simply reuses the winning event.
+        with db.begin_nested():
+            db.add(event)
+            db.flush()
+    except IntegrityError:
+        existing = db.scalar(select(Event).where(Event.cluster_key == cluster_key))
+        if existing is None:
+            raise
+        prior_end = _utc_datetime(existing.event_time_end) if existing.event_time_end else occurred_at
+        existing.event_time_end = max(prior_end, occurred_at)
+        return existing
     for entity in score.entity_keys:
         db.add(EventEntityLink(event_id=event.id, entity_type="instrument", entity_key=entity, link_method="exact_alias", confidence=Decimal("1.000000")))
     return event

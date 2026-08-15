@@ -387,6 +387,9 @@ def run_historical_discovery_slice(
             "completed_units": unit_index,
             "last_slice_discovered": result.discovered,
             "last_slice_new": result.new,
+            "scanned_count": int(progress.get("scanned_count", 0)) + result.discovered,
+            "existing_count": int(progress.get("existing_count", 0))
+            + max(0, result.discovered - result.new),
             "last_slice_at": datetime.now(UTC).isoformat(),
             "halted_reason": None,
         }

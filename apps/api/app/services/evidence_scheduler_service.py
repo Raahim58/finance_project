@@ -41,6 +41,16 @@ class SchedulerResult:
     requests_reconciled: int
 
 
+def _historical_request_order_key(request: EvidenceRefreshRequest) -> tuple[object, ...]:
+    """Prioritize corpus-wide presets before the large per-company request set."""
+
+    preset_order = {"psx_12m": 0, "news_90d": 1, "deep_company_12m": 2}
+    return (
+        request.priority_class == "historical",
+        preset_order.get(request.preset_key or "", 3),
+        request.updated_at,
+        request.created_at,
+    )
 def _utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -267,7 +277,10 @@ def run_evidence_scheduler_once(db: Session) -> SchedulerResult:
         select(EvidenceRefreshRequest)
         .where(EvidenceRefreshRequest.status == "queued")
     ).all()
-    requests.sort(key=lambda request: (request.priority_class == "historical", request.created_at))
+    # Keep the two corpus-wide bootstrap presets moving alongside the much larger
+    # set of per-company requests. Pure creation-time FIFO lets 100+ company rows
+    # starve news_90d indefinitely.
+    requests.sort(key=_historical_request_order_key)
     live_queued = 0
     history_is_yielding = historical_must_yield(db)
     for request in requests:

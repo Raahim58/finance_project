@@ -15,6 +15,7 @@ from app.services.evidence_history_service import (
 )
 from app.services.evidence_operations import EvidenceSpool, fetch_stage
 from app.services.evidence_pipeline import ensure_source_config, persist_candidate
+from app.services.evidence_scheduler_service import _historical_request_order_key
 
 
 NOW = datetime(2026, 8, 15, 10, 0, tzinfo=UTC)
@@ -81,6 +82,20 @@ def test_presets_create_bounded_durable_progress_and_are_idempotent():
         assert progress["total_units"] == 1
 
 
+def test_corpus_presets_are_scheduled_before_per_company_backlog():
+    with SessionLocal() as db:
+        instrument = Instrument(symbol="HBL", name="Habib Bank Limited")
+        db.add(instrument)
+        db.commit()
+        deep = create_historical_request(db, preset_key="deep_company_12m", instrument=instrument)
+        news = create_historical_request(db, preset_key="news_90d")
+        psx = create_historical_request(db, preset_key="psx_12m")
+
+        ordered = sorted((deep, news, psx), key=_historical_request_order_key)
+
+        assert [row.preset_key for row in ordered] == ["psx_12m", "news_90d", "deep_company_12m"]
+
+
 def test_psx_history_advances_one_page_and_resumes_from_postgres(monkeypatch):
     source = PagedPsxSource()
     monkeypatch.setattr(
@@ -101,6 +116,8 @@ def test_psx_history_advances_one_page_and_resumes_from_postgres(monkeypatch):
         assert outcome == "slice_complete"
         assert result.discovered == 3
         assert progress["units"][0]["offset"] == 3
+        assert progress["scanned_count"] == 3
+        assert progress["existing_count"] == 0
         assert request.status == "queued"
 
         result, outcome = run_historical_discovery_slice(db, request)

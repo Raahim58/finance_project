@@ -10,7 +10,15 @@ from app.ingestion.evidence import Candidate, DiscoveryBatch, ParsedEvidence, Ra
 from app.models.document import Citation, Document, DocumentChunk
 from app.models.evidence import DiscoveryCandidate, EvidenceSourceState
 from app.models.workstation import Event, EventSource, Instrument, InstrumentAlias, MacroObservation
-from app.services.evidence_pipeline import run_source_once, score_evidence
+from app.services.evidence_pipeline import (
+    Score,
+    _cluster,
+    _find_duplicate,
+    ensure_source_config,
+    persist_candidate,
+    run_source_once,
+    score_evidence,
+)
 
 
 class FixtureDawnSource:
@@ -124,6 +132,116 @@ def test_relevance_uses_dynamic_instruments_aliases_and_sector_drivers():
         assert score.relevance == 1.0
         assert score.entity_keys == ("HBL",)
         assert any(reason.startswith("sector_driver:Commercial Banks") for reason in score.reasons)
+
+
+def test_official_psx_scoring_trusts_declared_symbol_not_incidental_aliases():
+    with SessionLocal() as db:
+        db.add_all(
+            [
+                Instrument(symbol="AAA", name="Alpha Limited", sector="Commercial Banks"),
+                Instrument(symbol="CASH", name="Cash Corporation", sector="Other"),
+            ]
+        )
+        db.flush()
+        candidate = Candidate(
+            "psx_announcements",
+            "https://dps.psx.com.pk/announcement/1",
+            "Board Meeting / Closed Period",
+            "Pakistan Stock Exchange",
+            FixtureDawnSource.now,
+            "api",
+            metadata={"symbol": "AAA"},
+        )
+        parsed = ParsedEvidence(
+            canonical_url=candidate.observed_url,
+            title=candidate.headline,
+            body="The company reviewed its cash position at the board meeting.",
+            published_at=candidate.discovered_at,
+            source_key=candidate.source_key,
+            body_sha256="a" * 64,
+            parser_method="fixture",
+            extraction_quality=1.0,
+            entity_keys=("AAA",),
+        )
+
+        score = score_evidence(db, parsed, candidate)
+
+        assert score.entity_keys == ("AAA",)
+
+
+def test_official_psx_same_title_does_not_cluster_or_deduplicate_across_symbols():
+    with SessionLocal() as db:
+        config = ensure_source_config(db, "psx_announcements")[1]
+        candidates = []
+        parsed_items = []
+        for index, symbol in enumerate(("AAA", "BBB"), start=1):
+            candidate = Candidate(
+                "psx_announcements",
+                f"https://dps.psx.com.pk/announcement/{index}",
+                "Board Meeting / Closed Period",
+                "Pakistan Stock Exchange",
+                FixtureDawnSource.now,
+                "api",
+                external_id=str(index),
+                metadata={"symbol": symbol},
+            )
+            row, _ = persist_candidate(db, config, candidate)
+            parsed = ParsedEvidence(
+                canonical_url=candidate.observed_url,
+                title=candidate.headline,
+                body="Identical exchange template body.",
+                published_at=candidate.discovered_at,
+                source_key=candidate.source_key,
+                body_sha256="b" * 64,
+                parser_method="fixture",
+                extraction_quality=1.0,
+                entity_keys=(symbol,),
+            )
+            candidates.append(row)
+            parsed_items.append(parsed)
+
+        first_score = Score(1.0, ("official_psx_announcement",), ("AAA",), "board_meeting")
+        second_score = Score(1.0, ("official_psx_announcement",), ("BBB",), "board_meeting")
+        first_event = _cluster(db, candidates[0], parsed_items[0], first_score)
+        db.flush()
+
+        assert _find_duplicate(db, candidates[1], parsed_items[1]) is None
+        second_event = _cluster(db, candidates[1], parsed_items[1], second_score)
+        assert second_event.id != first_event.id
+
+
+def test_cluster_creation_reuses_deterministic_key_idempotently():
+    with SessionLocal() as db:
+        config = ensure_source_config(db, "psx_announcements")[1]
+        candidate = Candidate(
+            "psx_announcements",
+            "https://dps.psx.com.pk/announcement/idempotent",
+            "Voluntary Delisting",
+            "Pakistan Stock Exchange",
+            FixtureDawnSource.now,
+            "api",
+            metadata={"symbol": "PMPK"},
+        )
+        row, _ = persist_candidate(db, config, candidate)
+        parsed = ParsedEvidence(
+            canonical_url=candidate.observed_url,
+            title=candidate.headline,
+            body="Official voluntary delisting announcement.",
+            published_at=candidate.discovered_at,
+            source_key=candidate.source_key,
+            body_sha256="c" * 64,
+            parser_method="fixture",
+            extraction_quality=1.0,
+            entity_keys=("PMPK",),
+        )
+        score = Score(1.0, ("official_psx_announcement",), ("PMPK",), "psx_company")
+
+        first = _cluster(db, row, parsed, score)
+        db.flush()
+        second = _cluster(db, row, parsed, score)
+
+        assert second.id == first.id
+        assert len(db.scalars(select(Event)).all()) == 1
 
 
 class ClusteredDawnSource(DuplicateDawnSource):
