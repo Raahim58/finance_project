@@ -2,7 +2,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -497,24 +497,55 @@ class CorporateAction(Base):
 
 class Event(Base):
     __tablename__ = "events"
+    __table_args__ = (
+        UniqueConstraint("cluster_key", name="uq_event_cluster_key"),
+        Index("ix_event_topic_occurred", "topic", "occurred_at"),
+        Index("ix_event_geography_occurred", "geography", "occurred_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     event_type: Mapped[str] = mapped_column(String(60), index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    event_time_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cluster_key: Mapped[str | None] = mapped_column(String(64))
+    topic: Mapped[str | None] = mapped_column(String(120))
+    geography: Mapped[str | None] = mapped_column(String(80))
+    cluster_status: Mapped[str] = mapped_column(String(30), default="active", nullable=False)
+    cluster_version: Mapped[str] = mapped_column(
+        String(40), default="deterministic-v1", nullable=False
+    )
     materiality: Mapped[str | None] = mapped_column(String(20))
     direction: Mapped[str | None] = mapped_column(String(20))
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
     details_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class EventSource(Base):
     __tablename__ = "event_sources"
+    __table_args__ = (
+        UniqueConstraint("event_id", "source_url", name="uq_event_source_url"),
+        Index("ix_event_source_selection", "event_id", "selection_status", "evidence_role"),
+        Index("ix_event_source_published_at", "published_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True, nullable=False)
+    candidate_id: Mapped[str | None] = mapped_column(
+        ForeignKey("discovery_candidates.id"), unique=True
+    )
     source_url: Mapped[str] = mapped_column(String(1000), nullable=False)
     source_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    evidence_role: Mapped[str | None] = mapped_column(String(30))
+    selection_status: Mapped[str] = mapped_column(String(20), default="legacy", nullable=False)
+    relevance_score: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    novelty_score: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    quality_score: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    selection_reasons_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     artifact_id: Mapped[str | None] = mapped_column(ForeignKey("source_artifacts.id"))
     document_id: Mapped[str | None] = mapped_column(ForeignKey("documents.id"))
 

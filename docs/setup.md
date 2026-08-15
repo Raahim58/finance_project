@@ -104,7 +104,7 @@ remote browser would try its own localhost and HTTPS pages may block the HTTP re
 
 ```bash
 cd apps/api
-DATABASE_URL=sqlite:////tmp/psx-tests.sqlite pytest -q
+.venv/bin/python -m pytest -q
 DATABASE_URL=sqlite:////tmp/psx-migration.sqlite alembic upgrade head
 
 cd ../web
@@ -114,6 +114,8 @@ npm run build
 ```
 
 Provider parser tests use bounded fixtures and never hit live services. Live contract smoke tests are opt-in and should remain low-rate. See [migrations](migrations.md) for populated-legacy and downgrade checks.
+
+The API-level pytest bootstrap forces an in-memory SQLite database, test bcrypt cost, disabled demo access, mock market mode, and disabled scheduled ingestion before the application package is imported. A developer `.env` therefore cannot silently redirect the test suite to local Postgres or enable source traffic. Global Evidence Pass 0 contains contracts and schema only; it has no live smoke test or provider setup command.
 
 ## Documents and RAG
 

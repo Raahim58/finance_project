@@ -1,4 +1,5 @@
 from app.models.document import Citation, Document, DocumentChunk, DocumentPage
+from app.models.evidence import DiscoveryCandidate, EvidenceSourceConfig, EvidenceSourceState
 from app.models.llm_key import LLMApiKey
 from app.models.market import (
     Company,
@@ -59,6 +60,9 @@ __all__ = [
     "Document",
     "DocumentChunk",
     "DocumentPage",
+    "DiscoveryCandidate",
+    "EvidenceSourceConfig",
+    "EvidenceSourceState",
     "Exchange",
     "MarketIngestionRun",
     "LLMApiKey",

@@ -20,6 +20,8 @@ Exact market prices, rankings, portfolio values, P&L, risk, optimizer weights, a
 
 Enabled ingestion follows `source -> immutable artifact -> versioned parser -> validation -> canonical observation/fact/event`. Conflicting observations are retained. A selected canonical observation is identified separately, with source priority and quality metadata. Development mock data is labeled and cannot create a synthetic live KSE-100 value.
 
+Global Evidence v1 is deliberately staged. Pass 0 is persistence and contracts only: typed source/fetch/parse boundaries, an explicit candidate state machine, durable source cursor/health state, lightweight discovery candidates, and cluster/selection metadata on the existing `Event` and `EventSource` records. It registers no providers, schedules no evidence work, and performs no network access. Candidate bodies are not stored by the foundation schema; later passes may persist only selected evidence through the existing document pipeline.
+
 ## Portfolio state
 
 Transactions are the audit ledger. Buys, sells, deposits, withdrawals, fees, taxes, dividends, opening balances, adjustments, and reversals drive cash and positions. Holdings are a current projection, not an independent source of historical truth. Legacy holdings receive a dated migration baseline and pre-baseline history is marked incomplete.
@@ -50,3 +52,5 @@ The orchestrator bounds iterations, retrieved chunks, and request time; gathers 
 The scheduler keeps the efficient broad DPS current-session refresh in-process. Celery/Redis coordinate four expensive queues: one company DPS page, one symbol-month of DPS history, one financial catalogue/PDF download, and one PDF extraction per task. Network workers target 16–24 concurrent tasks; PDF extraction targets 2–4. Postgres `ingestion_coverage` rows are the durable work ledger, so Redis is never the source of completeness and lost messages can be reconstructed.
 
 The active broad universe is synchronized from observed DPS ordinary-equity identities. Standardized DPS facts are stored separately as `standardized_secondary`; official report `FinancialFact` rows remain issuer-report facts with document/page/row/method provenance. Screening snapshots are deterministic, persisted, sector-aware, and keep completeness separate from performance. Broker automation, trade execution, derivatives, and external MCP runtime remain absent.
+
+Global Evidence workers are intentionally absent in Pass 0. When later passes enable them, they use evidence-specific queues and Postgres candidate/source state rather than sharing Phase 2 queues or treating Redis as durable state.
