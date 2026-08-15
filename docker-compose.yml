@@ -23,10 +23,40 @@ services:
     volumes:
       - redis_data:/data
 
-  worker-network:
+  worker-broad-fundamentals:
     build:
       context: ./apps/api
-    command: celery -A app.celery_app worker -Q broad_fundamentals,dps_history,financial_download --concurrency=16 --loglevel=INFO
+    command: celery -A app.celery_app worker -Q broad_fundamentals --concurrency=20 --loglevel=INFO
+    environment:
+      DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      SOURCE_ARTIFACT_ROOT: /data/artifacts
+    volumes:
+      - source_artifacts:/data/artifacts
+    depends_on:
+      - postgres
+      - redis
+
+  worker-dps-history:
+    build:
+      context: ./apps/api
+    command: celery -A app.celery_app worker -Q dps_history --concurrency=24 --loglevel=INFO
+    environment:
+      DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      SOURCE_ARTIFACT_ROOT: /data/artifacts
+    volumes:
+      - source_artifacts:/data/artifacts
+    depends_on:
+      - postgres
+      - redis
+
+  worker-financial-download:
+    build:
+      context: ./apps/api
+    command: celery -A app.celery_app worker -Q financial_download --concurrency=12 --loglevel=INFO
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -41,7 +71,7 @@ services:
   worker-extract:
     build:
       context: ./apps/api
-    command: celery -A app.celery_app worker -Q financial_extract --concurrency=2 --loglevel=INFO
+    command: celery -A app.celery_app worker -Q financial_extract --concurrency=3 --loglevel=INFO
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
       CELERY_BROKER_URL: redis://redis:6379/0

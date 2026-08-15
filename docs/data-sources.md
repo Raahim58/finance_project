@@ -54,8 +54,10 @@ CELERY_RESULT_BACKEND=redis://localhost:6379/1
 cd apps/api
 python -m app.jobs.scheduler --once
 python -m app.jobs.scheduler
-celery -A app.celery_app worker -Q broad_fundamentals,dps_history,financial_download --concurrency=24
-celery -A app.celery_app worker -Q financial_extract --concurrency=2
+celery -A app.celery_app worker -Q broad_fundamentals --concurrency=20
+celery -A app.celery_app worker -Q dps_history --concurrency=24
+celery -A app.celery_app worker -Q financial_download --concurrency=12
+celery -A app.celery_app worker -Q financial_extract --concurrency=3
 ```
 
 Hybrid demo/live initialization:

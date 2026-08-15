@@ -52,12 +52,14 @@ Never use `--with-mock-world` in an `auto`, `dps`, or other live-data database.
 Even if old mock rows exist, live modes exclude them from canonical prices,
 market screens, portfolio valuation, and quant inputs.
 
-Run the API, scheduler, and the four Phase 2 queues:
+Run the API, scheduler, and the four Phase 2 queues in separate worker pools:
 
 ```bash
 uvicorn app.main:app --reload
-celery -A app.celery_app worker -Q broad_fundamentals,dps_history,financial_download --concurrency=24 --loglevel=INFO
-celery -A app.celery_app worker -Q financial_extract --concurrency=2 --loglevel=INFO
+celery -A app.celery_app worker -Q broad_fundamentals --concurrency=20 --loglevel=INFO
+celery -A app.celery_app worker -Q dps_history --concurrency=24 --loglevel=INFO
+celery -A app.celery_app worker -Q financial_download --concurrency=12 --loglevel=INFO
+celery -A app.celery_app worker -Q financial_extract --concurrency=3 --loglevel=INFO
 python -m app.jobs.scheduler --once
 python -m app.jobs.scheduler
 ```
