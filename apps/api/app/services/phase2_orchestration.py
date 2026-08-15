@@ -101,7 +101,9 @@ def enqueue_reconstructable_phase2_work(
             if queued["financial_extract"] >= limits["financial_extract"]:
                 break
             instrument = instruments_by_symbol.get(document.symbol or "")
-            if instrument is None or instrument.id not in deep_ids:
+            # A persisted official report remains eligible for extraction even
+            # if its company later leaves the screened deep tier.
+            if instrument is None:
                 continue
             state = coverage(db, instrument.id, "financial_extract", document.id, "psx_financials")
             if document.status == "needs_ocr" and document.extraction_version != FINANCIAL_EXTRACTION_VERSION:
