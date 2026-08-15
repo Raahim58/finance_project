@@ -20,6 +20,12 @@ def _months(start: date, end: date):
         cursor = date(cursor.year + (cursor.month == 12), 1 if cursor.month == 12 else cursor.month + 1, 1)
 
 
+def incremental_catalog_dispatch_key(now: datetime) -> str:
+    bucket_hour = now.hour - (now.hour % settings.phase2_catalog_refresh_hours)
+    bucket = now.replace(hour=bucket_hour, minute=0, second=0, microsecond=0)
+    return f"incremental:{bucket.isoformat()}"
+
+
 def enqueue_reconstructable_phase2_work(
     db: Session,
     now: datetime | None = None,
@@ -66,12 +72,20 @@ def enqueue_reconstructable_phase2_work(
                     queued["dps_history"] += 1
 
         if queued.get("financial_download", 0) < limits.get("financial_download", 0):
-            period_key = f"historical:{end.year}"
-            state = coverage(db, instrument.id, "report_catalog_dispatch", period_key, "psx_financials")
-            if is_queueable(state, now) and reserve_and_publish(
-                db, state, financial_download_catalog, (instrument.symbol, "historical", end.year), now
-            ):
-                queued["financial_download"] += 1
+            historical_key = f"historical:{end.year}"
+            historical = coverage(db, instrument.id, "report_catalog_dispatch", historical_key, "psx_financials")
+            if historical.status != "complete":
+                if is_queueable(historical, now) and reserve_and_publish(
+                    db, historical, financial_download_catalog, (instrument.symbol, "historical", end.year, historical_key), now
+                ):
+                    queued["financial_download"] += 1
+            else:
+                incremental_key = incremental_catalog_dispatch_key(now)
+                incremental = coverage(db, instrument.id, "report_catalog_dispatch", incremental_key, "psx_financials")
+                if is_queueable(incremental, now) and reserve_and_publish(
+                    db, incremental, financial_download_catalog, (instrument.symbol, "incremental", end.year, incremental_key), now
+                ):
+                    queued["financial_download"] += 1
 
         if all(queued.get(name, 0) >= limit for name, limit in limits.items()):
             break

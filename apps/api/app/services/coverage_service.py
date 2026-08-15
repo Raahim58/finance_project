@@ -57,16 +57,26 @@ def is_queueable(row: IngestionCoverage, now: datetime, *, refresh_after: timede
 
 
 def reserve_and_publish(db: Session, row: IngestionCoverage, task, args: tuple, now: datetime) -> bool:
-    row.status = "queued"
-    row.attempted_at = now
-    row.error_class = None
-    row.error_message = None
+    snapshot = (row.status, row.attempted_at, row.completed_at, row.retry_count)
+    locked = db.scalar(
+        select(IngestionCoverage)
+        .where(IngestionCoverage.id == row.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if locked is None or (locked.status, locked.attempted_at, locked.completed_at, locked.retry_count) != snapshot:
+        db.rollback()
+        return False
+    locked.status = "queued"
+    locked.attempted_at = now
+    locked.error_class = None
+    locked.error_message = None
     db.commit()
     try:
         task.delay(*args)
     except Exception as exc:
-        db.refresh(row)
-        fail(row, exc)
+        db.refresh(locked)
+        fail(locked, exc)
         db.commit()
         return False
     return True

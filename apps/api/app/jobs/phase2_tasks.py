@@ -109,13 +109,14 @@ def _item(payload: dict[str, object]) -> ReportCatalogItem:
 
 
 @celery_app.task(name="phase2.financial_download_catalog", **RETRY)
-def financial_download_catalog(symbol: str, mode: str = "incremental", as_of_year: int | None = None) -> dict[str, object]:
+def financial_download_catalog(symbol: str, mode: str = "incremental", as_of_year: int | None = None, dispatch_key: str | None = None) -> dict[str, object]:
     if mode not in {"historical", "incremental"}:
         raise ValueError("mode must be historical or incremental")
     with SessionLocal() as db:
         instrument = _instrument(db, symbol)
         provider = PsxFinancialsProvider(); year = as_of_year or date.today().year
-        dispatch = coverage(db, instrument.id, "report_catalog_dispatch", f"{mode}:{year}", "psx_financials")
+        dispatch_key = dispatch_key or f"{mode}:{year}"
+        dispatch = coverage(db, instrument.id, "report_catalog_dispatch", dispatch_key, "psx_financials")
         if dispatch.status == "complete":
             return {"symbol": instrument.symbol, "mode": mode, "status": "complete", "idempotent": True}
         begin(dispatch); db.commit()
@@ -123,7 +124,7 @@ def financial_download_catalog(symbol: str, mode: str = "incremental", as_of_yea
         discovered: dict[str, ReportCatalogItem] = {}
         for catalog_year in years:
             state = coverage(db, instrument.id, "report_catalog", str(catalog_year), "psx_financials")
-            if state.status == "complete":
+            if state.status == "complete" and mode == "historical":
                 cached = json.loads(state.diagnostics_json or "{}").get("items", [])
                 for payload in cached:
                     item = _item(payload); discovered[item.report_id] = item
@@ -139,7 +140,7 @@ def financial_download_catalog(symbol: str, mode: str = "incremental", as_of_yea
             except Exception as exc:
                 db.rollback()
                 state = coverage(db, instrument.id, "report_catalog", str(catalog_year), "psx_financials"); fail(state, exc)
-                dispatch = coverage(db, instrument.id, "report_catalog_dispatch", f"{mode}:{year}", "psx_financials"); fail(dispatch, exc)
+                dispatch = coverage(db, instrument.id, "report_catalog_dispatch", dispatch_key, "psx_financials"); fail(dispatch, exc)
                 db.commit(); raise
         selected: list[ReportCatalogItem] = []
         annual = interim = 0
@@ -154,7 +155,7 @@ def financial_download_catalog(symbol: str, mode: str = "incremental", as_of_yea
             now = datetime.now(UTC)
             if is_queueable(state, now) and reserve_and_publish(db, state, financial_download_pdf, (payload,), now):
                 queued += 1
-        dispatch = coverage(db, instrument.id, "report_catalog_dispatch", f"{mode}:{year}", "psx_financials")
+        dispatch = coverage(db, instrument.id, "report_catalog_dispatch", dispatch_key, "psx_financials")
         complete(dispatch, len(selected)); db.commit()
         return {"symbol": instrument.symbol, "mode": mode, "catalog_items": len(discovered), "selected": len(selected), "queued": queued}
 

@@ -12,6 +12,7 @@ from app.providers.fundamentals.extraction import extract_facts, parse_financial
 from app.services.market_ingestion import sync_observed_dps_universe
 from app.services.screening_service import compute_screening_snapshots, deep_instrument_ids
 from app.services.coverage_service import is_queueable, reserve_and_publish
+from app.services.phase2_orchestration import incremental_catalog_dispatch_key
 
 
 def _table(metric: str = "Sales") -> str:
@@ -131,6 +132,34 @@ def test_phase2_reservation_is_persisted_before_publish():
         task = FakeTask(); task.target_id = row.id
         assert reserve_and_publish(db, row, task, ("QUEUE", 2025, 1), datetime.now(UTC)) is True
         assert task.observed_status == "queued"
+
+
+def test_phase2_reservation_rejects_a_stale_producer_snapshot():
+    class FakeTask:
+        called = False
+
+        def delay(self, *_args):
+            self.called = True
+
+    with SessionLocal() as first:
+        sync_observed_dps_universe(first, [{"symbol": "RACE", "name": "Race", "sector": "Cement", "is_debt": False, "is_etf": False, "is_gem": False}])
+        instrument = first.scalar(select(Instrument).where(Instrument.symbol == "RACE"))
+        row = IngestionCoverage(instrument_id=instrument.id, dataset_type="price_history", period_key="2025-02", source="dps", status="missing")
+        first.add(row); first.commit(); first.refresh(row)
+        with SessionLocal() as second:
+            competing = second.get(IngestionCoverage, row.id)
+            competing.status = "queued"; competing.attempted_at = datetime.now(UTC); second.commit()
+        task = FakeTask()
+        assert reserve_and_publish(first, row, task, ("RACE", 2025, 2), datetime.now(UTC)) is False
+        assert task.called is False
+
+
+def test_incremental_catalog_dispatch_uses_six_hour_buckets():
+    first = incremental_catalog_dispatch_key(datetime(2026, 8, 15, 13, 25, tzinfo=UTC))
+    same = incremental_catalog_dispatch_key(datetime(2026, 8, 15, 17, 59, tzinfo=UTC))
+    next_bucket = incremental_catalog_dispatch_key(datetime(2026, 8, 15, 18, 0, tzinfo=UTC))
+    assert first == same
+    assert first != next_bucket
 
 
 def test_blank_pdf_is_classified_for_selective_ocr_without_facts():
