@@ -15,6 +15,7 @@ celery_app.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
+    worker_log_color=False,
     broker_connection_retry_on_startup=True,
     task_serializer="json",
     result_serializer="json",

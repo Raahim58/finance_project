@@ -2,6 +2,7 @@
 
 import re
 import io
+import logging
 import shutil
 import subprocess
 import tempfile
@@ -33,6 +34,15 @@ OCR_PAGE_TIMEOUT_SECONDS = 30
 FINANCIAL_EXTRACTION_VERSION = "financial-layout-v3-ocr"
 
 
+class _MalformedPdfColorFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return not (message.startswith("Cannot set ") and " color because " in message)
+
+
+logging.getLogger("pdfminer.pdfinterp").addFilter(_MalformedPdfColorFilter())
+
+
 @dataclass(frozen=True)
 class ExtractedFact:
     taxonomy_key: str
@@ -54,15 +64,9 @@ class FinancialPage:
 
 
 def parse_financial_pdf(content: bytes) -> tuple[list[FinancialPage], str, list[str]]:
-    """Use positional text first, then bounded OCR only for sparse/image PDFs."""
-    import pdfplumber
-
-    pages: list[FinancialPage] = []
+    """Use bounded native Poppler text extraction, then OCR only for sparse PDFs."""
     diagnostics: list[str] = []
-    with pdfplumber.open(io.BytesIO(content)) as pdf:
-        for number, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text(layout=True) or ""
-            pages.append(FinancialPage(number, text))
+    pages = _native_text_pages(content)
     text_chars = sum(len(page.text.strip()) for page in pages)
     classification = "text_native" if text_chars >= max(500, len(pages) * 100) else "scanned_or_sparse"
     if classification == "scanned_or_sparse":
@@ -73,6 +77,36 @@ def parse_financial_pdf(content: bytes) -> tuple[list[FinancialPage], str, list[
             pages = ocr_pages
             classification = "ocr"
     return pages, classification, diagnostics
+
+
+def _native_text_pages(content: bytes) -> list[FinancialPage]:
+    """Extract every page in one native process instead of Python page traversal."""
+    if not shutil.which("pdftotext"):
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(content))
+        return [FinancialPage(number, page.extract_text() or "") for number, page in enumerate(reader.pages, start=1)]
+    with tempfile.TemporaryDirectory(prefix="psx-pdf-text-") as directory:
+        pdf_path = f"{directory}/source.pdf"
+        with open(pdf_path, "wb") as stream:
+            stream.write(content)
+        try:
+            result = subprocess.run(
+                ["pdftotext", "-layout", "-enc", "UTF-8", pdf_path, "-"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=90,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError("Native PDF text extraction exceeded 90 seconds") from exc
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise ValueError("Native PDF text extraction failed") from exc
+    decoded = result.stdout.decode("utf-8", errors="replace")
+    page_texts = decoded.split("\f")
+    if page_texts and not page_texts[-1].strip():
+        page_texts.pop()
+    return [FinancialPage(number, text) for number, text in enumerate(page_texts, start=1)]
 
 
 def _ocr_financial_pages(content: bytes, page_count: int) -> tuple[list[FinancialPage], list[str]]:
