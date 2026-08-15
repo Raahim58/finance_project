@@ -69,6 +69,26 @@ The live universe is synchronized from observed DPS symbol data; there is no con
 
 `MARKET_DATA_MODE=mock` is development-only. `dps` uses the verified direct DPS adapter; `auto` tries DPS and uses Yahoo only as a labeled real-data fallback. A failed live refresh retains prior observed rows and records failure/staleness; it never generates mock replacements. NCCPL remains a manual CSV import because ordinary retrieval is blocked; no anti-bot bypass is implemented.
 
+Enable and run the independent Global Evidence services with a shared artifact/spool
+volume:
+
+```bash
+EVIDENCE_ENABLED=true python -m app.jobs.evidence_scheduler
+celery -A app.celery_app worker -Q evidence_discovery --concurrency=4 --loglevel=INFO
+celery -A app.celery_app worker -Q evidence_fetch --concurrency=16 --loglevel=INFO
+celery -A app.celery_app worker -Q evidence_parse --concurrency=6 --loglevel=INFO
+celery -A app.celery_app worker -Q evidence_pdf --concurrency=2 --loglevel=INFO
+celery -A app.celery_app worker -Q evidence_index --concurrency=4 --loglevel=INFO
+celery -A app.celery_app worker -Q historical_hydrate --concurrency=2 --loglevel=INFO
+```
+
+`docker compose up -d` now starts these pools and their dedicated scheduler. Phase 2
+workers do not consume evidence queues. Live messages use Redis priority `0`;
+historical hydration uses priority `8`, concurrency two, and a separate queue. Every
+worker mounts the same `SOURCE_ARTIFACT_ROOT` because temporary bodies move between
+stages through `.evidence-spool`; Redis messages contain IDs only. Postgres leases and
+candidate state reconstruct lost work after broker or worker failure.
+
 ## Frontend
 
 ```bash

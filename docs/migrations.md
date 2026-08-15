@@ -1,6 +1,6 @@
 # Migration and Recovery Notes
 
-Workstation checkpoints include `0006_domain_data` through `0012_audit_events`. Ingestion observability is migration `0013_ingestion_observability`. Phase 2 worker coverage, secondary standardized facts, persisted screening snapshots, and official-fact extraction provenance are migration `0014_phase2_ingestion_plane`. Global Evidence v1 source configuration/state, discovery candidates, and event-cluster/source-selection fields are migration `0015_global_evidence_v1`.
+Workstation checkpoints include `0006_domain_data` through `0012_audit_events`. Ingestion observability is migration `0013_ingestion_observability`. Phase 2 worker coverage, secondary standardized facts, persisted screening snapshots, and official-fact extraction provenance are migration `0014_phase2_ingestion_plane`. Global Evidence v1 source configuration/state, discovery candidates, and event-cluster/source-selection fields are migration `0015_global_evidence_v1`. Pass 2 targeted and historical refresh requests use the durable ledger added by `0016_evidence_refresh_requests`.
 
 ```bash
 cd apps/api

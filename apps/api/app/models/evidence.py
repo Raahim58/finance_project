@@ -153,3 +153,46 @@ class DiscoveryCandidate(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
+
+
+class EvidenceRefreshRequest(Base):
+    __tablename__ = "evidence_refresh_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "request_type IN ('targeted', 'historical')",
+            name="ck_evidence_refresh_request_type",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'processing', 'complete', 'partial', 'failed')",
+            name="ck_evidence_refresh_status",
+        ),
+        CheckConstraint(
+            "priority_class IN ('live', 'historical')",
+            name="ck_evidence_refresh_priority",
+        ),
+        CheckConstraint("max_candidates > 0", name="ck_evidence_refresh_limit_positive"),
+        Index("ix_evidence_refresh_status_priority", "status", "priority_class", "created_at"),
+        Index("ix_evidence_refresh_user_created", "requested_by_user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    requested_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), index=True)
+    request_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    scope_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    query_text: Mapped[str | None] = mapped_column(String(500))
+    source_keys_json: Mapped[str] = mapped_column(Text, default='["gdelt"]', nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="queued", nullable=False)
+    priority_class: Mapped[str] = mapped_column(String(20), default="live", nullable=False)
+    max_candidates: Mapped[int] = mapped_column(Integer, nullable=False)
+    discovered_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    selected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duplicate_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rejected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_class: Mapped[str | None] = mapped_column(String(160))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )

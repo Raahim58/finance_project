@@ -47,6 +47,20 @@ class Settings(BaseSettings):
     assistant_timeout_seconds: int = 30
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
+    evidence_enabled: bool = False
+    evidence_scheduler_seconds: int = Field(default=30, ge=5, le=3600)
+    evidence_discovery_queue_target: int = Field(default=20, ge=1, le=1000)
+    evidence_fetch_queue_target: int = Field(default=80, ge=1, le=5000)
+    evidence_parse_queue_target: int = Field(default=80, ge=1, le=5000)
+    evidence_index_queue_target: int = Field(default=40, ge=1, le=2000)
+    evidence_historical_queue_target: int = Field(default=10, ge=1, le=500)
+    evidence_stage_lease_seconds: int = Field(default=900, ge=60, le=86400)
+    evidence_max_retries: int = Field(default=3, ge=0, le=10)
+    evidence_retry_backoff_seconds: int = Field(default=60, ge=1, le=86400)
+    evidence_circuit_failure_threshold: int = Field(default=5, ge=1, le=100)
+    evidence_circuit_open_seconds: int = Field(default=900, ge=60, le=86400)
+    evidence_candidate_retention_days: int = Field(default=45, ge=1, le=3650)
+    evidence_spool_retention_hours: int = Field(default=24, ge=1, le=168)
     screening_completeness_threshold: float = Field(default=0.70, ge=0, le=1)
     screening_promotion_percentile: float = Field(default=0.82, ge=0, le=1)
     cors_origins: Annotated[list[str], NoDecode] = Field(

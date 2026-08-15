@@ -45,6 +45,7 @@ ALLOWED_CANDIDATE_TRANSITIONS: Mapping[CandidateStatus, frozenset[CandidateStatu
             CandidateStatus.DUPLICATE,
             CandidateStatus.REJECTED,
             CandidateStatus.FAILED,
+            CandidateStatus.EXPIRED,
         }
     ),
     CandidateStatus.FAILED: frozenset(
@@ -56,6 +57,7 @@ ALLOWED_CANDIDATE_TRANSITIONS: Mapping[CandidateStatus, frozenset[CandidateStatu
             CandidateStatus.DUPLICATE,
             CandidateStatus.REJECTED,
             CandidateStatus.FAILED,
+            CandidateStatus.EXPIRED,
         }
     ),
     CandidateStatus.SELECTED: frozenset(),

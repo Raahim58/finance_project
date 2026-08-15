@@ -30,11 +30,13 @@ article text remains ephemeral unless selected. Selected raw responses are gzip
 compressed in the artifact store, while rejected and duplicate candidates retain
 metadata and fingerprints only.
 
-Pass 1 performs no import-time I/O and has a bounded manual runner. Evidence-specific
-Celery queues, scheduling, retries/circuit breakers, historical hydration, candidate
-expiry, queue reconstruction, operational APIs, and live-search refresh remain Pass 2
-work. Phase 4 remains the unstructured retrieval layer; Phases 5–6 entity/event
-intelligence and final assistant reasoning are not pulled into ingestion.
+Pass 1 performs no import-time I/O and retains its bounded manual runner. Pass 2
+adds evidence-only discovery, fetch, parse, PDF, index, and historical Celery queues;
+a dedicated Postgres-led scheduler; bounded leases/backpressure/retries and source
+circuits; candidate/spool retention; deep-company historical requests; operational
+health; and ownership-scoped targeted refresh requests. Phase 4 remains the
+unstructured retrieval layer; Phases 5–6 entity/event intelligence and final
+assistant reasoning are not pulled into ingestion.
 
 ## Portfolio state
 
@@ -67,7 +69,8 @@ The scheduler keeps the efficient broad DPS current-session refresh in-process. 
 
 The active broad universe is synchronized from observed DPS ordinary-equity identities. Standardized DPS facts are stored separately as `standardized_secondary`; official report `FinancialFact` rows remain issuer-report facts with document/page/row/method provenance. Screening snapshots are deterministic, persisted, sector-aware, and keep completeness separate from performance. Broker automation, trade execution, derivatives, and external MCP runtime remain absent.
 
-Global Evidence workers remain intentionally absent through Pass 1. The manual
-vertical slice writes its cursor, candidates, events, selections, and failures to
-Postgres. Pass 2 workers will use evidence-specific queues and this durable state,
-without sharing Phase 2 queues or treating Redis as the source of truth.
+Global Evidence workers use separate pools from Phase 2. Redis messages contain only
+IDs and approximate priority; Postgres source/candidate/request state is the durable
+ledger. A shared bounded spool carries temporary bodies between stages and selected
+content moves to the artifact/document stores. The evidence scheduler reconstructs
+expired leases without producing any Phase 2 task.

@@ -26,7 +26,7 @@ SOURCE_SPECS = (
     SourceSpec("psx_announcements", "PSX Announcements", "https://dps.psx.com.pk", "official", ("primary",), ("psx_company",), "psx_post", 120, 1825),
     SourceSpec("dawn", "Dawn", "https://www.dawn.com", "reporting", ("reporting",), ("pakistan_macro", "politics"), "rss", 300, 548),
     SourceSpec("business_recorder", "Business Recorder", "https://www.brecorder.com", "reporting", ("reporting",), ("pakistan_macro", "markets"), "rss", 300, 548),
-    SourceSpec("mettis", "Mettis Global", "https://mettisglobal.news", "specialist", ("reporting",), ("pakistan_macro", "markets"), "listing", 300, 548),
+    SourceSpec("mettis", "Mettis Global Evidence", "https://mettisglobal.news", "specialist", ("reporting",), ("pakistan_macro", "markets"), "listing", 300, 548, False),
     SourceSpec("sbp_releases", "State Bank of Pakistan", "https://www.sbp.org.pk", "official", ("primary",), ("pakistan_macro", "monetary_policy"), "listing", 300, 1825),
     SourceSpec("imf_news", "International Monetary Fund", "https://www.imf.org", "official", ("primary",), ("pakistan_macro", "global_macro"), "listing", 600, 1825),
     SourceSpec("gdelt", "GDELT DOC 2", "https://api.gdeltproject.org", "discovery", ("discovery",), ("global",), "gdelt", 900, 90),

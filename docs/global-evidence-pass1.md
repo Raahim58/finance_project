@@ -41,13 +41,14 @@ gzip-compressed in the existing artifact store; selected clean text is passed to
 the existing RAG document pipeline. Exact market and portfolio answers continue to
 come from structured database queries.
 
-## Intentional Pass 2 boundary
+## Pass 2 continuation
 
-Pass 1 has a manual bounded runner only. Pass 2 owns evidence-only Celery queues,
-live-first scheduling, retries/backoff, circuit breakers, DNS-level/advanced response hardening,
-candidate retention/expiry, historical hydration, queue reconstruction,
-operational statistics APIs, and the bounded on-demand refresh endpoint. No Phase
-4–6 reasoning or entity-intelligence feature is implemented here.
+Pass 1 retains a manual bounded runner. Pass 2 now supplies evidence-only Celery
+queues, live-first scheduling, retries/backoff, circuit breakers, candidate
+retention/expiry, bounded historical hydration, queue reconstruction, operational
+statistics and the bounded on-demand refresh endpoint. See
+`docs/global-evidence-pass2.md`. No Phase 4–6 reasoning or entity-intelligence
+feature is implemented by either pass.
 
 ## Verification
 

@@ -1,11 +1,19 @@
-from datetime import date
+from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
+from app.models.evidence import EvidenceRefreshRequest
+from app.models.workstation import Instrument
+from app.schemas.evidence import (
+    EvidenceHistoricalCreate,
+    EvidenceRefreshCreate,
+    EvidenceRefreshResponse,
+)
 from app.schemas.data_health import CompanyCompletenessResponse, DataHealthResponse
 from app.services.data_health_service import company_completeness, source_health
 from app.services.ingestion_service import (
@@ -15,6 +23,9 @@ from app.services.ingestion_service import (
     refresh_provider,
     run_historical_backfill,
 )
+from app.ingestion.evidence_catalog import SECTOR_DRIVERS, TOPIC_QUERIES
+from app.jobs.evidence_tasks import historical_hydrate, targeted_refresh
+from app.services.evidence_scheduler_service import evidence_operational_status
 
 router = APIRouter()
 
@@ -72,3 +83,129 @@ async def nccpl_import(file: UploadFile = File(...), _: User = Depends(get_curre
             detail="Only CSV manual exports are accepted",
         )
     return import_nccpl_csv(db, await file.read())
+
+
+def _serialize_evidence_request(row: EvidenceRefreshRequest) -> EvidenceRefreshResponse:
+    return EvidenceRefreshResponse.model_validate(row, from_attributes=True)
+
+
+def _target_query(db: Session, payload: EvidenceRefreshCreate) -> tuple[str, str]:
+    if payload.scope_type == "symbol":
+        instrument = db.scalar(
+            select(Instrument).where(Instrument.symbol == payload.value.strip().upper())
+        )
+        if instrument is None:
+            raise HTTPException(status_code=404, detail="Instrument not found")
+        return f"symbol:{instrument.symbol}", f'(\"{instrument.symbol}\" OR \"{instrument.name}\") AND Pakistan'
+    if payload.scope_type == "topic":
+        key = payload.value.strip().lower().replace(" ", "_")
+        query = TOPIC_QUERIES.get(key)
+        if query is None:
+            raise HTTPException(status_code=422, detail="Unknown configured evidence topic")
+        return f"topic:{key}", query
+    if payload.scope_type == "sector":
+        key = payload.value.strip().lower()
+        drivers = SECTOR_DRIVERS.get(key)
+        if not drivers:
+            raise HTTPException(status_code=422, detail="Unknown configured PSX sector")
+        terms = " OR ".join(f'\"{term}\"' for term in drivers[:10])
+        return f"sector:{key}", f"Pakistan AND ({terms})"
+    return "query:custom", payload.value
+
+
+@router.post(
+    "/ingestion/evidence/refresh",
+    response_model=EvidenceRefreshResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def request_evidence_refresh(
+    payload: EvidenceRefreshCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    scope_key, query = _target_query(db, payload)
+    row = EvidenceRefreshRequest(
+        requested_by_user_id=current_user.id,
+        request_type="targeted",
+        scope_key=scope_key,
+        query_text=query,
+        source_keys_json='["gdelt"]',
+        status="queued",
+        priority_class="live",
+        max_candidates=payload.max_candidates,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    row.status = "running"
+    row.started_at = datetime.now(UTC)
+    db.commit()
+    try:
+        targeted_refresh.apply_async(args=(row.id,), queue="evidence_discovery", priority=0)
+    except Exception as exc:
+        row.status = "queued"
+        row.error_class = type(exc).__name__
+        row.error_message = str(exc)[:2000]
+        db.commit()
+    db.refresh(row)
+    return _serialize_evidence_request(row)
+
+
+@router.post(
+    "/ingestion/evidence/historical",
+    response_model=EvidenceRefreshResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def request_evidence_history(
+    payload: EvidenceHistoricalCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    instrument = db.scalar(select(Instrument).where(Instrument.symbol == payload.symbol))
+    if instrument is None:
+        raise HTTPException(status_code=404, detail="Instrument not found")
+    row = EvidenceRefreshRequest(
+        requested_by_user_id=current_user.id,
+        request_type="historical",
+        scope_key=f"deep_instrument:{instrument.id}",
+        query_text=f'(\"{instrument.symbol}\" OR \"{instrument.name}\") AND Pakistan',
+        source_keys_json='["gdelt"]',
+        status="queued",
+        priority_class="historical",
+        max_candidates=payload.max_candidates,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    row.status = "running"
+    row.started_at = datetime.now(UTC)
+    db.commit()
+    try:
+        historical_hydrate.apply_async(args=(row.id,), queue="historical_hydrate", priority=8)
+    except Exception as exc:
+        row.status = "queued"
+        row.error_class = type(exc).__name__
+        row.error_message = str(exc)[:2000]
+        db.commit()
+    db.refresh(row)
+    return _serialize_evidence_request(row)
+
+
+@router.get("/ingestion/evidence/requests", response_model=list[EvidenceRefreshResponse])
+def evidence_requests(
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rows = db.scalars(
+        select(EvidenceRefreshRequest)
+        .where(EvidenceRefreshRequest.requested_by_user_id == current_user.id)
+        .order_by(EvidenceRefreshRequest.created_at.desc())
+        .limit(limit)
+    ).all()
+    return [_serialize_evidence_request(row) for row in rows]
+
+
+@router.get("/ingestion/evidence/operations")
+def evidence_operations(_: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return evidence_operational_status(db)

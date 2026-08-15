@@ -101,6 +101,63 @@ services:
       - postgres
       - redis
 
+  worker-evidence-discovery:
+    <<: *worker-image
+    command: celery -A app.celery_app worker -Q evidence_discovery --concurrency=4 --loglevel=INFO
+    environment: &evidence-environment
+      DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      SOURCE_ARTIFACT_ROOT: /data/artifacts
+      EVIDENCE_ENABLED: "true"
+    volumes: &evidence-volumes
+      - source_artifacts:/data/artifacts
+    depends_on: &evidence-dependencies
+      - postgres
+      - redis
+
+  worker-evidence-fetch:
+    <<: *worker-image
+    command: celery -A app.celery_app worker -Q evidence_fetch --concurrency=16 --loglevel=INFO
+    environment: *evidence-environment
+    volumes: *evidence-volumes
+    depends_on: *evidence-dependencies
+
+  worker-evidence-parse:
+    <<: *worker-image
+    command: celery -A app.celery_app worker -Q evidence_parse --concurrency=6 --loglevel=INFO
+    environment: *evidence-environment
+    volumes: *evidence-volumes
+    depends_on: *evidence-dependencies
+
+  worker-evidence-pdf:
+    <<: *worker-image
+    command: celery -A app.celery_app worker -Q evidence_pdf --concurrency=2 --loglevel=INFO
+    environment: *evidence-environment
+    volumes: *evidence-volumes
+    depends_on: *evidence-dependencies
+
+  worker-evidence-index:
+    <<: *worker-image
+    command: celery -A app.celery_app worker -Q evidence_index --concurrency=4 --loglevel=INFO
+    environment: *evidence-environment
+    volumes: *evidence-volumes
+    depends_on: *evidence-dependencies
+
+  worker-historical-hydrate:
+    <<: *worker-image
+    command: celery -A app.celery_app worker -Q historical_hydrate --concurrency=2 --loglevel=INFO
+    environment: *evidence-environment
+    volumes: *evidence-volumes
+    depends_on: *evidence-dependencies
+
+  evidence-scheduler:
+    <<: *worker-image
+    command: python -m app.jobs.evidence_scheduler
+    environment: *evidence-environment
+    volumes: *evidence-volumes
+    depends_on: *evidence-dependencies
+
 volumes:
   postgres_data:
   redis_data:

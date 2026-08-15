@@ -129,12 +129,14 @@ class HttpEvidenceSource:
     fetcher: Fetcher = bounded_http_fetch
 
     def discover_since(self, cursor: Mapping[str, Any] | None, limit: int) -> DiscoveryBatch:
-        del cursor
         params = None
         if self.discovery_kind == "gdelt":
             if not self.query:
                 raise ValueError("GDELT sources require a bounded query")
             params = GdeltDiscovery.request_params(self.query, limit)
+            historical_days = int((cursor or {}).get("historical_days", 0))
+            if historical_days:
+                params["timespan"] = f"{min(historical_days, 90)}d"
         content, _, _, _ = self.fetcher(self.discovery_url, params=params)
         if self.discovery_kind == "rss":
             candidates = RssAtomDiscovery(self.key, self.publisher, self.topic).parse(content)
@@ -142,6 +144,15 @@ class HttpEvidenceSource:
             candidates = SitemapDiscovery(self.key, self.publisher, self.topic).parse(content)
         elif self.discovery_kind == "gdelt":
             candidates = GdeltDiscovery(self.key, self.publisher, self.topic).parse(json.loads(content))
+            candidates = tuple(
+                Candidate(
+                    **{
+                        **candidate.__dict__,
+                        "metadata": {**dict(candidate.metadata), "query": self.query},
+                    }
+                )
+                for candidate in candidates
+            )
         elif self.discovery_kind == "listing":
             if not self.link_pattern:
                 raise ValueError("Listing sources require a link pattern")

@@ -82,6 +82,10 @@ def _json(value: object) -> str:
     return json.dumps(value, sort_keys=True, default=str)
 
 
+def _utc_datetime(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 def _transition(row: DiscoveryCandidate, target: CandidateStatus) -> None:
     from app.ingestion.evidence import validate_candidate_transition
 
@@ -118,10 +122,12 @@ def ensure_source_config(db: Session, source_key: str) -> tuple[DataSource, Evid
             languages_json='["en"]',
             poll_interval_seconds=spec.poll_seconds,
             historical_days=spec.historical_days,
-            config_version="evidence-v1-pass1",
+            config_version="evidence-v1-pass2",
         )
         db.add(config)
         db.flush()
+    else:
+        config.config_version = "evidence-v1-pass2"
     state = db.scalar(select(EvidenceSourceState).where(EvidenceSourceState.source_config_id == config.id))
     if state is None:
         state = EvidenceSourceState(source_config_id=config.id)
@@ -254,7 +260,7 @@ def _find_duplicate(db: Session, row: DiscoveryCandidate, parsed: ParsedEvidence
 
 
 def _cluster(db: Session, row: DiscoveryCandidate, parsed: ParsedEvidence, score: Score) -> Event:
-    occurred_at = parsed.published_at or row.published_at or row.discovered_at
+    occurred_at = _utc_datetime(parsed.published_at or row.published_at or row.discovered_at)
     cutoff = occurred_at - timedelta(days=3)
     events = db.scalars(
         select(Event).where(Event.topic == score.topic, Event.occurred_at >= cutoff).limit(100)
@@ -268,7 +274,8 @@ def _cluster(db: Session, row: DiscoveryCandidate, parsed: ParsedEvidence, score
         if _jaccard(title_tokens, _tokens(event.title)) >= 0.42 or (
             same_entity and _jaccard(title_tokens, _tokens(event.title)) >= 0.22
         ):
-            event.event_time_end = max(filter(None, (event.event_time_end, occurred_at)))
+            prior_end = _utc_datetime(event.event_time_end) if event.event_time_end else occurred_at
+            event.event_time_end = max(prior_end, occurred_at)
             return event
     bucket = occurred_at.astimezone(UTC).strftime("%Y-%m-%d")
     signature = " ".join(sorted(title_tokens))
