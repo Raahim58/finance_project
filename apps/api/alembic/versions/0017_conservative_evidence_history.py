@@ -1,6 +1,6 @@
 """conservative evidence history budgets and progress
 
-Revision ID: 0017_conservative_evidence_history
+Revision ID: 0017_evidence_history
 Revises: 0016_evidence_refresh_requests
 """
 
@@ -9,7 +9,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0017_conservative_evidence_history"
+revision: str = "0017_evidence_history"
 down_revision: str | None = "0016_evidence_refresh_requests"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

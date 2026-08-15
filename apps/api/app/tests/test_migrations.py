@@ -4,8 +4,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
 
 API_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_revision_identifiers_fit_default_alembic_version_column() -> None:
+    config = Config()
+    config.set_main_option("script_location", str(API_ROOT / "alembic"))
+    revisions = ScriptDirectory.from_config(config).walk_revisions()
+    assert all(len(revision.revision) <= 32 for revision in revisions)
 
 
 def _alembic(database_url: str, revision: str, command: str = "upgrade") -> None:
