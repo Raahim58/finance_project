@@ -1,3 +1,10 @@
+x-worker-image: &worker-image
+  image: psx-ai-portfolio-api:local
+  pull_policy: build
+  restart: unless-stopped
+  build:
+    context: ./apps/api
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -24,9 +31,7 @@ services:
       - redis_data:/data
 
   worker-broad-fundamentals:
-    image: psx-ai-portfolio-api:local
-    build:
-      context: ./apps/api
+    <<: *worker-image
     command: celery -A app.celery_app worker -Q broad_fundamentals --concurrency=20 --loglevel=INFO
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
@@ -40,7 +45,7 @@ services:
       - redis
 
   worker-dps-history:
-    image: psx-ai-portfolio-api:local
+    <<: *worker-image
     command: celery -A app.celery_app worker -Q dps_history --concurrency=24 --loglevel=INFO
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
@@ -54,7 +59,7 @@ services:
       - redis
 
   worker-financial-download:
-    image: psx-ai-portfolio-api:local
+    <<: *worker-image
     command: celery -A app.celery_app worker -Q financial_download --concurrency=12 --loglevel=INFO
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
@@ -68,13 +73,28 @@ services:
       - redis
 
   worker-extract:
-    image: psx-ai-portfolio-api:local
+    <<: *worker-image
     command: celery -A app.celery_app worker -Q financial_extract --concurrency=3 --loglevel=INFO
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       SOURCE_ARTIFACT_ROOT: /data/artifacts
+    volumes:
+      - source_artifacts:/data/artifacts
+    depends_on:
+      - postgres
+      - redis
+
+  phase2-scheduler:
+    <<: *worker-image
+    command: python -m app.jobs.phase2_scheduler
+    environment:
+      DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      SOURCE_ARTIFACT_ROOT: /data/artifacts
+      PHASE2_REFILL_SECONDS: 2
     volumes:
       - source_artifacts:/data/artifacts
     depends_on:

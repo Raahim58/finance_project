@@ -62,9 +62,10 @@ celery -A app.celery_app worker -Q financial_download --concurrency=12 --logleve
 celery -A app.celery_app worker -Q financial_extract --concurrency=3 --loglevel=INFO
 python -m app.jobs.scheduler --once
 python -m app.jobs.scheduler
+python -m app.jobs.phase2_scheduler
 ```
 
-The live universe is synchronized from observed DPS symbol data; there is no configured stock list. Expensive history/report work is reconstructed from Postgres coverage rows after a Redis loss. Docker Compose persists Postgres, Redis AOF data, and source artifacts in named volumes.
+The live universe is synchronized from observed DPS symbol data; there is no configured stock list. Expensive history/report work is reconstructed from Postgres coverage rows after a Redis loss. Docker Compose persists Postgres, Redis AOF data, and source artifacts in named volumes. Its lightweight `phase2-scheduler` service checks drained producer queues every two seconds and immediately replenishes the next bounded batch from database coverage; the five-minute market scheduler remains separate.
 
 `MARKET_DATA_MODE=mock` is development-only. `dps` uses the verified direct DPS adapter; `auto` tries DPS and uses Yahoo only as a labeled real-data fallback. A failed live refresh retains prior observed rows and records failure/staleness; it never generates mock replacements. NCCPL remains a manual CSV import because ordinary retrieval is blocked; no anti-bot bypass is implemented.
 

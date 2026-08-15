@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     encryption_key: str = "dev-only-invalid-key"
     market_data_mode: str = "mock"
     market_data_refresh_seconds: int = 300
+    phase2_refill_seconds: int = Field(default=2, ge=1, le=60)
     market_history_years: int = 5
     market_history_bootstrap_enabled: bool = True
     scheduled_research_enabled: bool = True

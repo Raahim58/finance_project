@@ -11,6 +11,7 @@ htmlcov/
 *.db
 .env
 artifacts/
+data/
 source_artifacts/
 uploads/
 tmp/
