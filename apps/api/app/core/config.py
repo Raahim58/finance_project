@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     market_data_mode: str = "mock"
     market_data_refresh_seconds: int = 300
     phase2_refill_seconds: int = Field(default=2, ge=1, le=60)
+    phase2_max_retries: int = Field(default=3, ge=0, le=10)
+    phase2_retry_backoff_seconds: int = Field(default=300, ge=1, le=86400)
+    phase2_broad_queue_target: int = Field(default=40, ge=1, le=1000)
+    phase2_history_queue_target: int = Field(default=96, ge=1, le=5000)
+    phase2_download_queue_target: int = Field(default=24, ge=1, le=1000)
+    phase2_extract_queue_target: int = Field(default=12, ge=1, le=1000)
     market_history_years: int = 5
     market_history_bootstrap_enabled: bool = True
     scheduled_research_enabled: bool = True

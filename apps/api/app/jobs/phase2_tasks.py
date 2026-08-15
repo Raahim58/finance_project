@@ -16,14 +16,14 @@ from app.providers.fundamentals.dps_standardized import DpsStandardizedFundament
 from app.providers.fundamentals.psx_financials import PsxFinancialsProvider, ReportCatalogItem
 from app.providers.fundamentals.extraction import extract_facts, parse_financial_pdf, parse_period_end
 from app.services.canonical_market_service import reconcile_market_observations
-from app.services.coverage_service import begin, complete, coverage, fail
+from app.services.coverage_service import begin, complete, coverage, fail, is_queueable, reserve_and_publish
 from app.services.ingestion_persistence import source, store_artifact
 from app.services.market_ingestion import persist_market_data
 from app.services.market_providers import DpsMarketDataProvider
 from app.services.rag_service import create_document_from_pages, parse_pdf
 
 
-RETRY = dict(autoretry_for=(httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError), retry_backoff=True, retry_backoff_max=900, retry_jitter=True, max_retries=5)
+RETRY = dict(autoretry_for=(httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError), retry_backoff=True, retry_backoff_max=900, retry_jitter=True, max_retries=3)
 
 
 def _instrument(db, symbol: str) -> Instrument:
@@ -38,8 +38,8 @@ def broad_fundamentals(symbol: str) -> dict[str, object]:
     with SessionLocal() as db:
         instrument = _instrument(db, symbol)
         state = coverage(db, instrument.id, "standardized_fundamentals", "current", "dps")
-        if state.status == "complete":
-            return {"symbol": instrument.symbol, "status": "complete", "idempotent": True, "facts": state.item_count}
+        if state.status in {"complete", "partial"}:
+            return {"symbol": instrument.symbol, "status": state.status, "idempotent": True, "facts": state.item_count}
         begin(state); db.commit()
         try:
             content, facts, diagnostics, url = DpsStandardizedFundamentalsProvider().fetch(instrument.symbol)
@@ -115,6 +115,10 @@ def financial_download_catalog(symbol: str, mode: str = "incremental", as_of_yea
     with SessionLocal() as db:
         instrument = _instrument(db, symbol)
         provider = PsxFinancialsProvider(); year = as_of_year or date.today().year
+        dispatch = coverage(db, instrument.id, "report_catalog_dispatch", f"{mode}:{year}", "psx_financials")
+        if dispatch.status == "complete":
+            return {"symbol": instrument.symbol, "mode": mode, "status": "complete", "idempotent": True}
+        begin(dispatch); db.commit()
         years = range(year, year - 6, -1) if mode == "historical" else (year, year - 1)
         discovered: dict[str, ReportCatalogItem] = {}
         for catalog_year in years:
@@ -133,7 +137,10 @@ def financial_download_catalog(symbol: str, mode: str = "incremental", as_of_yea
                 state.diagnostics_json = json.dumps({"items": [{"symbol": item.symbol, "report_type": item.report_type, "period_ended": item.period_ended, "posting_date": item.posting_date.isoformat(), "report_url": item.report_url, "report_id": item.report_id} for item in items]}, sort_keys=True)
                 db.commit()
             except Exception as exc:
-                db.rollback(); state = coverage(db, instrument.id, "report_catalog", str(catalog_year), "psx_financials"); fail(state, exc); db.commit(); raise
+                db.rollback()
+                state = coverage(db, instrument.id, "report_catalog", str(catalog_year), "psx_financials"); fail(state, exc)
+                dispatch = coverage(db, instrument.id, "report_catalog_dispatch", f"{mode}:{year}", "psx_financials"); fail(dispatch, exc)
+                db.commit(); raise
         selected: list[ReportCatalogItem] = []
         annual = interim = 0
         for item in sorted(discovered.values(), key=lambda value: value.posting_date, reverse=True):
@@ -143,14 +150,12 @@ def financial_download_catalog(symbol: str, mode: str = "incremental", as_of_yea
         queued = 0
         for item in selected:
             state = coverage(db, instrument.id, "financial_report", item.report_id, "psx_financials")
-            if state.status in {"missing", "failed", "partial"}:
-                financial_download_pdf.delay({"symbol": item.symbol, "report_type": item.report_type, "period_ended": item.period_ended, "posting_date": item.posting_date.isoformat(), "report_url": item.report_url, "report_id": item.report_id})
+            payload = {"symbol": item.symbol, "report_type": item.report_type, "period_ended": item.period_ended, "posting_date": item.posting_date.isoformat(), "report_url": item.report_url, "report_id": item.report_id}
+            now = datetime.now(UTC)
+            if is_queueable(state, now) and reserve_and_publish(db, state, financial_download_pdf, (payload,), now):
                 queued += 1
-            else:
-                document = db.scalar(select(Document).where(Document.source_url == item.report_url))
-                if document is not None:
-                    extraction = coverage(db, instrument.id, "financial_extract", document.id, "psx_financials")
-                    if extraction.status != "complete": financial_extract.delay(document.id)
+        dispatch = coverage(db, instrument.id, "report_catalog_dispatch", f"{mode}:{year}", "psx_financials")
+        complete(dispatch, len(selected)); db.commit()
         return {"symbol": instrument.symbol, "mode": mode, "catalog_items": len(discovered), "selected": len(selected), "queued": queued}
 
 
@@ -170,7 +175,6 @@ def financial_download_pdf(payload: dict[str, object]) -> dict[str, object]:
                 document = Document(symbol=item.symbol, document_type="annual_report" if "annual" in item.report_type else "interim_report", title=f"{item.symbol} {item.report_type} — {item.period_ended}", source_name="PSX Financials", source_url=item.report_url, content_hash=artifact.sha256, artifact_id=artifact.id, published_date=item.posting_date, downloaded_at=datetime.now(UTC), status="downloaded", visibility="public")
                 db.add(document); db.flush()
             complete(state, 1); db.commit()
-            financial_extract.delay(document.id)
             return {"report_id": item.report_id, "document_id": document.id, "status": "complete"}
         except Exception as exc:
             db.rollback(); state = coverage(db, instrument.id, "financial_report", item.report_id, "psx_financials"); fail(state, exc); db.commit(); raise
@@ -183,7 +187,7 @@ def financial_extract(document_id: str) -> dict[str, object]:
         if document is None: raise ValueError("Document not found")
         instrument = _instrument(db, document.symbol or "")
         state = coverage(db, instrument.id, "financial_extract", document.id, "psx_financials")
-        if state.status == "complete": return {"document_id": document.id, "status": "complete", "idempotent": True, "facts": state.item_count}
+        if state.status in {"complete", "partial"}: return {"document_id": document.id, "status": state.status, "idempotent": True, "facts": state.item_count}
         begin(state); db.commit()
         try:
             artifact = db.get(SourceArtifact, document.artifact_id)

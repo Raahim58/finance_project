@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -11,6 +11,7 @@ from app.providers.fundamentals.dps_standardized import parse_company_page
 from app.providers.fundamentals.extraction import parse_financial_pdf
 from app.services.market_ingestion import sync_observed_dps_universe
 from app.services.screening_service import compute_screening_snapshots, deep_instrument_ids
+from app.services.coverage_service import is_queueable, reserve_and_publish
 
 
 def _table(metric: str = "Sales") -> str:
@@ -97,6 +98,39 @@ def test_coverage_key_is_durable_and_unique():
         db.commit()
         row = db.scalar(select(IngestionCoverage).where(IngestionCoverage.period_key == "2023-04"))
         assert (row.dataset_type, row.status, row.item_count) == ("price_history", "complete", 20)
+
+
+def test_phase2_queueability_treats_partial_and_live_reservations_as_terminal():
+    now = datetime.now(UTC)
+    row = IngestionCoverage(instrument_id="instrument", dataset_type="price_history", period_key="2025-01", source="dps", status="partial")
+    assert is_queueable(row, now) is False
+    row.status = "queued"; row.attempted_at = now
+    assert is_queueable(row, now) is False
+    row.status = "running"
+    assert is_queueable(row, now) is False
+    row.status = "failed"; row.retry_count = 1; row.attempted_at = now - timedelta(hours=1)
+    assert is_queueable(row, now) is True
+    row.retry_count = 3
+    assert is_queueable(row, now) is False
+
+
+def test_phase2_reservation_is_persisted_before_publish():
+    class FakeTask:
+        target_id = None
+        observed_status = None
+
+        def delay(self, *_args):
+            with SessionLocal() as check:
+                self.observed_status = check.scalar(select(IngestionCoverage.status).where(IngestionCoverage.id == self.target_id))
+
+    with SessionLocal() as db:
+        sync_observed_dps_universe(db, [{"symbol": "QUEUE", "name": "Queue", "sector": "Cement", "is_debt": False, "is_etf": False, "is_gem": False}])
+        instrument = db.scalar(select(Instrument).where(Instrument.symbol == "QUEUE"))
+        row = IngestionCoverage(instrument_id=instrument.id, dataset_type="price_history", period_key="2025-01", source="dps", status="missing")
+        db.add(row); db.commit()
+        task = FakeTask(); task.target_id = row.id
+        assert reserve_and_publish(db, row, task, ("QUEUE", 2025, 1), datetime.now(UTC)) is True
+        assert task.observed_status == "queued"
 
 
 def test_blank_pdf_is_classified_for_selective_ocr_without_facts():

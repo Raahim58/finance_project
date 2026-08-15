@@ -9,18 +9,25 @@ from app.db.session import SessionLocal
 from app.services.phase2_orchestration import enqueue_reconstructable_phase2_work
 
 
-PRODUCER_QUEUES = ("broad_fundamentals", "dps_history", "financial_download")
+QUEUE_TARGETS = {
+    "broad_fundamentals": settings.phase2_broad_queue_target,
+    "dps_history": settings.phase2_history_queue_target,
+    "financial_download": settings.phase2_download_queue_target,
+    "financial_extract": settings.phase2_extract_queue_target,
+}
 
 
 def main() -> None:
     redis = Redis.from_url(settings.celery_broker_url)
     while True:
         try:
-            # Refill only after the prior producer batch has drained. Active tasks
-            # are already marked running in Postgres and are not reconstructed.
-            if sum(int(redis.llen(queue)) for queue in PRODUCER_QUEUES) == 0:
+            limits = {
+                queue: max(0, target - int(redis.llen(queue)))
+                for queue, target in QUEUE_TARGETS.items()
+            }
+            if any(limits.values()):
                 with SessionLocal() as db:
-                    queued = enqueue_reconstructable_phase2_work(db, limit=500)
+                    queued = enqueue_reconstructable_phase2_work(db, queue_limits=limits)
                 print(f"Phase 2 queues replenished: {queued}", flush=True)
                 if not any(queued.values()):
                     time.sleep(60)

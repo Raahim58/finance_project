@@ -3,10 +3,12 @@ from datetime import UTC, date, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.jobs.phase2_tasks import broad_fundamentals, dps_history, financial_download_catalog
+from app.core.config import settings
+from app.jobs.phase2_tasks import broad_fundamentals, dps_history, financial_download_catalog, financial_extract
+from app.models.document import Document
 from app.models.market import Company
 from app.models.workstation import IngestionCoverage, Instrument
-from app.services.coverage_service import coverage
+from app.services.coverage_service import coverage, is_queueable, reserve_and_publish
 from app.services.screening_service import deep_instrument_ids
 
 
@@ -17,29 +19,79 @@ def _months(start: date, end: date):
         cursor = date(cursor.year + (cursor.month == 12), 1 if cursor.month == 12 else cursor.month + 1, 1)
 
 
-def enqueue_reconstructable_phase2_work(db: Session, now: datetime | None = None, limit: int = 500) -> dict[str, int]:
-    """Rebuild broker work solely from Postgres state; safe after Redis loss."""
+def enqueue_reconstructable_phase2_work(
+    db: Session,
+    now: datetime | None = None,
+    queue_limits: dict[str, int] | None = None,
+) -> dict[str, int]:
+    """Publish bounded, independently sized queues from durable Postgres coverage."""
     now = now or datetime.now(UTC)
-    queued = {"broad_fundamentals": 0, "dps_history": 0, "financial_download": 0}
-    active = list(db.scalars(select(Instrument).join(Company, Company.id == Instrument.company_id).where(Company.is_active.is_(True)).order_by(Instrument.symbol)))
-    stale_before = now - timedelta(days=30)
-    abandoned_before = now - timedelta(hours=1)
+    limits = queue_limits or {
+        "broad_fundamentals": settings.phase2_broad_queue_target,
+        "dps_history": settings.phase2_history_queue_target,
+        "financial_download": settings.phase2_download_queue_target,
+        "financial_extract": settings.phase2_extract_queue_target,
+    }
+    queued = {name: 0 for name in limits}
+    active = list(db.scalars(
+        select(Instrument)
+        .join(Company, Company.id == Instrument.company_id)
+        .where(Company.is_active.is_(True))
+        .order_by(Instrument.symbol)
+    ))
+
     for instrument in active:
+        if queued.get("broad_fundamentals", 0) >= limits.get("broad_fundamentals", 0):
+            break
         state = coverage(db, instrument.id, "standardized_fundamentals", "current", "dps")
-        if state.status in {"missing", "failed", "partial"} or (state.status == "running" and (state.attempted_at is None or state.attempted_at < abandoned_before)) or (state.completed_at and state.completed_at < stale_before):
-            broad_fundamentals.delay(instrument.symbol); queued["broad_fundamentals"] += 1
-            if sum(queued.values()) >= limit: break
+        if is_queueable(state, now, refresh_after=timedelta(days=30)) and reserve_and_publish(
+            db, state, broad_fundamentals, (instrument.symbol,), now
+        ):
+            queued["broad_fundamentals"] += 1
+
     deep_ids = deep_instrument_ids(db)
-    end = now.date(); start = end - timedelta(days=5 * 366)
+    end = now.date()
+    start = end - timedelta(days=5 * 366)
     for instrument in (row for row in active if row.id in deep_ids):
-        for year, month in _months(start, end):
-            period_key = f"{year:04d}-{month:02d}"
-            state = coverage(db, instrument.id, "price_history", period_key, "dps")
-            if state.status in {"missing", "failed", "partial"} or (state.status == "running" and (state.attempted_at is None or state.attempted_at < abandoned_before)):
-                dps_history.delay(instrument.symbol, year, month); queued["dps_history"] += 1
-                if sum(queued.values()) >= limit: break
-        financial_download_catalog.delay(instrument.symbol, "historical")
-        queued["financial_download"] += 1
-        if sum(queued.values()) >= limit: break
-    db.commit()
+        if queued.get("dps_history", 0) < limits.get("dps_history", 0):
+            for year, month in _months(start, end):
+                if queued["dps_history"] >= limits["dps_history"]:
+                    break
+                period_key = f"{year:04d}-{month:02d}"
+                state = coverage(db, instrument.id, "price_history", period_key, "dps")
+                if is_queueable(state, now) and reserve_and_publish(
+                    db, state, dps_history, (instrument.symbol, year, month), now
+                ):
+                    queued["dps_history"] += 1
+
+        if queued.get("financial_download", 0) < limits.get("financial_download", 0):
+            period_key = f"historical:{end.year}"
+            state = coverage(db, instrument.id, "report_catalog_dispatch", period_key, "psx_financials")
+            if is_queueable(state, now) and reserve_and_publish(
+                db, state, financial_download_catalog, (instrument.symbol, "historical", end.year), now
+            ):
+                queued["financial_download"] += 1
+
+        if all(queued.get(name, 0) >= limit for name, limit in limits.items()):
+            break
+
+    if queued.get("financial_extract", 0) < limits.get("financial_extract", 0):
+        instruments_by_symbol = {row.symbol: row for row in active}
+        documents = db.scalars(
+            select(Document)
+            .where(Document.artifact_id.is_not(None))
+            .order_by(Document.downloaded_at, Document.id)
+        )
+        for document in documents:
+            if queued["financial_extract"] >= limits["financial_extract"]:
+                break
+            instrument = instruments_by_symbol.get(document.symbol or "")
+            if instrument is None or instrument.id not in deep_ids:
+                continue
+            state = coverage(db, instrument.id, "financial_extract", document.id, "psx_financials")
+            if is_queueable(state, now) and reserve_and_publish(
+                db, state, financial_extract, (document.id,), now
+            ):
+                queued["financial_extract"] += 1
+
     return queued

@@ -1,10 +1,11 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.workstation import IngestionCoverage
+from app.core.config import settings
 
 
 def coverage(db: Session, instrument_id: str, dataset_type: str, period_key: str, source: str) -> IngestionCoverage:
@@ -35,3 +36,37 @@ def fail(row: IngestionCoverage, exc: Exception) -> None:
     row.status = "failed"; row.retry_count += 1
     row.error_class = type(exc).__name__; row.error_message = str(exc)[:2000]
     row.completed_at = None
+
+
+def is_queueable(row: IngestionCoverage, now: datetime, *, refresh_after: timedelta | None = None) -> bool:
+    attempted = row.attempted_at
+    if row.status == "missing":
+        return True
+    if row.status == "failed":
+        if row.retry_count >= settings.phase2_max_retries:
+            return False
+        delay = timedelta(seconds=min(3600, settings.phase2_retry_backoff_seconds * (2 ** max(0, row.retry_count - 1))))
+        return attempted is None or attempted <= now - delay
+    if row.status == "queued":
+        return attempted is None or attempted <= now - timedelta(minutes=15)
+    if row.status == "running":
+        return attempted is None or attempted <= now - timedelta(hours=1)
+    if row.status == "complete" and refresh_after is not None:
+        return row.completed_at is not None and row.completed_at <= now - refresh_after
+    return False
+
+
+def reserve_and_publish(db: Session, row: IngestionCoverage, task, args: tuple, now: datetime) -> bool:
+    row.status = "queued"
+    row.attempted_at = now
+    row.error_class = None
+    row.error_message = None
+    db.commit()
+    try:
+        task.delay(*args)
+    except Exception as exc:
+        db.refresh(row)
+        fail(row, exc)
+        db.commit()
+        return False
+    return True
