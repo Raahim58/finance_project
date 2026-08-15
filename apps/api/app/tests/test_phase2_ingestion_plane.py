@@ -8,7 +8,7 @@ from app.db.session import SessionLocal
 from app.models.market import Company
 from app.models.workstation import CompanyScreeningSnapshot, IngestionCoverage, Instrument, StandardizedFinancialFact
 from app.providers.fundamentals.dps_standardized import parse_company_page
-from app.providers.fundamentals.extraction import parse_financial_pdf
+from app.providers.fundamentals.extraction import extract_facts, parse_financial_pdf
 from app.services.market_ingestion import sync_observed_dps_universe
 from app.services.screening_service import compute_screening_snapshots, deep_instrument_ids
 from app.services.coverage_service import is_queueable, reserve_and_publish
@@ -143,3 +143,36 @@ def test_blank_pdf_is_classified_for_selective_ocr_without_facts():
     assert len(pages) == 1
     assert classification == "scanned_or_sparse"
     assert "OCR" in diagnostics[0]
+
+
+def test_image_only_financial_statement_uses_ocr_with_lower_confidence():
+    import io
+    import shutil
+
+    import pytest
+    from PIL import Image, ImageDraw, ImageFont
+
+    if not shutil.which("pdftoppm") or not shutil.which("tesseract"):
+        pytest.skip("Poppler and Tesseract are required for OCR integration")
+    image = Image.new("RGB", (1800, 2200), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=44)
+    lines = [
+        "STATEMENT OF FINANCIAL POSITION",
+        "PKR in million",
+        "Total assets 1,000 900",
+        "Total liabilities 400 350",
+        "Total equity 600 550",
+    ]
+    for index, line in enumerate(lines):
+        draw.text((120, 180 + index * 110), line, fill="black", font=font)
+    buffer = io.BytesIO(); image.save(buffer, format="PDF", resolution=150)
+    pages, classification, diagnostics = parse_financial_pdf(buffer.getvalue())
+    facts, fact_diagnostics = extract_facts(
+        pages, date(2025, 12, 31), extraction_method="ocr", confidence=Decimal("0.700000")
+    )
+    assert classification == "ocr"
+    assert any("selected 1" in message for message in diagnostics)
+    assert {fact.taxonomy_key for fact in facts} == {"assets", "liabilities", "equity"}
+    assert all(fact.extraction_method == "ocr" and fact.confidence == Decimal("0.700000") for fact in facts)
+    assert not any("remain unavailable" in message for message in fact_diagnostics)

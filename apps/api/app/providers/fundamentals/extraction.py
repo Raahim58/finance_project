@@ -2,6 +2,11 @@
 
 import re
 import io
+import shutil
+import subprocess
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -22,6 +27,10 @@ ALIASES = {
 }
 LABELS = {alias: canonical for canonical, aliases in ALIASES.items() for alias in aliases}
 NUMBER = re.compile(r"\(?-?\d[\d,]*(?:\.\d+)?\)?")
+STATEMENT_SIGNALS = ("financial position", "balance sheet", "profit and loss", "income statement", "profit or loss", "cash flow")
+MAX_OCR_PAGES = 80
+OCR_PAGE_TIMEOUT_SECONDS = 30
+FINANCIAL_EXTRACTION_VERSION = "financial-layout-v3-ocr"
 
 
 @dataclass(frozen=True)
@@ -45,7 +54,7 @@ class FinancialPage:
 
 
 def parse_financial_pdf(content: bytes) -> tuple[list[FinancialPage], str, list[str]]:
-    """Use positional PDF text plus table extraction; never OCR text-native pages."""
+    """Use positional text first, then bounded OCR only for sparse/image PDFs."""
     import pdfplumber
 
     pages: list[FinancialPage] = []
@@ -53,19 +62,67 @@ def parse_financial_pdf(content: bytes) -> tuple[list[FinancialPage], str, list[
     with pdfplumber.open(io.BytesIO(content)) as pdf:
         for number, page in enumerate(pdf.pages, start=1):
             text = page.extract_text(layout=True) or ""
-            table_lines: list[str] = []
-            if any(signal in text.lower() for signal in ("financial position", "balance sheet", "profit and loss", "income statement", "cash flow")):
-                for table in page.extract_tables() or []:
-                    for row in table:
-                        cleaned = [" ".join(str(value or "").split()) for value in row]
-                        if any(cleaned): table_lines.append(" ".join(cleaned))
-            merged = text + (("\n" + "\n".join(table_lines)) if table_lines else "")
-            pages.append(FinancialPage(number, merged))
+            pages.append(FinancialPage(number, text))
     text_chars = sum(len(page.text.strip()) for page in pages)
     classification = "text_native" if text_chars >= max(500, len(pages) * 100) else "scanned_or_sparse"
     if classification == "scanned_or_sparse":
-        diagnostics.append("Sparse/image-only PDF detected after normal extraction; selective OCR is required.")
+        diagnostics.append("Sparse/image-only PDF detected after normal extraction; bounded selective OCR started.")
+        ocr_pages, ocr_diagnostics = _ocr_financial_pages(content, len(pages))
+        diagnostics.extend(ocr_diagnostics)
+        if ocr_pages:
+            pages = ocr_pages
+            classification = "ocr"
     return pages, classification, diagnostics
+
+
+def _ocr_financial_pages(content: bytes, page_count: int) -> tuple[list[FinancialPage], list[str]]:
+    if not shutil.which("pdftoppm") or not shutil.which("tesseract"):
+        return [], ["OCR unavailable: pdftoppm and tesseract executables are required."]
+    scanned = min(page_count, MAX_OCR_PAGES)
+    selected: list[FinancialPage] = []
+    failures = 0
+    with tempfile.TemporaryDirectory(prefix="psx-ocr-") as directory:
+        pdf_path = f"{directory}/source.pdf"
+        with open(pdf_path, "wb") as stream:
+            stream.write(content)
+        try:
+            subprocess.run(
+                ["pdftoppm", "-f", "1", "-l", str(scanned), "-r", "150", "-png", pdf_path, f"{directory}/page"],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=max(60, scanned * 3),
+            )
+        except (OSError, subprocess.SubprocessError):
+            return [], ["OCR rendering failed or timed out before page recognition."]
+
+        image_paths = sorted(Path(directory).glob("page-*.png"))
+
+        def recognize(image_path: Path) -> str | None:
+            try:
+                result = subprocess.run(
+                    ["tesseract", str(image_path), "stdout", "-l", "eng", "--psm", "6"],
+                    check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=OCR_PAGE_TIMEOUT_SECONDS,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return None
+            return result.stdout.strip()
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            recognized = list(executor.map(recognize, image_paths))
+        for page_number, text in enumerate(recognized, start=1):
+            if text is None:
+                failures += 1
+                continue
+            lowered = text.lower()
+            known_labels = sum(alias in lowered for alias in LABELS)
+            if any(signal in lowered for signal in STATEMENT_SIGNALS) or known_labels >= 2:
+                selected.append(FinancialPage(page_number, text))
+    diagnostics = [f"OCR scanned {scanned} of {page_count} pages and selected {len(selected)} financial-statement pages."]
+    if page_count > scanned:
+        diagnostics.append(f"OCR page safety limit reached; {page_count - scanned} pages were not scanned.")
+    if failures:
+        diagnostics.append(f"OCR failed or timed out on {failures} pages.")
+    if not selected:
+        diagnostics.append("OCR found no sufficiently recognizable financial-statement pages.")
+    return selected, diagnostics
 
 
 def _scale(text: str) -> Decimal | None:
@@ -77,7 +134,13 @@ def _scale(text: str) -> Decimal | None:
     return None
 
 
-def extract_facts(pages: list[object], period_end: date) -> tuple[list[ExtractedFact], list[str]]:
+def extract_facts(
+    pages: list[object],
+    period_end: date,
+    *,
+    extraction_method: str = "text_layout",
+    confidence: Decimal = Decimal("0.900000"),
+) -> tuple[list[ExtractedFact], list[str]]:
     facts: list[ExtractedFact] = []
     diagnostics: list[str] = []
     seen: set[tuple[str, date]] = set()
@@ -130,7 +193,7 @@ def extract_facts(pages: list[object], period_end: date) -> tuple[list[Extracted
                     continue
                 if taxonomy in {"earnings_per_share", "dividend_per_share"}:
                     value /= scale
-                facts.append(ExtractedFact(taxonomy, -value if negative else value, "PKR", "PKR", fact_period, page_number, line[:255], consolidated=not unconsolidated))
+                facts.append(ExtractedFact(taxonomy, -value if negative else value, "PKR", "PKR", fact_period, page_number, line[:255], extraction_method=extraction_method, confidence=confidence, consolidated=not unconsolidated))
                 seen.add(key)
     if not facts:
         diagnostics.append("No sufficiently unambiguous known financial-statement rows were found; facts remain unavailable.")

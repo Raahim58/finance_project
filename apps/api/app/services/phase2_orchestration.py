@@ -8,6 +8,7 @@ from app.jobs.phase2_tasks import broad_fundamentals, dps_history, financial_dow
 from app.models.document import Document
 from app.models.market import Company
 from app.models.workstation import IngestionCoverage, Instrument
+from app.providers.fundamentals.extraction import FINANCIAL_EXTRACTION_VERSION
 from app.services.coverage_service import coverage, is_queueable, reserve_and_publish
 from app.services.screening_service import deep_instrument_ids
 
@@ -89,6 +90,11 @@ def enqueue_reconstructable_phase2_work(
             if instrument is None or instrument.id not in deep_ids:
                 continue
             state = coverage(db, instrument.id, "financial_extract", document.id, "psx_financials")
+            if document.status == "needs_ocr" and document.extraction_version != FINANCIAL_EXTRACTION_VERSION:
+                state.status = "missing"
+                state.retry_count = 0
+                state.error_class = None
+                state.error_message = None
             if is_queueable(state, now) and reserve_and_publish(
                 db, state, financial_extract, (document.id,), now
             ):

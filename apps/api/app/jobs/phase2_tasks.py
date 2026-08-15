@@ -14,7 +14,7 @@ from app.models.document import Document
 from app.models.workstation import FinancialFact, Instrument, MarketObservation, SourceArtifact, StandardizedFinancialFact
 from app.providers.fundamentals.dps_standardized import DpsStandardizedFundamentalsProvider
 from app.providers.fundamentals.psx_financials import PsxFinancialsProvider, ReportCatalogItem
-from app.providers.fundamentals.extraction import extract_facts, parse_financial_pdf, parse_period_end
+from app.providers.fundamentals.extraction import FINANCIAL_EXTRACTION_VERSION, extract_facts, parse_financial_pdf, parse_period_end
 from app.services.canonical_market_service import reconcile_market_observations
 from app.services.coverage_service import begin, complete, coverage, fail, is_queueable, reserve_and_publish
 from app.services.ingestion_persistence import source, store_artifact
@@ -194,15 +194,17 @@ def financial_extract(document_id: str) -> dict[str, object]:
             if artifact is None or not artifact.storage_path: raise ValueError("Downloaded report artifact is unavailable")
             content = Path(artifact.storage_path).read_bytes(); pages, classification, parser_diagnostics = parse_financial_pdf(content)
             period_end = parse_period_end(document.title) or document.published_date
-            facts, diagnostics = extract_facts(pages, period_end) if period_end else ([], ["Report period unavailable."])
+            method = "ocr" if classification == "ocr" else "text_layout"
+            confidence = Decimal("0.700000") if classification == "ocr" else Decimal("0.900000")
+            facts, diagnostics = extract_facts(pages, period_end, extraction_method=method, confidence=confidence) if period_end else ([], ["Report period unavailable."])
             diagnostics = parser_diagnostics + diagnostics
-            if classification == "scanned_or_sparse": diagnostics.append("Normal extraction was sparse; selective OCR is required but no deterministic OCR result was available, so facts remain unavailable.")
-            for fact in facts if classification == "text_native" else []:
+            if classification == "scanned_or_sparse": diagnostics.append("Normal and OCR extraction produced no deterministic financial facts; facts remain unavailable.")
+            for fact in facts if classification in {"text_native", "ocr"} else []:
                 exists = db.scalar(select(FinancialFact.id).where(FinancialFact.instrument_id == instrument.id, FinancialFact.taxonomy_key == fact.taxonomy_key, FinancialFact.period_end == fact.period_end, FinancialFact.document_id == document.id))
                 if not exists:
                     db.add(FinancialFact(instrument_id=instrument.id, taxonomy_key=fact.taxonomy_key, period_type="annual" if document.document_type == "annual_report" else "interim", period_end=fact.period_end, filing_date=document.published_date, value=fact.value, unit=fact.unit, currency=fact.currency, consolidated=fact.consolidated, document_id=document.id, page_number=fact.page_number, source_label=fact.source_label, extraction_method=fact.extraction_method, confidence=fact.confidence, diagnostics_json=json.dumps({"messages": diagnostics})))
-            document.status = "parsed" if classification == "text_native" else "needs_ocr"; document.extraction_version = "financial-layout-v2"; document.parsed_at = datetime.now(UTC)
-            complete(state, len(facts) if classification == "text_native" else 0, diagnostics); db.commit()
+            document.status = "parsed" if classification in {"text_native", "ocr"} else "needs_ocr"; document.extraction_version = FINANCIAL_EXTRACTION_VERSION; document.parsed_at = datetime.now(UTC)
+            complete(state, len(facts) if classification in {"text_native", "ocr"} else 0, diagnostics); db.commit()
             return {"document_id": document.id, "status": state.status, "classification": classification, "facts": state.item_count, "diagnostics": diagnostics}
         except Exception as exc:
             db.rollback(); state = coverage(db, instrument.id, "financial_extract", document_id, "psx_financials"); fail(state, exc); db.commit(); raise
