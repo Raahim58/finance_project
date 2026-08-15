@@ -24,6 +24,7 @@ services:
       - redis_data:/data
 
   worker-broad-fundamentals:
+    image: psx-ai-portfolio-api:local
     build:
       context: ./apps/api
     command: celery -A app.celery_app worker -Q broad_fundamentals --concurrency=20 --loglevel=INFO
@@ -39,8 +40,7 @@ services:
       - redis
 
   worker-dps-history:
-    build:
-      context: ./apps/api
+    image: psx-ai-portfolio-api:local
     command: celery -A app.celery_app worker -Q dps_history --concurrency=24 --loglevel=INFO
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
@@ -54,8 +54,7 @@ services:
       - redis
 
   worker-financial-download:
-    build:
-      context: ./apps/api
+    image: psx-ai-portfolio-api:local
     command: celery -A app.celery_app worker -Q financial_download --concurrency=12 --loglevel=INFO
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
@@ -69,8 +68,7 @@ services:
       - redis
 
   worker-extract:
-    build:
-      context: ./apps/api
+    image: psx-ai-portfolio-api:local
     command: celery -A app.celery_app worker -Q financial_extract --concurrency=3 --loglevel=INFO
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
