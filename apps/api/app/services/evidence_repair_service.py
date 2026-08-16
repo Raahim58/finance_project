@@ -76,3 +76,39 @@ def repair_psx_role_slot_collisions(
         requeued += 1
     db.flush()
     return RepairResult(eligible, requeued, skipped_historical)
+
+
+def repair_pass4_relative_rss_urls(
+    db: Session,
+    *,
+    apply: bool = False,
+    limit: int = 1000,
+) -> RepairResult:
+    """Repair only Pass 4 rows failed by the relative-RSS-link adapter defect."""
+
+    rows = db.scalars(
+        select(DiscoveryCandidate)
+        .join(EvidenceSourceConfig, EvidenceSourceConfig.id == DiscoveryCandidate.source_config_id)
+        .where(
+            EvidenceSourceConfig.canary_group == "pass4_official",
+            DiscoveryCandidate.status == CandidateStatus.FETCH_READY.value,
+            DiscoveryCandidate.last_error_class == "ValueError",
+            DiscoveryCandidate.last_error_message == "Evidence fetch requires an HTTP(S) URL",
+            DiscoveryCandidate.canonical_url.like("http%"),
+        )
+        .order_by(DiscoveryCandidate.discovered_at, DiscoveryCandidate.id)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    ).all()
+    eligible = len(rows)
+    if apply:
+        for candidate in rows:
+            candidate.observed_url = candidate.canonical_url
+            candidate.fetch_started_at = None
+            candidate.lease_expires_at = None
+            candidate.next_attempt_at = None
+            candidate.last_error_class = None
+            candidate.last_error_message = None
+            candidate.scoring_reasons_json = '["requeued_after_relative_rss_url_fix"]'
+        db.flush()
+    return RepairResult(eligible, eligible if apply else 0, 0)

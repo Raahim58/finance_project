@@ -151,10 +151,19 @@ python -m app.jobs.evidence_scheduler
 ```
 
 On macOS with Python 3.13, use Celery's threads pool if the prefork pool repeats
-`SIGSEGV` crashes:
+`SIGSEGV` crashes. Apply `-P threads` to every evidence worker while preserving
+the concurrency values above, for example:
 
 ```bash
 celery -A app.celery_app worker -P threads -Q evidence_fetch --concurrency=16 --loglevel=INFO
+```
+
+If Pass 4 RSS candidates were created before the relative-link fix, audit and
+then narrowly requeue only those pre-HTTP failures:
+
+```bash
+python -m app.jobs.evidence_repair --repair pass4-relative-rss-urls
+python -m app.jobs.evidence_repair --repair pass4-relative-rss-urls --apply
 ```
 
 The implementation smoke is fixture-only and performs no corpus ingestion:
@@ -167,7 +176,7 @@ After the workers start, one scheduler cycle initializes source rows and queues
 only bounded due work:
 
 ```bash
-python -m app.jobs.evidence_scheduler --once
+python -u -m app.jobs.evidence_scheduler --once
 python -m app.jobs.evidence_status --watch 10
 ```
 

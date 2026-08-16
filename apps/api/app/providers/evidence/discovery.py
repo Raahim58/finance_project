@@ -52,7 +52,11 @@ class RssAtomDiscovery:
             rows.append(
                 Candidate(
                     source_key=self.source_key,
-                    observed_url=url,
+                    # Fetch the resolved URL. Several official feeds (including
+                    # EIA) publish root-relative entry links; retaining the raw
+                    # link here makes the downstream bounded HTTP client reject
+                    # an otherwise valid candidate before making a request.
+                    observed_url=canonical,
                     canonical_url=canonical,
                     external_id=str(entry.get("id") or canonical),
                     headline=title,

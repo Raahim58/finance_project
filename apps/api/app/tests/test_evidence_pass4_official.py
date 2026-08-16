@@ -186,6 +186,29 @@ def test_generic_rss_and_listing_adapters_parse_official_fixtures():
     assert candidates[0].headline == "SECP policy update"
 
 
+def test_generic_rss_adapter_resolves_relative_official_links_for_fetch():
+    payload = b"""<?xml version='1.0'?><rss version='2.0'><channel><item>
+      <guid>eia-relative-1</guid><title>Official energy update</title>
+      <link>/pressroom/releases/press123.php</link>
+    </item></channel></rss>"""
+
+    def fetcher(*args, **kwargs):
+        return payload, str(args[0]), "application/rss+xml", {}
+
+    source = HttpEvidenceSource(
+        "eia_releases",
+        "U.S. Energy Information Administration",
+        "https://www.eia.gov/rss/press_rss.xml",
+        "rss",
+        "global_macro",
+        fetcher=fetcher,
+    )
+
+    candidate = source.discover_since({}, 1).candidates[0]
+    assert candidate.observed_url == "https://www.eia.gov/pressroom/releases/press123.php"
+    assert candidate.canonical_url == candidate.observed_url
+
+
 @pytest.mark.parametrize("source_key", sorted(OFFICIAL_CANARY_KEYS))
 def test_every_official_source_has_a_generic_adapter_fixture(source_key):
     spec = next(item for item in SOURCE_SPECS if item.key == source_key)

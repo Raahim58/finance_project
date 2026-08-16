@@ -149,6 +149,54 @@ def test_scheduler_reconstructs_live_before_historical_from_postgres(tmp_path, m
         assert all(db.get(DiscoveryCandidate, row.id).lease_expires_at for row in candidates)
 
 
+def test_deferred_fetch_backlog_does_not_suppress_due_discovery(monkeypatch):
+    """Tomorrow's budget-deferred work must not make today's scheduler idle."""
+
+    monkeypatch.setattr(settings, "evidence_fetch_queue_target", 1)
+    published = []
+    from app.jobs import evidence_tasks
+
+    for task in (
+        evidence_tasks.discover,
+        evidence_tasks.fetch,
+        evidence_tasks.parse,
+        evidence_tasks.pdf,
+        evidence_tasks.index,
+        evidence_tasks.targeted_refresh,
+        evidence_tasks.historical_hydrate,
+    ):
+        monkeypatch.setattr(
+            task,
+            "apply_async",
+            lambda *, args, queue, priority: published.append((args, queue, priority)),
+        )
+
+    with SessionLocal() as db:
+        _, config, _ = ensure_source_config(db, "dawn")
+        row, _ = persist_candidate(
+            db,
+            config,
+            Candidate(
+                "dawn",
+                "https://www.dawn.com/news/deferred-budget-row",
+                "Pakistan policy rate deferred row",
+                "Dawn",
+                datetime.now(UTC),
+                "rss_atom",
+                external_id="deferred-budget-row",
+                metadata={"priority_class": "live"},
+            ),
+        )
+        row.next_attempt_at = datetime.now(UTC) + timedelta(days=1)
+        db.commit()
+
+        result = run_evidence_scheduler_once(db)
+
+        assert result.discovery_queued > 0
+        assert result.fetch_queued == 0
+        assert any(queue == "evidence_discovery" for _, queue, _ in published)
+
+
 def _auth(client, email):
     token = client.post(
         "/auth/signup", json={"email": email, "password": "password123"}

@@ -149,6 +149,10 @@ def run_evidence_scheduler_once(db: Session) -> SchedulerResult:
     actionable_fetch_backlog = db.scalar(
         select(func.count()).select_from(DiscoveryCandidate).where(
             or_(
+                DiscoveryCandidate.next_attempt_at.is_(None),
+                DiscoveryCandidate.next_attempt_at <= now,
+            ),
+            or_(
                 DiscoveryCandidate.status == CandidateStatus.FETCH_READY.value,
                 (
                     DiscoveryCandidate.status == CandidateStatus.FAILED.value

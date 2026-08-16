@@ -222,12 +222,32 @@ def live_evidence_pressure(db: Session) -> int:
         CandidateStatus.CLUSTERED.value,
         CandidateStatus.FAILED.value,
     }
+    now = datetime.now(UTC)
     pressure = 0
     for row in db.scalars(
         select(DiscoveryCandidate).where(DiscoveryCandidate.status.in_(nonterminal))
     ):
-        if json.loads(row.metadata_json or "{}").get("priority_class", "live") == "live":
-            pressure += 1
+        if json.loads(row.metadata_json or "{}").get("priority_class", "live") != "live":
+            continue
+        next_attempt_at = row.next_attempt_at
+        if next_attempt_at is not None:
+            if next_attempt_at.tzinfo is None:
+                next_attempt_at = next_attempt_at.replace(tzinfo=UTC)
+            else:
+                next_attempt_at = next_attempt_at.astimezone(UTC)
+        if (
+            row.status in {CandidateStatus.FETCH_READY.value, CandidateStatus.FAILED.value}
+            and next_attempt_at is not None
+            and next_attempt_at > now
+        ):
+            # Deferred work is durable backlog, but it consumes no capacity now.
+            continue
+        if (
+            row.status == CandidateStatus.FAILED.value
+            and row.retry_count > settings.evidence_max_retries
+        ):
+            continue
+        pressure += 1
     pressure += len(
         db.scalars(
             select(EvidenceRefreshRequest).where(
