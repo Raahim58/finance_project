@@ -8,6 +8,7 @@ from app.providers.evidence.discovery import (
     parse_psx_announcements,
 )
 from app.providers.evidence.extraction import extract_article, normalize_url, simhash_distance
+from app.providers.evidence.sources import EvidenceDiscoveryResponseError, HttpEvidenceSource
 from app.ingestion.evidence import Candidate, RawContent
 
 
@@ -48,6 +49,35 @@ def test_gdelt_response_normalization_and_request_bound():
     assert row.publisher == "wire.example"
     assert row.published_at == datetime(2026, 8, 13, 10, 30, tzinfo=UTC)
     assert GdeltDiscovery.request_params("oil", 999)["maxrecords"] == 250
+
+
+def test_configured_gdelt_queries_do_not_use_unsupported_nested_boolean_blocks():
+    from app.ingestion.evidence_catalog import TOPIC_QUERIES
+
+    assert "(Pakistan AND (" not in TOPIC_QUERIES["pakistan_macro"]
+
+
+def test_gdelt_non_json_response_is_a_retryable_network_error():
+    def fetcher(url, *, method="GET", data=None, params=None):
+        del method, data, params
+        return b"Please limit requests to one every 5 seconds", url, "text/plain", {}
+
+    source = HttpEvidenceSource(
+        "gdelt",
+        "GDELT DOC 2",
+        "https://api.gdeltproject.org/api/v2/doc/doc",
+        "gdelt",
+        query="Pakistan inflation",
+        fetcher=fetcher,
+    )
+
+    try:
+        source.discover_since({}, 10)
+    except EvidenceDiscoveryResponseError as exc:
+        assert "non-JSON" in str(exc)
+        assert "limit requests" in str(exc)
+    else:
+        raise AssertionError("Malformed GDELT response should be retryable")
 
 
 def test_psx_announcement_normalization_from_observed_table_contract():

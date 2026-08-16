@@ -351,6 +351,16 @@ def run_historical_discovery_slice(
         return None, "discovery_complete"
 
     unit = dict(units[unit_index])
+    if (
+        unit.get("source_key") == "gdelt"
+        and request.preset_key == "news_90d"
+        and unit.get("topic") in TOPIC_QUERIES
+    ):
+        # Refresh durable queued plans when a deterministic query contract is
+        # corrected; otherwise old requests retain the invalid query forever.
+        unit["query"] = TOPIC_QUERIES[str(unit["topic"])]
+        units[unit_index] = unit
+        progress["units"] = units
     if _source_circuit_open(db, str(unit["source_key"])):
         progress["yield_count"] = int(progress.get("yield_count", 0)) + 1
         progress["halted_reason"] = f"source_circuit_open:{unit['source_key']}"

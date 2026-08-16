@@ -34,7 +34,9 @@ SOURCE_SPECS = (
 
 
 TOPIC_QUERIES = {
-    "pakistan_macro": '(Pakistan AND (IMF OR inflation OR budget OR tax OR reserves OR "policy rate" OR "current account" OR "USD PKR"))',
+    # DOC 2.0 permits one parenthesized OR block but does not support nested
+    # Boolean blocks. Adjacent terms are conjunctive, so keep Pakistan outside.
+    "pakistan_macro": 'Pakistan (IMF OR inflation OR budget OR tax OR reserves OR "policy rate" OR "current account" OR "USD PKR")',
     "geopolitics": '(sanctions OR war OR conflict OR "Red Sea" OR "shipping disruption" OR "trade war")',
     "commodities": '(oil OR LNG OR gas OR coal OR cotton OR steel OR fertilizer OR urea OR "palm oil" OR lithium OR copper)',
     "technology": '(semiconductor OR DRAM OR NAND OR "AI chips" OR "cloud capex" OR "chip equipment")',

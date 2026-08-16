@@ -7,6 +7,7 @@ small enough to run manually or under fixture tests without import-time I/O.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -14,7 +15,9 @@ from typing import Any, Protocol
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+import redis
 
+from app.core.config import settings
 from app.ingestion.evidence import Candidate, DiscoveryBatch, ParsedEvidence, RawContent
 from app.providers.evidence.discovery import (
     GdeltDiscovery,
@@ -41,6 +44,30 @@ HIGH_VALUE_PSX_CATEGORIES = frozenset(
         "regulatory_notice",
     }
 )
+GDELT_MIN_REQUEST_INTERVAL_SECONDS = 6
+GDELT_RATE_LIMIT_COOLDOWN_SECONDS = 60
+GDELT_RATE_LIMIT_KEY = "evidence:rate-limit:gdelt-doc-v2"
+
+
+class EvidenceDiscoveryResponseError(httpx.NetworkError):
+    """Retryable malformed discovery response from an upstream service."""
+
+
+def _wait_for_gdelt_rate_slot(timeout_seconds: int = 30) -> None:
+    """Enforce GDELT's five-second limit across all Celery worker processes."""
+
+    client = redis.Redis.from_url(settings.celery_broker_url)
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if client.set(
+            GDELT_RATE_LIMIT_KEY,
+            "1",
+            nx=True,
+            ex=GDELT_MIN_REQUEST_INTERVAL_SECONDS,
+        ):
+            return
+        time.sleep(0.25)
+    raise httpx.TimeoutException("Timed out waiting for the shared GDELT request slot")
 
 
 class Fetcher(Protocol):
@@ -81,6 +108,9 @@ def bounded_http_fetch(
     current_method = method.upper()
     current_data = data
     current_params = params
+    gdelt_request = urlsplit(url).hostname == "api.gdeltproject.org"
+    if gdelt_request:
+        _wait_for_gdelt_rate_slot()
     with httpx.Client(timeout=30, follow_redirects=False, headers={"User-Agent": USER_AGENT}) as client:
         for _ in range(6):
             validate(current_url)
@@ -102,6 +132,15 @@ def bounded_http_fetch(
                         current_data = None
                     current_params = None
                     continue
+                if gdelt_request and response.status_code == 429:
+                    # A shared-IP throttle can outlive the advertised five-second
+                    # interval. Publish a cross-worker cooldown and let Celery/the
+                    # durable source circuit perform the retry later.
+                    redis.Redis.from_url(settings.celery_broker_url).set(
+                        GDELT_RATE_LIMIT_KEY,
+                        "cooldown",
+                        ex=GDELT_RATE_LIMIT_COOLDOWN_SECONDS,
+                    )
                 response.raise_for_status()
                 content = bytearray()
                 for chunk in response.iter_bytes():
@@ -145,13 +184,21 @@ class HttpEvidenceSource:
                 params.pop("timespan", None)
                 params["startdatetime"] = start.strftime("%Y%m%d000000")
                 params["enddatetime"] = end.strftime("%Y%m%d235959")
-        content, _, _, _ = self.fetcher(self.discovery_url, params=params)
+        content, final_url, content_type, _ = self.fetcher(self.discovery_url, params=params)
         if self.discovery_kind == "rss":
             candidates = RssAtomDiscovery(self.key, self.publisher, self.topic).parse(content)
         elif self.discovery_kind == "sitemap":
             candidates = SitemapDiscovery(self.key, self.publisher, self.topic).parse(content)
         elif self.discovery_kind == "gdelt":
-            candidates = GdeltDiscovery(self.key, self.publisher, self.topic).parse(json.loads(content))
+            try:
+                payload = json.loads(content)
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                preview = content[:240].decode("utf-8", errors="replace").strip()
+                raise EvidenceDiscoveryResponseError(
+                    f"GDELT returned non-JSON content ({content_type}) from {final_url}: {preview}",
+                    request=httpx.Request("GET", final_url),
+                ) from exc
+            candidates = GdeltDiscovery(self.key, self.publisher, self.topic).parse(payload)
             candidates = tuple(
                 Candidate(
                     **{
