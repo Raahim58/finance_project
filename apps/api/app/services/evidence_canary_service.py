@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.evidence import DiscoveryCandidate, EvidenceSourceConfig
 
-CANARY_GROUP = "pass4_official"
+CANARY_GROUP_PREFIX = "pass4_"
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,7 @@ def _lock(db: Session, scope: str) -> None:
 
 
 def _canary_config(config: EvidenceSourceConfig) -> bool:
-    return config.canary_group == CANARY_GROUP
+    return bool(config.canary_group and config.canary_group.startswith(CANARY_GROUP_PREFIX))
 
 
 def discovery_allowance(
@@ -64,7 +64,7 @@ def discovery_allowance(
         .select_from(DiscoveryCandidate)
         .join(EvidenceSourceConfig, DiscoveryCandidate.source_config_id == EvidenceSourceConfig.id)
         .where(
-            EvidenceSourceConfig.canary_group == CANARY_GROUP,
+            EvidenceSourceConfig.canary_group.like(f"{CANARY_GROUP_PREFIX}%"),
             DiscoveryCandidate.discovered_at >= start,
         )
     ) or 0
@@ -107,7 +107,7 @@ def reserve_fetch(
         .select_from(DiscoveryCandidate)
         .join(EvidenceSourceConfig, DiscoveryCandidate.source_config_id == EvidenceSourceConfig.id)
         .where(
-            EvidenceSourceConfig.canary_group == CANARY_GROUP,
+            EvidenceSourceConfig.canary_group.like(f"{CANARY_GROUP_PREFIX}%"),
             DiscoveryCandidate.fetch_started_at >= start,
         )
     ) or 0
@@ -154,7 +154,7 @@ def record_fetch(
             query = query.join(
                 EvidenceSourceConfig,
                 DiscoveryCandidate.source_config_id == EvidenceSourceConfig.id,
-            ).where(EvidenceSourceConfig.canary_group == CANARY_GROUP)
+            ).where(EvidenceSourceConfig.canary_group.like(f"{CANARY_GROUP_PREFIX}%"))
         return int(db.scalar(query) or 0)
 
     global_day = used_since(start)
@@ -190,7 +190,7 @@ def reserve_selection(
         .select_from(DiscoveryCandidate)
         .join(EvidenceSourceConfig, DiscoveryCandidate.source_config_id == EvidenceSourceConfig.id)
         .where(
-            EvidenceSourceConfig.canary_group == CANARY_GROUP,
+            EvidenceSourceConfig.canary_group.like(f"{CANARY_GROUP_PREFIX}%"),
             DiscoveryCandidate.selected_at >= start,
         )
     ) or 0

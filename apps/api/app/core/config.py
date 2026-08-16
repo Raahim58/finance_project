@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     evidence_candidate_retention_days: int = Field(default=45, ge=1, le=3650)
     evidence_spool_retention_hours: int = Field(default=24, ge=1, le=168)
     evidence_pass4_official_enabled: bool = False
+    evidence_pass4_breadth_enabled: bool = False
     evidence_canary_discovery_daily: int = Field(default=2000, ge=1, le=100000)
     evidence_canary_fetch_daily: int = Field(default=250, ge=1, le=10000)
     evidence_canary_selected_daily: int = Field(default=75, ge=1, le=5000)

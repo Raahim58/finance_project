@@ -52,7 +52,9 @@ LISTING_FIXTURE_URLS = {
 
 
 def test_pass4_registry_contains_only_requested_official_canary_sources():
-    canary_specs = {spec.key: spec for spec in SOURCE_SPECS if spec.canary_group}
+    canary_specs = {
+        spec.key: spec for spec in SOURCE_SPECS if spec.canary_group == "pass4_official"
+    }
     assert set(canary_specs) == OFFICIAL_CANARY_KEYS
     assert all(spec.tier == "official" for spec in canary_specs.values())
     assert all(
