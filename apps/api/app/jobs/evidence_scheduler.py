@@ -14,11 +14,13 @@ from app.services.evidence_scheduler_service import run_evidence_scheduler_once
 
 def run_once() -> None:
     if not settings.evidence_enabled:
-        print('{"status":"disabled","setting":"EVIDENCE_ENABLED"}')
+        print('{"status":"disabled","setting":"EVIDENCE_ENABLED"}', flush=True)
         return
     with SessionLocal() as db:
         result = run_evidence_scheduler_once(db)
-    print(json.dumps(asdict(result), sort_keys=True))
+    # This process commonly runs with stdout redirected or under a supervisor.
+    # Flush every heartbeat so a healthy continuous scheduler does not appear idle.
+    print(json.dumps(asdict(result), sort_keys=True), flush=True)
 
 
 def main() -> None:

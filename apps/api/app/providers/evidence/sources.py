@@ -24,6 +24,7 @@ from app.providers.evidence.discovery import (
     ListingDiscovery,
     RssAtomDiscovery,
     SitemapDiscovery,
+    parse_sec_submissions,
     parse_psx_announcements,
 )
 from app.providers.evidence.extraction import extract_article
@@ -261,6 +262,59 @@ class HttpEvidenceSource:
     def fetch(self, candidate: Candidate) -> RawContent:
         content, final_url, content_type, headers = self.fetcher(candidate.observed_url)
         return RawContent(candidate, content, content_type, datetime.now(UTC), final_url, headers)
+
+    def normalize(self, raw: RawContent) -> ParsedEvidence:
+        return extract_article(raw)
+
+
+@dataclass
+class SecEdgarSource:
+    """Official EDGAR submissions adapter restricted to configured issuer CIKs."""
+
+    ciks: tuple[str, ...]
+    key: str = "sec_edgar_selected"
+    publisher: str = "U.S. Securities and Exchange Commission"
+    fetcher: Fetcher = bounded_http_fetch
+
+    def discover_since(self, cursor: Mapping[str, Any] | None, limit: int) -> DiscoveryBatch:
+        del cursor
+        candidates: list[Candidate] = []
+        latest_by_cik: dict[str, str] = {}
+        for cik in self.ciks:
+            remaining = limit - len(candidates)
+            if remaining <= 0:
+                break
+            normalized_cik = cik.strip().zfill(10)
+            content, final_url, _, _ = self.fetcher(
+                f"https://data.sec.gov/submissions/CIK{normalized_cik}.json"
+            )
+            try:
+                payload = json.loads(content)
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise EvidenceDiscoveryResponseError(
+                    f"SEC submissions API returned non-JSON content from {final_url}",
+                    request=httpx.Request("GET", final_url),
+                ) from exc
+            parsed = parse_sec_submissions(
+                payload,
+                source_key=self.key,
+                limit=remaining,
+            )
+            candidates.extend(parsed)
+            if parsed:
+                latest_by_cik[normalized_cik] = str(parsed[0].external_id)
+        return DiscoveryBatch(tuple(candidates), {"latest_accession_by_cik": latest_by_cik})
+
+    def fetch(self, candidate: Candidate) -> RawContent:
+        content, final_url, content_type, headers = self.fetcher(candidate.observed_url)
+        return RawContent(
+            candidate,
+            content,
+            content_type,
+            datetime.now(UTC),
+            final_url,
+            headers,
+        )
 
     def normalize(self, raw: RawContent) -> ParsedEvidence:
         return extract_article(raw)

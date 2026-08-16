@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     evidence_canary_storage_seven_day_mb: int = Field(default=10240, ge=1, le=512000)
     evidence_canary_fetch_ready_target: int = Field(default=120, ge=1, le=5000)
     evidence_contact_email: str = "evidence-ops@example.invalid"
+    evidence_sec_edgar_ciks: str = ""
     screening_completeness_threshold: float = Field(default=0.70, ge=0, le=1)
     screening_promotion_percentile: float = Field(default=0.82, ge=0, le=1)
     cors_origins: Annotated[list[str], NoDecode] = Field(

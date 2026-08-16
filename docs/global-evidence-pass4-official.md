@@ -36,10 +36,16 @@ Global official:
 - World Bank, Federal Reserve, ECB, BIS, EIA, OPEC, and U.S. Treasury OFAC;
 - the existing IMF adapter remains active independently of this canary.
 
-The SEC EDGAR generic feed contract and fixture are registered, but its data
-source stays disabled: fetching the unfiltered current-filings firehose would
-waste the canary budget. Enable it only after selected issuer CIKs are explicitly
-allowlisted; that scoped work remains within the global-official category.
+SEC EDGAR uses the official `data.sec.gov/submissions/CIK##########.json` API.
+It stays disabled until selected issuer CIKs are explicitly allowlisted with
+`EVIDENCE_SEC_EDGAR_CIKS`; the unfiltered current-filings firehose is never used.
+The adapter retains only 8-K, 10-K, 10-Q, 20-F, and 6-K filings before applying
+the ordinary relevance, extraction, deduplication, and selection funnel.
+
+IMF remains dormant. Its HTML news page returns 403, its advertised RSS directory
+returns a JavaScript challenge, the discovered legacy feed returns an empty
+no-index HTML document, and its public sitemap routes return 403. Do not enable it
+until a machine-readable official endpoint passes a bounded smoke test.
 
 Each new source declares its discovery URL, generic adapter kind, link filter,
 topic, provenance, per-source budgets, and a documented non-browser fallback in
@@ -128,6 +134,8 @@ expects an identifiable user agent):
 EVIDENCE_ENABLED=true
 EVIDENCE_PASS4_OFFICIAL_ENABLED=true
 EVIDENCE_CONTACT_EMAIL=your-monitored-address@example.com
+# Optional, comma-separated selected SEC issuer CIKs with or without leading zeros:
+EVIDENCE_SEC_EDGAR_CIKS=
 ```
 
 Run the existing concurrent pools in separate terminals:

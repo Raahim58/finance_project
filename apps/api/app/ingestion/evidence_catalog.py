@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from app.core.config import settings
 from app.ingestion.evidence import EvidenceSourceRegistry
-from app.providers.evidence.sources import HttpEvidenceSource, PsxAnnouncementSource
+from app.providers.evidence.sources import HttpEvidenceSource, PsxAnnouncementSource, SecEdgarSource
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,7 @@ SOURCE_SPECS = (
     SourceSpec("bis_releases", "Bank for International Settlements", "https://www.bis.org", "official", ("primary",), ("global_macro", "financial_stability"), "rss", 1800, 365, settings.evidence_pass4_official_enabled, "https://www.bis.org/doclist/all_pressrels.rss", "global_macro", None, "pass4_official", 40, 12, 5, 75 * 1024 * 1024, "official media-centre listing"),
     SourceSpec("eia_releases", "U.S. Energy Information Administration", "https://www.eia.gov", "official", ("primary",), ("global_macro", "energy"), "rss", 1800, 365, settings.evidence_pass4_official_enabled, "https://www.eia.gov/rss/press_rss.xml", "global_macro", None, "pass4_official", 40, 12, 5, 75 * 1024 * 1024, "official press-room listing"),
     SourceSpec("opec_releases", "Organization of the Petroleum Exporting Countries", "https://www.opec.org", "official", ("primary",), ("global_macro", "energy"), "listing", 1800, 365, settings.evidence_pass4_official_enabled, "https://www.opec.org/press-releases.html", "global_macro", r"^https://www\.opec\.org/pr-detail/.+", "pass4_official", 40, 12, 5, 75 * 1024 * 1024, "official news listing; then manual review"),
-    SourceSpec("sec_edgar_current", "SEC EDGAR Current Filings", "https://www.sec.gov", "official", ("primary",), ("global_markets", "regulation"), "rss", 900, 365, False, "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&count=40&output=atom", "global_markets", None, "pass4_official", 100, 20, 6, 150 * 1024 * 1024, "disabled until an allowlist of selected issuer CIKs is configured"),
+    SourceSpec("sec_edgar_current", "SEC EDGAR Selected Issuers", "https://data.sec.gov", "official", ("primary",), ("global_markets", "regulation"), "sec_submissions", 900, 365, settings.evidence_pass4_official_enabled and bool(settings.evidence_sec_edgar_ciks.strip()), "https://data.sec.gov/submissions/", "global_markets", None, "pass4_official", 100, 20, 6, 150 * 1024 * 1024, "requires an explicit EVIDENCE_SEC_EDGAR_CIKS allowlist"),
     SourceSpec("ofac_actions", "U.S. Treasury OFAC", "https://ofac.treasury.gov", "official", ("primary",), ("geopolitics", "sanctions"), "listing", 1800, 365, settings.evidence_pass4_official_enabled, "https://ofac.treasury.gov/recent-actions", "geopolitics", r"^https://ofac\.treasury\.gov/recent-actions/.+", "pass4_official", 50, 15, 6, 75 * 1024 * 1024, "official sanctions-program pages; then manual review"),
 )
 
@@ -84,6 +84,18 @@ def build_pass1_registry() -> EvidenceSourceRegistry:
     registry.register(PsxAnnouncementSource())
     for spec in SOURCE_SPECS:
         if spec.key == "psx_announcements":
+            continue
+        if spec.key == "sec_edgar_current":
+            ciks = tuple(
+                dict.fromkeys(
+                    item.strip().zfill(10)
+                    for item in settings.evidence_sec_edgar_ciks.split(",")
+                    if item.strip()
+                )
+            )
+            if any(not cik.isdigit() or len(cik) != 10 for cik in ciks):
+                raise ValueError("EVIDENCE_SEC_EDGAR_CIKS must contain comma-separated numeric CIKs")
+            registry.register(SecEdgarSource(ciks=ciks, key=spec.key))
             continue
         if not spec.discovery_url:
             raise ValueError(f"Evidence source {spec.key} has no discovery URL")

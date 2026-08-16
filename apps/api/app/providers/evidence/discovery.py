@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import struct_time
 from urllib.parse import urljoin
+from urllib.parse import quote
 
 import feedparser
 from bs4 import BeautifulSoup
@@ -191,6 +192,68 @@ class ListingDiscovery:
                 )
             )
         return tuple(rows)
+
+
+def parse_sec_submissions(
+    payload: dict,
+    *,
+    source_key: str = "sec_edgar_selected",
+    allowed_forms: frozenset[str] = frozenset({"8-K", "10-K", "10-Q", "20-F", "6-K"}),
+    limit: int = 40,
+    discovered_at: datetime | None = None,
+) -> tuple[Candidate, ...]:
+    """Normalize one official EDGAR submissions response for an allowlisted CIK."""
+
+    now = discovered_at or datetime.now(UTC)
+    cik = str(payload.get("cik") or "").strip().zfill(10)
+    company = str(payload.get("name") or cik).strip()
+    recent = payload.get("filings", {}).get("recent", {})
+    accession_numbers = recent.get("accessionNumber", [])
+    forms = recent.get("form", [])
+    filing_dates = recent.get("filingDate", [])
+    primary_documents = recent.get("primaryDocument", [])
+    rows: list[Candidate] = []
+    for index, accession in enumerate(accession_numbers):
+        if len(rows) >= limit:
+            break
+        form = str(forms[index] if index < len(forms) else "").strip().upper()
+        primary_document = str(
+            primary_documents[index] if index < len(primary_documents) else ""
+        ).strip()
+        accession = str(accession).strip()
+        if form not in allowed_forms or not accession or not primary_document or not cik.isdigit():
+            continue
+        filing_date = parse_datetime(
+            filing_dates[index] if index < len(filing_dates) else None
+        )
+        accession_path = accession.replace("-", "")
+        document_path = quote(primary_document, safe="/._-")
+        url = (
+            f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
+            f"{accession_path}/{document_path}"
+        )
+        rows.append(
+            Candidate(
+                source_key=source_key,
+                observed_url=url,
+                canonical_url=normalize_url(url),
+                external_id=accession,
+                headline=f"{company} {form} filing",
+                publisher="U.S. Securities and Exchange Commission",
+                discovered_at=now,
+                published_at=filing_date,
+                discovery_method="sec_submissions_api",
+                topic="global_markets",
+                metadata={
+                    "accession_number": accession,
+                    "cik": cik,
+                    "company": company,
+                    "form": form,
+                    "summary": f"Official {form} filing by {company}",
+                },
+            )
+        )
+    return tuple(rows)
 
 
 PSX_BASE_URL = "https://dps.psx.com.pk"
