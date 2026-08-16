@@ -17,6 +17,7 @@ from app.models.workstation import (
 from app.providers.macro.series import ProviderObservation, ProviderResult, fetch_macro_provider
 from app.services.macro_ingestion_service import ensure_macro_catalog, persist_provider_result
 from app.services.research_service import macro_releases
+from app.providers.macro.sbp import SbpKeyIndicatorsProvider
 
 
 def _provider(series_key, prefix):
@@ -212,3 +213,78 @@ def test_pk_net_lending_provider_contract():
     assert spec.providers[1].enabled is True
 
     assert "PK_CASH_BALANCE_GDP" not in MACRO_SERIES_BY_KEY
+
+def test_sbp_key_indicators_parse_high_frequency_series():
+    html = b"""
+    <html>
+      <body>
+        <div>SBP Policy Rate 11.50%</div>
+
+        <div>
+          Liquid Foreign Exchange Reserves (USD million)
+          As on 10- July - 2026
+          SBP's Reserves 17,225.8
+          Bank's Reserves 5,449.7
+          Total Reserves 22,675.5
+        </div>
+
+        <div>
+          Money Market Interest Rates
+          KIBOR As on 20- Jul - 26
+          Tenor BID Offer
+          3-M 11.41 11.66
+          6-M 11.42 11.67
+          12-M 11.43 11.93
+        </div>
+
+        <div>
+          USD/ PKR Rates
+          As on 20 Jul - 2026
+          M2M Revaluation Rate
+          277.953
+          Weighted Average Rate
+          BID 277.6714
+          Offer 278.0965
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = SbpKeyIndicatorsProvider.parse(
+        html,
+        date(2026, 7, 20),
+    )
+
+    by_key = {
+        row.series_key: row
+        for row in rows
+    }
+
+    assert by_key["sbp.policy_rate"].value == 11.50
+
+    assert (
+        by_key["sbp.total_reserves_usd"].effective_date
+        == date(2026, 7, 10)
+    )
+    assert (
+        by_key["sbp.total_reserves_usd"].value
+        == 22_675_500_000
+    )
+
+    assert (
+        by_key["sbp.kibor.3m_offer"].effective_date
+        == date(2026, 7, 20)
+    )
+    assert (
+        by_key["sbp.kibor.3m_offer"].value
+        == 11.66
+    )
+
+    assert (
+        by_key["sbp.usd_pkr.m2m"].effective_date
+        == date(2026, 7, 20)
+    )
+    assert (
+        by_key["sbp.usd_pkr.m2m"].value
+        == 277.953
+    )
