@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     market_history_years: int = 5
     market_history_bootstrap_enabled: bool = True
     scheduled_research_enabled: bool = True
+    macro_ingestion_enabled: bool = False
+    macro_scheduler_seconds: int = Field(default=30, ge=30, le=86400)
+    macro_queue_target: int = Field(default=8, ge=1, le=100)
+    macro_history_start_year: int = Field(default=2000, ge=1960, le=2100)
+    fred_api_key: str = ""
+    eia_api_key: str = ""
     research_report_limit_per_run: int = 20
     source_artifact_root: str = "./data/artifacts"
     embedding_dimensions: int = 384
@@ -68,6 +74,7 @@ class Settings(BaseSettings):
     evidence_spool_retention_hours: int = Field(default=24, ge=1, le=168)
     evidence_pass4_official_enabled: bool = False
     evidence_pass4_breadth_enabled: bool = False
+    evidence_psx_announcement_history_enabled: bool = False
     evidence_canary_discovery_daily: int = Field(default=2000, ge=1, le=100000)
     evidence_canary_fetch_daily: int = Field(default=250, ge=1, le=10000)
     evidence_canary_selected_daily: int = Field(default=75, ge=1, le=5000)

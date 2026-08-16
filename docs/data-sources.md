@@ -24,6 +24,7 @@ No endpoint, form field, selector, download URL, unit, or date convention may be
 | SBP key indicators | Integrated + daily schedule | Raw official page HTML is retained. Policy rate and observed 3-month MTB cut-off yield are effective-dated; the latter is explicitly marked risk-free. Broader EasyData FX/reserve/monetary history still needs stable dataset contracts. |
 | PBS Price Statistics | Integrated + weekly schedule | The current parser covers the official monthly SPI item workbook. Broader CPI/release/revision coverage remains incomplete. |
 | World Bank Pink Sheet | Integrated + monthly schedule | Monthly commodity workbook rows are persisted with artifact provenance. |
+| Canonical macro pipeline | Dedicated Celery queue + scheduler | Twenty-six source-independent series use ordered provider ladders across World Bank, FRED, ECB, SBP, IMF-contract, EIA-contract, and official workbooks. Conflicts are retained and reconciled; see [Canonical Macro Ingestion](macro-ingestion.md). |
 | Mettis Global | Integrated + daily legacy metadata schedule | Headline, canonical URL, timestamp, author, and visible summary become sourced events/documents. The Pass 2 evidence scheduler keeps its separate Mettis adapter disabled by default to prevent duplicate polling while this legacy schedule remains active. |
 | Yahoo/yfinance | Degraded fallback | Unofficial `.KA` fallback only. The latest live verification hit an explicit rate limit; it must never silently outrank DPS. |
 | NCCPL | Manual import only | Ordinary access returned Cloudflare HTTP 403. No browser automation or anti-bot bypass is used. |
@@ -49,6 +50,9 @@ SCHEDULED_RESEARCH_ENABLED=true
 SOURCE_ARTIFACT_ROOT=./data/artifacts
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/1
+MACRO_INGESTION_ENABLED=true
+MACRO_QUEUE_TARGET=8
+FRED_API_KEY=
 ```
 
 `auto` tries verified DPS first and uses Yahoo only as a labeled fallback. Exact prices, rankings, freshness, and sector statistics come from database queries. Mock observations are eligible only when `MARKET_DATA_MODE=mock`; local `APP_ENV` does not make data synthetic. No live index value is synthesized from constituent averages.
@@ -63,6 +67,9 @@ celery -A app.celery_app worker -Q broad_fundamentals --concurrency=20
 celery -A app.celery_app worker -Q dps_history --concurrency=24
 celery -A app.celery_app worker -Q financial_download --concurrency=12
 celery -A app.celery_app worker -Q financial_extract --concurrency=3
+celery -A app.celery_app worker -P threads -n macro@%h -Q macro --concurrency=4 --loglevel=INFO
+MACRO_INGESTION_ENABLED=true python -u -m app.jobs.macro_scheduler
+python -m app.jobs.macro_status
 ```
 
 Pass 1 evidence smoke runs are synchronous and bounded:

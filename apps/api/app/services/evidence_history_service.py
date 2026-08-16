@@ -362,6 +362,20 @@ def run_historical_discovery_slice(
         return None, "candidate_budget_reached"
     unit_index = int(progress.get("unit_index", 0))
     units = list(progress.get("units", []))
+    while unit_index < len(units):
+        unit_source = str(units[unit_index].get("source_key"))
+        history_enabled = not (
+            unit_source == "psx_announcements"
+            and not settings.evidence_psx_announcement_history_enabled
+        )
+        if history_enabled:
+            break
+        unit_index += 1
+        progress["unit_index"] = unit_index
+        progress["completed_units"] = unit_index
+        progress["halted_reason"] = f"source_disabled:{unit_source}"
+        request.progress_json = _json(progress)
+        db.commit()
     if unit_index >= len(units):
         request.status = "processing" if request.discovered_count else "complete"
         request.completed_at = None if request.discovered_count else datetime.now(UTC)

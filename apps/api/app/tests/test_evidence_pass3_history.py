@@ -21,6 +21,11 @@ from app.services.evidence_scheduler_service import _historical_request_order_ke
 NOW = datetime(2026, 8, 15, 10, 0, tzinfo=UTC)
 
 
+@pytest.fixture(autouse=True)
+def _enable_psx_history_for_history_contract_tests(monkeypatch):
+    monkeypatch.setattr(settings, "evidence_psx_announcement_history_enabled", True)
+
+
 class PagedPsxSource:
     key = "psx_announcements"
 

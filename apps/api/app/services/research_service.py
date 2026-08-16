@@ -19,6 +19,7 @@ from app.models.workstation import (
     InstrumentAlias,
     MacroObservation,
     MacroSeries,
+    MacroSeriesProvider,
     SourceArtifact,
 )
 from app.schemas.research import InstrumentResponse
@@ -239,11 +240,44 @@ def list_macro_series(db: Session):
 
 
 def macro_releases(db: Session, series_id: str | None = None):
-    statement = select(MacroObservation, MacroSeries).join(MacroSeries, MacroSeries.id == MacroObservation.series_id).where(MacroObservation.is_selected.is_(True))
+    statement = (
+        select(MacroObservation, MacroSeries, MacroSeriesProvider, DataSource)
+        .join(MacroSeries, MacroSeries.id == MacroObservation.series_id)
+        .outerjoin(MacroSeriesProvider, MacroSeriesProvider.id == MacroObservation.provider_id)
+        .outerjoin(SourceArtifact, SourceArtifact.id == MacroObservation.artifact_id)
+        .outerjoin(DataSource, DataSource.id == SourceArtifact.data_source_id)
+        .where(MacroObservation.is_selected.is_(True))
+    )
     if not settings.is_synthetic_environment:
-        statement = statement.join(SourceArtifact, SourceArtifact.id == MacroObservation.artifact_id).join(DataSource, DataSource.id == SourceArtifact.data_source_id).where(~func.lower(DataSource.name).contains("demo"), ~func.lower(SourceArtifact.source_url).like("demo://%"))
+        statement = statement.where(~func.lower(DataSource.name).contains("demo"), ~func.lower(SourceArtifact.source_url).like("demo://%"))
     if series_id: statement = statement.where(MacroObservation.series_id == series_id)
-    return [{"series_id": series.id, "series_key": series.key, "effective_date": observation.effective_date, "release_at": observation.release_at, "value": observation.value, "unit": series.unit, "revision": observation.revision, "artifact_id": observation.artifact_id} for observation, series in db.execute(statement.order_by(MacroObservation.effective_date.desc()).limit(500))]
+    return [
+        {
+            "series_id": series.id,
+            "series_key": series.key,
+            "effective_date": observation.effective_date,
+            "release_at": observation.release_at,
+            "value": observation.value,
+            "unit": series.unit,
+            "revision": observation.revision,
+            "artifact_id": observation.artifact_id,
+            "provider": provider.provider_key if provider else None,
+            "source": data_source.name if data_source else None,
+            "source_series_id": observation.source_series_id,
+            "retrieved_at": observation.retrieved_at,
+            "vintage_date": observation.vintage_date,
+            "authority": observation.authority,
+            "confidence": observation.confidence,
+            "selection_reason": (
+                json.loads(observation.selection_reason)
+                if observation.selection_reason
+                else None
+            ),
+        }
+        for observation, series, provider, data_source in db.execute(
+            statement.order_by(MacroObservation.effective_date.desc()).limit(500)
+        )
+    ]
 
 
 def company_overview(db: Session, user: User, instrument_id: str, *, include_portfolio_relevance: bool = True):

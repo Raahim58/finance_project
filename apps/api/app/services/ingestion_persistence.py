@@ -48,13 +48,18 @@ def persist_macro(db: Session, observations: list[ParsedMacroObservation], data_
             metadata = {"is_risk_free": item.series_key == "sbp.tbill.3m_yield", "freshness_sla_minutes": 2880 if is_sbp else data_source.freshness_sla_minutes, "observation_source": item.source}
             series = MacroSeries(key=item.series_key, name=item.series_key.replace(".", " ").title(), unit=item.unit, frequency="daily" if is_sbp else "monthly", source_id=data_source.id, metadata_json=json.dumps(metadata)); db.add(series); db.flush()
         elif series.source_id != data_source.id:
+            # Legacy source-specific keys retain their original owner. Canonical
+            # multi-provider series use MacroSeriesProvider and reconciliation;
+            # never silently rewrite series ownership when a fallback appears.
             metadata = json.loads(series.metadata_json or "{}")
-            metadata.update({"observation_source": item.source, "data_classification": "observed"})
-            series.source_id = data_source.id
-            series.unit = item.unit
+            observed_sources = set(metadata.get("observed_sources", []))
+            observed_sources.add(item.source)
+            metadata["observed_sources"] = sorted(observed_sources)
+            metadata["data_classification"] = "observed"
             series.metadata_json = json.dumps(metadata, sort_keys=True)
         existing = db.scalar(select(MacroObservation).where(MacroObservation.series_id == series.id, MacroObservation.effective_date == item.effective_date, MacroObservation.is_selected.is_(True)))
         if existing and float(existing.value) == item.value: continue
         if existing: existing.is_selected = False
-        db.add(MacroObservation(series_id=series.id, effective_date=item.effective_date, release_at=datetime.now(UTC), value=item.value, revision=(existing.revision + 1) if existing else 1, artifact_id=artifact.id, is_selected=True)); count += 1
+        retrieved_at = datetime.now(UTC)
+        db.add(MacroObservation(series_id=series.id, effective_date=item.effective_date, release_at=retrieved_at, value=item.value, revision=(existing.revision + 1) if existing else 1, artifact_id=artifact.id, source_series_id=item.series_key, retrieved_at=retrieved_at, authority="national_official" if item.source in {"sbp", "pbs"} else "official_international", confidence=1 if item.source in {"sbp", "pbs"} else 0.95, selection_reason='{"policy":"legacy_single_source"}', is_selected=True)); count += 1
     return count

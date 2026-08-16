@@ -16,7 +16,7 @@ from app.models.workstation import (
     IngestionRun,
     Instrument,
     MacroObservation,
-    MacroSeries,
+    MacroSeriesProvider,
 )
 
 
@@ -34,6 +34,7 @@ SOURCE_DEFINITIONS = (
     SourceDefinition("SBP", ("sbp",), 4_320),
     SourceDefinition("PBS", ("pbs",), 50_400),
     SourceDefinition("World Bank", ("world_bank",), 50_400),
+    SourceDefinition("Canonical Macro", ("provider_ladder",), 10_080),
     SourceDefinition("SCSTrade", ("scstrade",), 10_080),
     # Phase 1 intentionally has no real announcements provider.
     SourceDefinition("PSX Announcements", ("psx_announcements",), None),
@@ -58,6 +59,7 @@ def _configured_sla(db: Session, definition: SourceDefinition) -> int | None:
         "SBP": ("SBP",),
         "PBS": ("PBS",),
         "World Bank": ("WORLD_BANK", "World Bank"),
+        "Canonical Macro": (),
         "SCSTrade": ("SCSTrade",),
     }.get(definition.source, ())
     if not names:
@@ -89,16 +91,27 @@ def _latest_data_at(db: Session, source_name: str) -> datetime | None:
                 or_(Document.source_url.is_(None), ~Document.source_url.startswith("demo://")),
             )
         )
+    elif source_name == "Canonical Macro":
+        value = db.scalar(
+            select(func.max(MacroObservation.effective_date)).where(
+                MacroObservation.is_selected.is_(True)
+            )
+        )
     elif source_name in {"SBP", "PBS", "World Bank"}:
         names = {
-            "SBP": ("SBP",),
-            "PBS": ("PBS",),
-            "World Bank": ("WORLD_BANK", "World Bank"),
+            "SBP": ("SBP", "State Bank of Pakistan"),
+            "PBS": ("PBS", "Pakistan Bureau of Statistics"),
+            "World Bank": (
+                "WORLD_BANK",
+                "World Bank",
+                "World Bank Indicators API",
+                "World Bank Commodity Markets",
+            ),
         }[source_name]
         value = db.scalar(
             select(func.max(MacroObservation.effective_date))
-            .join(MacroSeries, MacroSeries.id == MacroObservation.series_id)
-            .join(DataSource, DataSource.id == MacroSeries.source_id)
+            .join(MacroSeriesProvider, MacroSeriesProvider.id == MacroObservation.provider_id)
+            .join(DataSource, DataSource.id == MacroSeriesProvider.data_source_id)
             .where(DataSource.name.in_(names), MacroObservation.is_selected.is_(True))
         )
     else:
@@ -110,10 +123,15 @@ def source_health(db: Session, *, now: datetime | None = None) -> dict[str, obje
     current = now or datetime.now(UTC)
     sources: list[dict[str, object]] = []
     for definition in SOURCE_DEFINITIONS:
+        run_filter = (
+            IngestionRun.job_key == "macro-series-refresh"
+            if definition.source == "Canonical Macro"
+            else IngestionRun.job_key.like("refresh:%")
+        )
         runs = list(
             db.scalars(
                 select(IngestionRun)
-                .where(IngestionRun.provider.in_(definition.providers), IngestionRun.job_key.like("refresh:%"))
+                .where(IngestionRun.provider.in_(definition.providers), run_filter)
                 .order_by(IngestionRun.started_at.desc())
             )
         )

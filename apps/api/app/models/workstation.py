@@ -404,9 +404,37 @@ class MacroSeries(Base):
     metadata_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
 
 
+class MacroSeriesProvider(Base):
+    """Ordered provider contract for one source-independent canonical series."""
+
+    __tablename__ = "macro_series_providers"
+    __table_args__ = (
+        UniqueConstraint("series_id", "provider_key", name="uq_macro_series_provider"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    series_id: Mapped[str] = mapped_column(ForeignKey("macro_series.id"), index=True, nullable=False)
+    data_source_id: Mapped[str] = mapped_column(ForeignKey("data_sources.id"), index=True, nullable=False)
+    provider_key: Mapped[str] = mapped_column(String(160), index=True, nullable=False)
+    source_series_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False)
+    authority: Mapped[str] = mapped_column(String(30), nullable=False)
+    retrieval_method: Mapped[str] = mapped_column(String(40), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+
+
 class MacroObservation(Base):
     __tablename__ = "macro_observations"
-    __table_args__ = (UniqueConstraint("series_id", "effective_date", "release_at", name="uq_macro_revision"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "series_id",
+            "effective_date",
+            "provider_id",
+            "release_at",
+            name="uq_macro_provider_revision",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     series_id: Mapped[str] = mapped_column(ForeignKey("macro_series.id"), index=True, nullable=False)
@@ -415,6 +443,15 @@ class MacroObservation(Base):
     value: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False)
     revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     artifact_id: Mapped[str | None] = mapped_column(ForeignKey("source_artifacts.id"))
+    provider_id: Mapped[str | None] = mapped_column(
+        ForeignKey("macro_series_providers.id"), index=True
+    )
+    source_series_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    vintage_date: Mapped[date | None] = mapped_column(Date)
+    authority: Mapped[str | None] = mapped_column(String(30))
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(6, 5))
+    selection_reason: Mapped[str | None] = mapped_column(Text)
     is_selected: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
