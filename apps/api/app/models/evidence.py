@@ -37,6 +37,10 @@ class EvidenceSourceConfig(Base):
             "historical_days IS NULL OR historical_days >= 0",
             name="ck_evidence_source_history_nonnegative",
         ),
+        CheckConstraint("daily_discovery_budget > 0", name="ck_evidence_source_daily_discovery_positive"),
+        CheckConstraint("daily_fetch_budget > 0", name="ck_evidence_source_daily_fetch_positive"),
+        CheckConstraint("daily_selected_budget > 0", name="ck_evidence_source_daily_selected_positive"),
+        CheckConstraint("daily_storage_budget_bytes > 0", name="ck_evidence_source_daily_storage_positive"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
@@ -52,6 +56,15 @@ class EvidenceSourceConfig(Base):
     languages_json: Mapped[str] = mapped_column(Text, default='["en"]', nullable=False)
     poll_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     historical_days: Mapped[int | None] = mapped_column(Integer)
+    canary_group: Mapped[str | None] = mapped_column(String(40), index=True)
+    daily_discovery_budget: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    daily_fetch_budget: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
+    daily_selected_budget: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    daily_storage_budget_bytes: Mapped[int] = mapped_column(
+        BigInteger, default=100 * 1024 * 1024, nullable=False
+    )
+    provenance_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    fallback_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     config_version: Mapped[str] = mapped_column(String(40), default="evidence-v1", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -108,6 +121,8 @@ class DiscoveryCandidate(Base):
         Index("ix_discovery_candidate_body_hash", "body_sha256"),
         Index("ix_discovery_candidate_headline_hash", "normalized_headline_hash"),
         Index("ix_discovery_candidate_simhash", "simhash"),
+        Index("ix_discovery_candidate_fetch_started", "fetch_started_at"),
+        Index("ix_discovery_candidate_selected_at", "selected_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
@@ -148,6 +163,10 @@ class DiscoveryCandidate(Base):
         String(40), default="evidence-v1", nullable=False
     )
     parser_version: Mapped[str | None] = mapped_column(String(80))
+    fetch_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fetched_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    selected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

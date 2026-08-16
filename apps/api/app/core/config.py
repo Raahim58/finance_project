@@ -66,6 +66,14 @@ class Settings(BaseSettings):
     evidence_circuit_open_seconds: int = Field(default=900, ge=60, le=86400)
     evidence_candidate_retention_days: int = Field(default=45, ge=1, le=3650)
     evidence_spool_retention_hours: int = Field(default=24, ge=1, le=168)
+    evidence_pass4_official_enabled: bool = False
+    evidence_canary_discovery_daily: int = Field(default=2000, ge=1, le=100000)
+    evidence_canary_fetch_daily: int = Field(default=250, ge=1, le=10000)
+    evidence_canary_selected_daily: int = Field(default=75, ge=1, le=5000)
+    evidence_canary_storage_daily_mb: int = Field(default=1536, ge=1, le=102400)
+    evidence_canary_storage_seven_day_mb: int = Field(default=10240, ge=1, le=512000)
+    evidence_canary_fetch_ready_target: int = Field(default=120, ge=1, le=5000)
+    evidence_contact_email: str = "evidence-ops@example.invalid"
     screening_completeness_threshold: float = Field(default=0.70, ge=0, le=1)
     screening_promotion_percentile: float = Field(default=0.82, ge=0, le=1)
     cors_origins: Annotated[list[str], NoDecode] = Field(

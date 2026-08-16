@@ -29,8 +29,9 @@ from app.providers.evidence.discovery import (
 from app.providers.evidence.extraction import extract_article
 from app.providers.news.mettis import MettisProvider
 
-USER_AGENT = "psx-ai-portfolio-agent/0.1 (bounded evidence ingestion)"
-MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+USER_AGENT = f"psx-ai-portfolio-agent/0.1 ({settings.evidence_contact_email})"
+MAX_ARTICLE_RESPONSE_BYTES = 5 * 1024 * 1024
+MAX_PDF_RESPONSE_BYTES = 25 * 1024 * 1024
 HIGH_VALUE_PSX_CATEGORIES = frozenset(
     {
         "financial_results",
@@ -142,15 +143,29 @@ def bounded_http_fetch(
                         ex=GDELT_RATE_LIMIT_COOLDOWN_SECONDS,
                     )
                 response.raise_for_status()
+                content_type = response.headers.get("content-type", "application/octet-stream")
+                response_path = urlsplit(str(response.url)).path.lower()
+                response_limit = (
+                    MAX_PDF_RESPONSE_BYTES
+                    if "pdf" in content_type.lower() or response_path.endswith(".pdf")
+                    else MAX_ARTICLE_RESPONSE_BYTES
+                )
+                content_length = response.headers.get("content-length")
+                if content_length and content_length.isdigit() and int(content_length) > response_limit:
+                    raise ValueError(
+                        f"Evidence response exceeds configured {response_limit}-byte size limit"
+                    )
                 content = bytearray()
                 for chunk in response.iter_bytes():
                     content.extend(chunk)
-                    if len(content) > MAX_RESPONSE_BYTES:
-                        raise ValueError("Evidence response exceeded the Pass 1 size limit")
+                    if len(content) > response_limit:
+                        raise ValueError(
+                            f"Evidence response exceeded configured {response_limit}-byte size limit"
+                        )
                 return (
                     bytes(content),
                     str(response.url),
-                    response.headers.get("content-type", "application/octet-stream"),
+                    content_type,
                     dict(response.headers),
                 )
         raise ValueError("Evidence response exceeded the redirect limit")

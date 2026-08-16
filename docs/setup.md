@@ -82,6 +82,10 @@ celery -A app.celery_app worker -Q evidence_index --concurrency=4 --loglevel=INF
 celery -A app.celery_app worker -Q historical_hydrate --concurrency=2 --loglevel=INFO
 ```
 
+The bounded Pass 4 official-source canary is disabled by default. Its `.venv`
+rollout, hard budgets, included source matrix, smoke test, and live status command
+are documented in [Global Evidence Pass 4: official-source canary](global-evidence-pass4-official.md).
+
 `docker compose up -d` now starts these pools and their dedicated scheduler. Phase 2
 workers do not consume evidence queues. Live messages use Redis priority `0`;
 historical hydration uses priority `8`, concurrency two, and a separate queue. Every

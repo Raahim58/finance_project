@@ -26,6 +26,13 @@ from app.models.workstation import (
     InstrumentAlias,
 )
 from app.providers.evidence.extraction import normalize_url, simhash_distance
+from app.services.evidence_canary_service import (
+    discovery_allowance,
+    next_utc_day,
+    record_fetch,
+    reserve_fetch,
+    reserve_selection,
+)
 from app.services.ingestion_persistence import store_artifact
 from app.services.rag_service import ParsedPage, create_document_from_pages
 
@@ -106,10 +113,21 @@ def ensure_source_config(db: Session, source_key: str) -> tuple[DataSource, Evid
             priority={"official": 10, "reporting": 20, "specialist": 25}.get(spec.tier, 50),
             freshness_sla_minutes=max(1, spec.poll_seconds // 60 * 3),
             enabled=spec.enabled,
-            use_notes="Phase 3 Global Evidence; exact numerical facts remain in structured tables.",
+            use_notes=(
+                "Phase 4 official evidence canary; exact numerical facts remain in structured tables."
+                if spec.canary_group
+                else "Phase 3 Global Evidence; exact numerical facts remain in structured tables."
+            ),
         )
         db.add(data_source)
         db.flush()
+    data_source.base_url = spec.base_url
+    data_source.enabled = spec.enabled
+    data_source.use_notes = (
+        "Phase 4 official evidence canary; exact numerical facts remain in structured tables."
+        if spec.canary_group
+        else "Phase 3 Global Evidence; exact numerical facts remain in structured tables."
+    )
     config = db.scalar(select(EvidenceSourceConfig).where(EvidenceSourceConfig.source_key == spec.key))
     if config is None:
         config = EvidenceSourceConfig(
@@ -123,12 +141,48 @@ def ensure_source_config(db: Session, source_key: str) -> tuple[DataSource, Evid
             languages_json='["en"]',
             poll_interval_seconds=spec.poll_seconds,
             historical_days=spec.historical_days,
-            config_version="evidence-v1-pass2",
+            canary_group=spec.canary_group,
+            daily_discovery_budget=spec.daily_discovery_budget,
+            daily_fetch_budget=spec.daily_fetch_budget,
+            daily_selected_budget=spec.daily_selected_budget,
+            daily_storage_budget_bytes=spec.daily_storage_budget_bytes,
+            provenance_json=_json(
+                {
+                    "authority": "official" if spec.tier == "official" else spec.tier,
+                    "adapter": spec.discovery_method,
+                    "base_url": spec.base_url,
+                    "discovery_url": spec.discovery_url,
+                    "source_key": spec.key,
+                }
+            ),
+            fallback_json=_json({"browser": False, "strategy": spec.fallback}),
+            config_version="evidence-v1-pass4-official",
         )
         db.add(config)
         db.flush()
     else:
-        config.config_version = "evidence-v1-pass2"
+        config.source_tier = spec.tier
+        config.roles_json = _json(spec.roles)
+        config.categories_json = _json(spec.categories)
+        config.discovery_methods_json = _json((spec.discovery_method,))
+        config.poll_interval_seconds = spec.poll_seconds
+        config.historical_days = spec.historical_days
+        config.canary_group = spec.canary_group
+        config.daily_discovery_budget = spec.daily_discovery_budget
+        config.daily_fetch_budget = spec.daily_fetch_budget
+        config.daily_selected_budget = spec.daily_selected_budget
+        config.daily_storage_budget_bytes = spec.daily_storage_budget_bytes
+        config.provenance_json = _json(
+            {
+                "authority": "official" if spec.tier == "official" else spec.tier,
+                "adapter": spec.discovery_method,
+                "base_url": spec.base_url,
+                "discovery_url": spec.discovery_url,
+                "source_key": spec.key,
+            }
+        )
+        config.fallback_json = _json({"browser": False, "strategy": spec.fallback})
+        config.config_version = "evidence-v1-pass4-official"
     state = db.scalar(select(EvidenceSourceState).where(EvidenceSourceState.source_config_id == config.id))
     if state is None:
         state = EvidenceSourceState(source_config_id=config.id)
@@ -435,10 +489,17 @@ def run_source_once(db: Session, evidence_source: EvidenceSource, *, limit: int 
     """Run one source transactionally; Pass 2 will invoke equivalent stages via queues."""
 
     data_source, config, state = ensure_source_config(db, evidence_source.key)
-    state.last_attempted_at = datetime.now(UTC)
+    now = datetime.now(UTC)
+    state.last_attempted_at = now
     cursor = json.loads(state.cursor_json or "{}")
+    allowed = discovery_allowance(db, config, limit, now=now)
+    if allowed <= 0:
+        state.next_poll_at = next_utc_day(now)
+        state.diagnostics_json = _json({"budget_reason": "daily_discovery_budget"})
+        db.commit()
+        return PipelineResult()
     try:
-        batch = evidence_source.discover_since(cursor, limit)
+        batch = evidence_source.discover_since(cursor, allowed)
     except Exception as exc:
         state.consecutive_failures += 1
         state.healthy_since = None
@@ -455,14 +516,25 @@ def run_source_once(db: Session, evidence_source: EvidenceSource, *, limit: int 
             continue
         try:
             cheap_score = score_candidate_metadata(db, candidate)
-            if cheap_score.relevance < 0.18:
+            if cheap_score.relevance < 0.18 and config.canary_group != "pass4_official":
                 row.relevance_score = Decimal(f"{cheap_score.relevance:.6f}")
                 row.scoring_reasons_json = _json(cheap_score.reasons or ("no_substantive_metadata_match",))
                 _transition(row, CandidateStatus.REJECTED)
                 counts["rejected"] += 1
                 continue
+            fetch_decision = reserve_fetch(db, row, config)
+            if not fetch_decision.allowed:
+                row.scoring_reasons_json = _json((fetch_decision.reason,))
+                row.next_attempt_at = next_utc_day()
+                continue
             _transition(row, CandidateStatus.EVALUATING)
             raw = evidence_source.fetch(candidate)
+            fetch_record = record_fetch(db, row, config, len(raw.content))
+            if not fetch_record.allowed:
+                row.scoring_reasons_json = _json((fetch_record.reason,))
+                _transition(row, CandidateStatus.FAILED)
+                row.next_attempt_at = next_utc_day()
+                continue
             parsed = evidence_source.normalize(raw)
             canonical_hash = _hash(parsed.canonical_url)
             canonical_match = db.scalar(
@@ -505,6 +577,11 @@ def run_source_once(db: Session, evidence_source: EvidenceSource, *, limit: int 
             event = _cluster(db, row, parsed, score)
             row.event_id = event.id
             _transition(row, CandidateStatus.CLUSTERED)
+            selection_decision = reserve_selection(db, row, config)
+            if not selection_decision.allowed:
+                row.scoring_reasons_json = _json((selection_decision.reason,))
+                row.next_attempt_at = next_utc_day()
+                continue
             if _select_and_index(db, data_source, config, row, event, candidate, parsed, raw.content, raw.content_type):
                 counts["selected"] += 1
             else:

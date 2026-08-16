@@ -243,7 +243,10 @@ def run_evidence_scheduler_once(db: Session) -> SchedulerResult:
         and _utc(row.lease_expires_at) > now
         for row in candidates
     )
-    fetch_capacity = settings.evidence_fetch_queue_target - fetch_inflight
+    fetch_capacity = (
+        min(settings.evidence_fetch_queue_target, settings.evidence_canary_fetch_ready_target)
+        - fetch_inflight
+    )
     parse_capacity = settings.evidence_parse_queue_target - parse_inflight
     index_capacity = settings.evidence_index_queue_target - index_inflight
     fetch_queued = _reserve_candidates(
@@ -375,6 +378,7 @@ def evidence_operational_status(db: Session) -> dict[str, object]:
     ).all()
     sources = []
     for config, state in source_rows:
+        source_candidates = [row for row in candidates if row.source_config_id == config.id]
         status_counts = dict(
             db.execute(
                 select(DiscoveryCandidate.status, func.count())
@@ -383,6 +387,27 @@ def evidence_operational_status(db: Session) -> dict[str, object]:
             ).all()
         )
         diagnostics = json.loads(state.diagnostics_json or "{}")
+        discovered = len(source_candidates)
+        relevant = sum(
+            row.relevance_score is not None and float(row.relevance_score) >= 0.30
+            for row in source_candidates
+        )
+        fetched = sum(row.fetched_at is not None for row in source_candidates)
+        extracted = sum(row.parser_version is not None for row in source_candidates)
+        non_duplicate = sum(
+            row.parser_version is not None and row.status != CandidateStatus.DUPLICATE.value
+            for row in source_candidates
+        )
+        unique_stories = len({row.event_id for row in source_candidates if row.event_id})
+        selected = sum(row.status == CandidateStatus.SELECTED.value for row in source_candidates)
+        unique_story_rate = unique_stories / max(1, fetched)
+        evidence_selection_rate = selected / max(1, fetched)
+        if fetched < 100:
+            canary_signal = "collecting"
+        elif unique_story_rate < 0.01 and evidence_selection_rate < 0.01:
+            canary_signal = "review_low_yield"
+        else:
+            canary_signal = "healthy"
         sources.append(
             {
                 "source_key": config.source_key,
@@ -400,6 +425,27 @@ def evidence_operational_status(db: Session) -> dict[str, object]:
                 "last_error_class": state.last_error_class,
                 "last_error_message": state.last_error_message,
                 "counts": status_counts,
+                "funnel": {
+                    "discovered": discovered,
+                    "relevant": relevant,
+                    "fetched": fetched,
+                    "successfully_extracted": extracted,
+                    "non_duplicate": non_duplicate,
+                    "unique_story": unique_stories,
+                    "selected_as_best_evidence": selected,
+                    "unique_story_rate": unique_story_rate,
+                    "evidence_selection_rate": evidence_selection_rate,
+                    "signal": canary_signal,
+                },
+                "canary": {
+                    "group": config.canary_group,
+                    "daily_discovery_budget": config.daily_discovery_budget,
+                    "daily_fetch_budget": config.daily_fetch_budget,
+                    "daily_selected_budget": config.daily_selected_budget,
+                    "daily_storage_budget_bytes": config.daily_storage_budget_bytes,
+                },
+                "provenance": json.loads(config.provenance_json or "{}"),
+                "fallback": json.loads(config.fallback_json or "{}"),
             }
         )
     global_counts["source_health"] = sources

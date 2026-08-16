@@ -35,6 +35,13 @@ from app.services.evidence_pipeline import (
     score_candidate_metadata,
     score_evidence,
 )
+from app.services.evidence_canary_service import (
+    discovery_allowance,
+    next_utc_day,
+    record_fetch,
+    reserve_fetch,
+    reserve_selection,
+)
 from app.services.ingestion_persistence import store_artifact
 from app.services.rag_service import ParsedPage, create_document_from_pages, parse_pdf
 
@@ -226,8 +233,20 @@ def discover_stage(
     now = datetime.now(UTC)
     state.last_attempted_at = now
     cursor = dict(cursor_override if cursor_override is not None else json.loads(state.cursor_json or "{}"))
+    allowed = discovery_allowance(db, config, limit, now=now)
+    if allowed <= 0:
+        state.next_poll_at = next_utc_day(now)
+        state.diagnostics_json = _json(
+            {
+                "stage": "discovery",
+                "budget_reason": "daily_discovery_budget",
+                "next_budget_at": state.next_poll_at.isoformat(),
+            }
+        )
+        db.commit()
+        return DiscoveryStageResult((), 0, 0)
     try:
-        batch = evidence_source.discover_since(cursor, limit)
+        batch = evidence_source.discover_since(cursor, allowed)
         identifiers: list[str] = []
         new_count = 0
         for candidate in batch.candidates:
@@ -301,8 +320,9 @@ def fetch_stage(
     if row.status != CandidateStatus.FETCH_READY.value:
         return FetchStageResult(row.id, f"idempotent_{row.status}")
     candidate = candidate_from_row(row, evidence_source.key)
+    config = db.get(EvidenceSourceConfig, row.source_config_id)
     cheap_score = score_candidate_metadata(db, candidate)
-    if cheap_score.relevance < 0.18:
+    if cheap_score.relevance < 0.18 and config.canary_group != "pass4_official":
         row.relevance_score = Decimal(f"{cheap_score.relevance:.6f}")
         row.scoring_reasons_json = _json(cheap_score.reasons or ("no_substantive_metadata_match",))
         _transition(row, CandidateStatus.REJECTED)
@@ -317,11 +337,26 @@ def fetch_stage(
         _record_request_outcome(db, row, "rejected")
         db.commit()
         return FetchStageResult(row.id, "historical_fetch_budget_reached")
+    fetch_decision = reserve_fetch(db, row, config)
+    if not fetch_decision.allowed:
+        row.scoring_reasons_json = _json((fetch_decision.reason,))
+        row.next_attempt_at = next_utc_day()
+        row.lease_expires_at = None
+        db.commit()
+        return FetchStageResult(row.id, "canary_fetch_deferred")
     _transition(row, CandidateStatus.EVALUATING)
     row.lease_expires_at = datetime.now(UTC) + timedelta(seconds=settings.evidence_stage_lease_seconds)
     db.commit()
     try:
         raw = evidence_source.fetch(candidate)
+        fetch_record = record_fetch(db, row, config, len(raw.content))
+        if not fetch_record.allowed:
+            row.scoring_reasons_json = _json((fetch_record.reason,))
+            _transition(row, CandidateStatus.FAILED)
+            row.next_attempt_at = next_utc_day()
+            row.lease_expires_at = None
+            db.commit()
+            return FetchStageResult(row.id, "canary_storage_deferred")
         if not _record_historical_bytes(db, row, len(raw.content)):
             row.scoring_reasons_json = '["historical_storage_budget_reached"]'
             _transition(row, CandidateStatus.REJECTED)
@@ -522,10 +557,17 @@ def index_stage(db: Session, candidate_id: str, *, spool: EvidenceSpool | None =
     metadata, pipeline = _pipeline_metadata(row)
     if row.status != CandidateStatus.CLUSTERED.value or not event_source or event_source.selection_status != "pending":
         return ParseStageResult(row.id, f"idempotent_{row.status}")
+    config = db.get(EvidenceSourceConfig, row.source_config_id)
+    selection_decision = reserve_selection(db, row, config)
+    if not selection_decision.allowed:
+        row.scoring_reasons_json = _json((selection_decision.reason,))
+        row.next_attempt_at = next_utc_day()
+        row.lease_expires_at = None
+        db.commit()
+        return ParseStageResult(row.id, "canary_selection_deferred")
     try:
         parsed = spool.read_parsed(row.id)
         raw_content = spool.read_raw(row.id)
-        config = db.get(EvidenceSourceConfig, row.source_config_id)
         data_source = db.get(DataSource, config.data_source_id)
         content_type = str(pipeline.get("content_type") or "application/octet-stream")
         compressed = gzip.compress(raw_content, compresslevel=6, mtime=0)
