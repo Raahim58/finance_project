@@ -74,12 +74,12 @@ volume:
 
 ```bash
 EVIDENCE_ENABLED=true python -m app.jobs.evidence_scheduler
-celery -A app.celery_app worker -Q evidence_discovery --concurrency=4 --loglevel=INFO
-celery -A app.celery_app worker -Q evidence_fetch --concurrency=16 --loglevel=INFO
-celery -A app.celery_app worker -Q evidence_parse --concurrency=6 --loglevel=INFO
-celery -A app.celery_app worker -Q evidence_pdf --concurrency=2 --loglevel=INFO
-celery -A app.celery_app worker -Q evidence_index --concurrency=4 --loglevel=INFO
-celery -A app.celery_app worker -Q historical_hydrate --concurrency=2 --loglevel=INFO
+celery -A app.celery_app worker -n discovery@%h -Q evidence_discovery --concurrency=4 --loglevel=INFO
+celery -A app.celery_app worker -n fetch@%h -Q evidence_fetch --concurrency=16 --loglevel=INFO
+celery -A app.celery_app worker -n parse@%h -Q evidence_parse --concurrency=6 --loglevel=INFO
+celery -A app.celery_app worker -n pdf@%h -Q evidence_pdf --concurrency=2 --loglevel=INFO
+celery -A app.celery_app worker -n index@%h -Q evidence_index --concurrency=4 --loglevel=INFO
+celery -A app.celery_app worker -n historical@%h -Q historical_hydrate --concurrency=2 --loglevel=INFO
 ```
 
 The bounded Pass 4 official-source canary is disabled by default. Its `.venv`

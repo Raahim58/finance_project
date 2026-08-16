@@ -201,7 +201,12 @@ class HttpEvidenceSource:
                 params["enddatetime"] = end.strftime("%Y%m%d235959")
         content, final_url, content_type, _ = self.fetcher(self.discovery_url, params=params)
         if self.discovery_kind == "rss":
-            candidates = RssAtomDiscovery(self.key, self.publisher, self.topic).parse(content)
+            candidates = RssAtomDiscovery(
+                self.key,
+                self.publisher,
+                self.topic,
+                self.discovery_url,
+            ).parse(content)
         elif self.discovery_kind == "sitemap":
             candidates = SitemapDiscovery(self.key, self.publisher, self.topic).parse(content)
         elif self.discovery_kind == "gdelt":

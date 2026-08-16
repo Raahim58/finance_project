@@ -54,7 +54,7 @@ entry plus a fixture; it does not require a new provider class.
 | SECP | listing | 75 | 25 | 10 | 200 MiB |
 | NEPRA | listing | 40 | 15 | 6 | 100 MiB |
 | OGRA | listing | 40 | 15 | 6 | 100 MiB |
-| NCCPL | listing | 30 | 12 | 5 | 75 MiB |
+| NCCPL | listing | dormant | dormant | dormant | dormant |
 | World Bank | listing | 50 | 15 | 6 | 100 MiB |
 | Federal Reserve | RSS | 50 | 15 | 6 | 75 MiB |
 | ECB | RSS | 50 | 15 | 6 | 75 MiB |
@@ -64,9 +64,9 @@ entry plus a fixture; it does not require a new provider class.
 | OFAC | listing | 50 | 15 | 6 | 75 MiB |
 | SEC EDGAR | RSS | dormant | dormant | dormant | dormant |
 
-NCCPL's public page is discovered generically. If a protected dataset cannot be
-retrieved normally, the fallback remains manual import; the application does not
-attempt an anti-bot bypass.
+NCCPL returned a verified HTTP 403 to the bounded client, so its generic contract
+remains registered but the data source is dormant. The fallback is manual import;
+the application does not attempt an anti-bot bypass.
 
 ## Hard seven-day canary limits
 
@@ -92,10 +92,10 @@ Live candidates continue to outrank historical candidates.
 
 The user's 10,000–15,000 discovery / 1,500–2,000 fetch envelope applies to the
 eventual full Pass 4 mix. This official-only subset is intentionally smaller:
-its enabled per-source ceilings sum to 605 discoveries, 203 fetches, 82 selections,
-and 1,275 MiB per day. The global 75-selection ceiling is lower, so the absolute
-seven-day maxima are 4,235 discoveries, 1,421 fetches, 525 selections, and under
-8.8 GiB. Actual retained counts should be materially lower after relevance and
+its enabled per-source ceilings sum to 575 discoveries, 191 fetches, 77 selections,
+and 1,200 MiB per day. The global 75-selection ceiling is lower, so the absolute
+seven-day maxima are 4,025 discoveries, 1,337 fetches, 525 selections, and under
+8.3 GiB. Actual retained counts should be materially lower after relevance and
 deduplication.
 
 Official historical expansion is deliberately not started by this pass. The
@@ -117,6 +117,10 @@ source .venv/bin/activate
 alembic upgrade head
 ```
 
+Celery imports the source registry when each worker starts. After deploying this
+pass or changing the catalog, stop and restart every evidence worker; restarting
+only the scheduler leaves old workers unable to resolve newly added source keys.
+
 Set these in `apps/api/.env` (use a real monitored contact address because SEC
 expects an identifiable user agent):
 
@@ -129,12 +133,12 @@ EVIDENCE_CONTACT_EMAIL=your-monitored-address@example.com
 Run the existing concurrent pools in separate terminals:
 
 ```bash
-celery -A app.celery_app worker -Q evidence_discovery --concurrency=4 --loglevel=INFO
-celery -A app.celery_app worker -Q evidence_fetch --concurrency=16 --loglevel=INFO
-celery -A app.celery_app worker -Q evidence_parse --concurrency=6 --loglevel=INFO
-celery -A app.celery_app worker -Q evidence_pdf --concurrency=2 --loglevel=INFO
-celery -A app.celery_app worker -Q evidence_index --concurrency=4 --loglevel=INFO
-celery -A app.celery_app worker -Q historical_hydrate --concurrency=2 --loglevel=INFO
+celery -A app.celery_app worker -n discovery@%h -Q evidence_discovery --concurrency=4 --loglevel=INFO
+celery -A app.celery_app worker -n fetch@%h -Q evidence_fetch --concurrency=16 --loglevel=INFO
+celery -A app.celery_app worker -n parse@%h -Q evidence_parse --concurrency=6 --loglevel=INFO
+celery -A app.celery_app worker -n pdf@%h -Q evidence_pdf --concurrency=2 --loglevel=INFO
+celery -A app.celery_app worker -n index@%h -Q evidence_index --concurrency=4 --loglevel=INFO
+celery -A app.celery_app worker -n historical@%h -Q historical_hydrate --concurrency=2 --loglevel=INFO
 python -m app.jobs.evidence_scheduler
 ```
 

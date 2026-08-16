@@ -29,6 +29,23 @@ def test_rss_atom_and_url_normalization():
     assert normalize_url("/story/?utm_medium=rss", "https://EXAMPLE.com/base") == "https://example.com/story"
 
 
+def test_rss_resolves_relative_links_and_skips_malformed_entries():
+    feed = b"""<?xml version="1.0"?><rss version="2.0"><channel>
+    <item><guid>relative</guid><title>Energy release</title>
+    <link>/pressroom/releases/press591.php</link></item>
+    <item><guid>bad</guid><title>Bad link</title><link>javascript:void(0)</link></item>
+    </channel></rss>"""
+    rows = RssAtomDiscovery(
+        "eia",
+        "EIA",
+        "energy",
+        "https://www.eia.gov/rss/press_rss.xml",
+    ).parse(feed, discovered_at=NOW)
+    assert [row.canonical_url for row in rows] == [
+        "https://www.eia.gov/pressroom/releases/press591.php"
+    ]
+
+
 def test_news_sitemap_and_listing_discovery():
     sitemap = b"""<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
       xmlns:news="http://www.google.com/schemas/sitemap-news/0.9"><url>
@@ -41,6 +58,21 @@ def test_news_sitemap_and_listing_discovery():
     html = b'<a href="/assets/documents/press-release/one.pdf">Policy decision</a><a href="/about">About</a>'
     listing = ListingDiscovery("sbp", "SBP", "https://www.sbp.org.pk/media-center/", r"/assets/documents/press-release/")
     assert [row.headline for row in listing.parse(html, discovered_at=NOW)] == ["Policy decision"]
+
+
+def test_listing_skips_non_web_and_malformed_navigation_links():
+    html = b"""<a href="javascript:void(0);">Menu</a>
+    <a href="mailto:office@example.com">Email</a>
+    <a href="http:\\invalid.example">Malformed</a>
+    <a href="/press/release.pdf">Valid release</a>"""
+    listing = ListingDiscovery(
+        "official",
+        "Official",
+        "https://official.example/news",
+        r"^https://official\.example/press/",
+    )
+    rows = listing.parse(html, discovered_at=NOW)
+    assert [row.headline for row in rows] == ["Valid release"]
 
 
 def test_gdelt_response_normalization_and_request_bound():

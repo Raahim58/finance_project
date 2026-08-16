@@ -29,6 +29,7 @@ class RssAtomDiscovery:
     source_key: str
     publisher: str
     topic: str | None = None
+    base_url: str | None = None
 
     def parse(self, content: bytes, *, discovered_at: datetime | None = None) -> tuple[Candidate, ...]:
         parsed = feedparser.parse(content)
@@ -41,7 +42,12 @@ class RssAtomDiscovery:
             title = str(entry.get("title") or "").strip()
             if not url or not title:
                 continue
-            canonical = normalize_url(url)
+            try:
+                canonical = normalize_url(url, self.base_url)
+            except ValueError:
+                # A malformed entry must not invalidate an otherwise healthy
+                # official feed. Source health captures an empty/invalid feed.
+                continue
             rows.append(
                 Candidate(
                     source_key=self.source_key,
@@ -156,7 +162,17 @@ class ListingDiscovery:
         rows: list[Candidate] = []
         seen: set[str] = set()
         for anchor in soup.find_all("a", href=True):
-            url = normalize_url(urljoin(self.base_url, str(anchor["href"])))
+            href = str(anchor["href"]).strip()
+            if not href or href.lower().startswith(
+                ("#", "javascript:", "mailto:", "tel:", "data:")
+            ):
+                continue
+            try:
+                url = normalize_url(urljoin(self.base_url, href))
+            except ValueError:
+                # Navigation chrome often contains malformed or non-web links.
+                # Skip the bad anchor instead of failing the whole source page.
+                continue
             title = anchor.get_text(" ", strip=True)
             if not title or not matcher.search(url) or url in seen:
                 continue

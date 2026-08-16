@@ -392,7 +392,12 @@ def evidence_operational_status(db: Session) -> dict[str, object]:
             row.relevance_score is not None and float(row.relevance_score) >= 0.30
             for row in source_candidates
         )
-        fetched = sum(row.fetched_at is not None for row in source_candidates)
+        # Pre-0018 rows have no fetch timestamps. A parser version proves that a
+        # full response was fetched, so include it in the compatibility count.
+        fetched = sum(
+            row.fetched_at is not None or row.parser_version is not None
+            for row in source_candidates
+        )
         extracted = sum(row.parser_version is not None for row in source_candidates)
         non_duplicate = sum(
             row.parser_version is not None and row.status != CandidateStatus.DUPLICATE.value

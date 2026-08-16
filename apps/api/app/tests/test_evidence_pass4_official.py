@@ -42,7 +42,7 @@ LISTING_FIXTURE_URLS = {
     "mof_pakistan": "https://www.finance.gov.pk/example.pdf",
     "pbs_releases": "https://www.pbs.gov.pk/press-release/example/",
     "secp_releases": "https://www.secp.gov.pk/media-center/press-releases/example/",
-    "nepra_releases": "https://nepra.org.pk/example.pdf",
+    "nepra_releases": "https://nepra.org.pk/Press%20Release/example.pdf",
     "ogra_releases": "https://www.ogra.org.pk/press-release-example",
     "nccpl_notices": "https://www.nccpl.com.pk/legal-framework/example",
     "world_bank_news": "https://www.worldbank.org/en/news/press-release/example",
@@ -59,6 +59,7 @@ def test_pass4_registry_contains_only_requested_official_canary_sources():
     assert OFFICIAL_CANARY_KEYS <= set(build_pass1_registry().keys())
     assert not {"reuters", "bloomberg", "ft", "specialist_sector"} & set(canary_specs)
     assert canary_specs["sec_edgar_current"].enabled is False
+    assert canary_specs["nccpl_notices"].enabled is False
 
 
 def test_official_source_config_persists_bounds_provenance_and_fallback():
