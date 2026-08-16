@@ -96,3 +96,20 @@ The scheduler creates at most `MACRO_QUEUE_TARGET` outstanding tasks. Daily run
 keys make publication idempotent, stale leases are recovered from Postgres, and
 each series is retried independently. Existing evidence workers and schedulers do
 not consume or publish the `macro` queue.
+
+### Pakistan fiscal balance
+
+The canonical fiscal-balance series is:
+
+`PK_NET_LENDING_GDP`
+
+It represents general-government net lending (+) / net borrowing (-) as a
+percentage of GDP.
+
+Provider ladder:
+
+1. IMF `GGXCNL_NGDP` — retained but currently runtime-disabled.
+2. World Bank `GC.NLD.TOTL.GD.ZS` — enabled fallback.
+
+The previous `PK_CASH_BALANCE_GDP` / `GC.BAL.CASH.GD.ZS` contract was removed
+because it did not provide the intended Pakistan series.

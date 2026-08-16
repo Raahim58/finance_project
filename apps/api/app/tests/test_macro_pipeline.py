@@ -194,3 +194,21 @@ def test_macro_scheduler_is_bounded_and_publishes_only_when_enabled(monkeypatch)
 
     assert result["queued"] == 2
     assert all(item["queue"] == "macro" for item in published)
+
+def test_pk_net_lending_provider_contract():
+    spec = MACRO_SERIES_BY_KEY["PK_NET_LENDING_GDP"]
+
+    assert spec.name == "Pakistan general-government net lending/borrowing"
+    assert spec.unit == "percent_gdp"
+    assert spec.frequency == "annual"
+    assert spec.dimension == "fiscal"
+
+    assert [provider.key for provider in spec.providers] == [
+        "imf:PAK:GGXCNL_NGDP",
+        "world_bank:PAK:GC.NLD.TOTL.GD.ZS",
+    ]
+
+    assert spec.providers[0].enabled is False
+    assert spec.providers[1].enabled is True
+
+    assert "PK_CASH_BALANCE_GDP" not in MACRO_SERIES_BY_KEY

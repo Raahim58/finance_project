@@ -144,7 +144,7 @@ MACRO_SERIES = (
     MacroSeriesSpec("PK_IMPORTS_USD", "Pakistan imports of goods and services", "USD", "annual", "external", (_sbp_unverified("IMPORTS_USD"), _wb("PAK", "BM.GSR.GNFS.CD"))),
     MacroSeriesSpec("PK_UNEMPLOYMENT", "Pakistan unemployment rate", "percent", "annual", "labor", (_pbs_unverified("UNEMPLOYMENT"), _wb("PAK", "SL.UEM.TOTL.ZS"))),
     MacroSeriesSpec("PK_CENTRAL_GOV_DEBT_GDP", "Pakistan central-government debt", "percent_gdp", "annual", "fiscal", (_imf("PAK", "GGXWDG_NGDP"), _wb("PAK", "GC.DOD.TOTL.GD.ZS"))),
-    MacroSeriesSpec("PK_CASH_BALANCE_GDP", "Pakistan government cash balance", "percent_gdp", "annual", "fiscal", (_imf("PAK", "GGXCNL_NGDP"), _wb("PAK", "GC.BAL.CASH.GD.ZS"))),
+    MacroSeriesSpec("PK_NET_LENDING_GDP", "Pakistan general-government net lending/borrowing", "percent_gdp", "annual", "fiscal", (_imf("PAK", "GGXCNL_NGDP"), _wb("PAK", "GC.NLD.TOTL.GD.ZS"))),
     MacroSeriesSpec("US_CPI_INDEX", "United States consumer price index", "index", "monthly", "inflation", _fred("CPIAUCSL")),
     MacroSeriesSpec("US_FED_FUNDS", "United States effective federal funds rate", "percent", "monthly", "rates", _fred("FEDFUNDS")),
     MacroSeriesSpec("US_10Y_YIELD", "United States 10-year Treasury yield", "percent", "daily", "rates", _fred("DGS10")),
