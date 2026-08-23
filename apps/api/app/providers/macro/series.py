@@ -18,6 +18,10 @@ from app.core.config import settings
 from app.ingestion.macro_catalog import MacroProviderSpec
 from app.providers.macro.official_workbooks import WorldBankCommodityProvider
 from app.providers.macro.sbp import SbpKeyIndicatorsProvider
+from app.providers.macro.pakistan_monthly import (
+    fetch_sbp_monthly,
+    fetch_sbp_remittances_recent,
+)
 
 USER_AGENT = f"psx-ai-portfolio-agent/0.1 ({settings.evidence_contact_email})"
 MAX_MACRO_RESPONSE_BYTES = 25 * 1024 * 1024
@@ -200,6 +204,8 @@ def fetch_macro_provider(provider: MacroProviderSpec, start: date, end: date) ->
         "ecb_sdmx_csv": _ecb,
         "sbp_key_indicators": _sbp,
         "world_bank_pink": _world_bank_pink,
+        "sbp_monthly_workbook": _sbp_monthly,
+        "sbp_easydata_remittances": _sbp_remittances,
     }
     handler = handlers.get(provider.kind)
     if handler is None:
@@ -208,3 +214,46 @@ def fetch_macro_provider(provider: MacroProviderSpec, start: date, end: date) ->
     if not result.observations:
         raise ValueError(f"Macro provider {provider.key} returned no observations")
     return result
+
+def _sbp_monthly(
+    provider: MacroProviderSpec,
+    start: date,
+    end: date,
+) -> ProviderResult:
+    result = fetch_sbp_monthly(
+        provider.source_series_id,
+        start,
+        end,
+    )
+
+    return ProviderResult(
+        provider_key=provider.key,
+        source_series_id=result.source_series_id,
+        url=result.url,
+        content=result.content,
+        content_type=result.content_type,
+        parser_version=result.parser_version,
+        retrieved_at=result.retrieved_at,
+        observations=result.observations,
+    )
+
+def _sbp_remittances(
+    provider: MacroProviderSpec,
+    start: date,
+    end: date,
+) -> ProviderResult:
+    result = fetch_sbp_remittances_recent(
+        start,
+        end,
+    )
+
+    return ProviderResult(
+        provider_key=provider.key,
+        source_series_id=provider.source_series_id,
+        url=result.url,
+        content=result.content,
+        content_type=result.content_type,
+        parser_version=result.parser_version,
+        retrieved_at=result.retrieved_at,
+        observations=result.observations,
+    )

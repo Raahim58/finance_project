@@ -8,7 +8,7 @@ from app.db.session import SessionLocal
 from app.models.market import MarketPrice
 from app.models.workstation import DataQualityIssue, Instrument, MarketObservation
 from app.core.config import settings
-from app.services.canonical_market_service import price_series
+from app.services.canonical_market_service import latest_price, price_series
 from app.services.market_ingestion import persist_market_data
 from app.services.market_providers import LatestPriceRow
 
@@ -71,3 +71,19 @@ def test_live_mode_prefers_observed_and_excludes_mock_only_dates(monkeypatch):
     assert [(row.trade_date, row.source) for row in rows] == [(date(2026, 8, 7), "dps")]
     assert metadata["data_classification"] == "observed"
     assert metadata["identity_source"] == "dps"
+
+
+def test_latest_price_queries_only_the_latest_canonical_observation():
+    older = LatestPriceRow(
+        symbol="TEST", trade_date=date(2026, 8, 6), close=Decimal("99"),
+        previous_close=Decimal("98"), open=Decimal("98"), high=Decimal("100"),
+        low=Decimal("97"), volume=10, name="Test Limited", sector="Test",
+        source_url="https://dps.psx.com.pk/historical",
+    )
+    with SessionLocal() as db:
+        persist_market_data(db, latest_prices=[older, _row("https://dps.psx.com.pk")], source="dps")
+        latest = latest_price(db, "test")
+        historical = latest_price(db, "TEST", as_of=date(2026, 8, 6))
+
+    assert latest is not None and latest.trade_date == date(2026, 8, 7)
+    assert historical is not None and historical.trade_date == date(2026, 8, 6)

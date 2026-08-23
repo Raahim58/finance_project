@@ -28,11 +28,55 @@ async function ensureSampleToken(): Promise<string> {
   return sampleSessionPromise;
 }
 
+async function executeRequest<T>(
+  path: string,
+  options: RequestInit,
+  token: string | null,
+  allowSessionRepair = true,
+): Promise<{ value: T; token: string | null }> {
+  const headers = new Headers(options.headers);
+  headers.set("Content-Type", "application/json");
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
+  const mayRepairSession =
+    response.status === 401
+    && allowSessionRepair
+    && typeof window !== "undefined"
+    && !path.startsWith("/auth/");
+
+  if (mayRepairSession) {
+    // A browser may retain a JWT signed by an older local API secret. Only
+    // remove the token that actually failed: another concurrent request may
+    // already have repaired the shared sample session.
+    if (getToken() === token) clearToken();
+    const refreshedToken = getToken() ?? await ensureSampleToken();
+    return executeRequest<T>(path, options, refreshedToken, false);
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    const detail = body.detail;
+    const fallback = response.status >= 500
+      ? "The service could not complete this request. Please try again."
+      : `Request could not be completed (${response.status}).`;
+    throw new Error(
+      typeof detail === "string"
+        ? detail
+        : detail && typeof detail.message === "string"
+          ? detail.message
+          : fallback,
+    );
+  }
+
+  const value = response.status === 204 ? undefined as T : await response.json() as T;
+  return { value, token };
+}
+
 export async function request<T>(path:string,options:RequestInit={},ttlMs:number=GET_CACHE_TTL_MS):Promise<T>{
   let token=getToken();if(!token&&typeof window!=="undefined"&&!path.startsWith("/auth/"))token=await ensureSampleToken();
   const method=(options.method??"GET").toUpperCase(),cacheKey=`${token?"authenticated":"anonymous"}:${path}`;
   if(method==="GET"){const cached=responseCache.get(cacheKey);if(cached&&cached.expiresAt>Date.now())return cached.value as T;if(cached)responseCache.delete(cacheKey);const pending=pendingRequests.get(cacheKey);if(pending)return pending as Promise<T>}else invalidateCache(path);
-  const headers=new Headers(options.headers);headers.set("Content-Type","application/json");if(token)headers.set("Authorization",`Bearer ${token}`);
-  const execute=async()=>{const response=await fetch(`${API_BASE_URL}${path}`,{...options,headers});if(!response.ok){const body=await response.json().catch(()=>({}));const detail=body.detail;const fallback=response.status>=500?"The service could not complete this request. Please try again.":`Request could not be completed (${response.status}).`;throw new Error(typeof detail==="string"?detail:detail&&typeof detail.message==="string"?detail.message:fallback)}if(response.status===204)return undefined as T;const value=await response.json() as T;if(method==="GET")responseCache.set(cacheKey,{value,expiresAt:Date.now()+ttlMs});return value};
+  const execute=async()=>{const result=await executeRequest<T>(path,options,token);if(method==="GET"){const resolvedCacheKey=`${result.token?"authenticated":"anonymous"}:${path}`;responseCache.set(resolvedCacheKey,{value:result.value,expiresAt:Date.now()+ttlMs})}return result.value};
   const result=execute();if(method==="GET")pendingRequests.set(cacheKey,result);try{return await result}finally{if(method==="GET")pendingRequests.delete(cacheKey)}
 }

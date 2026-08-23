@@ -24,4 +24,32 @@ describe("API GET cache", () => {
     expect(third).toEqual(first);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("repairs a stale browser session and retries the protected request once", async () => {
+    localStorage.setItem("psx_ai_token", "stale-session");
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: vi.fn().mockResolvedValue({ detail: "Invalid token" }),
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ access_token: "fresh-sample-session" }),
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ id: "portfolio-1" }),
+      } as unknown as Response);
+
+    await expect(getPortfolioSummary("portfolio-1")).resolves.toEqual({ id: "portfolio-1" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/auth/sample-session");
+    expect(localStorage.getItem("psx_ai_token")).toBe("fresh-sample-session");
+    const retryHeaders = new Headers(fetchMock.mock.calls[2][1]?.headers);
+    expect(retryHeaders.get("Authorization")).toBe("Bearer fresh-sample-session");
+  });
 });

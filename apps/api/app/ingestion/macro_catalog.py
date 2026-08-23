@@ -129,6 +129,36 @@ def _pbs_unverified(source_series_id: str, priority: int = 10) -> MacroProviderS
         {"reason": "aggregate series workbook contract not yet fixture-verified"},
     )
 
+def _sbp_monthly(
+    source_series_id: str,
+    priority: int = 10,
+) -> MacroProviderSpec:
+    return MacroProviderSpec(
+        key=f"sbp_monthly:{source_series_id}",
+        kind="sbp_monthly_workbook",
+        source_name="State Bank of Pakistan",
+        base_url="https://www.sbp.org.pk",
+        source_series_id=source_series_id,
+        priority=priority,
+        authority="national_official",
+        retrieval_method="xlsx_download",
+        enabled=True,
+    )
+
+def _sbp_remittances_provider(
+    priority: int = 10,
+) -> MacroProviderSpec:
+    return MacroProviderSpec(
+        key="sbp_easydata:workers_remittances",
+        kind="sbp_easydata_remittances",
+        source_name="State Bank of Pakistan",
+        base_url="https://easydata.sbp.org.pk",
+        source_series_id="TS_GP_BOP_WR_M.WR0340",
+        priority=priority,
+        authority="national_official",
+        retrieval_method="html_table",
+        enabled=True,
+    )
 
 MACRO_SERIES = (
     MacroSeriesSpec("PK_CPI_YOY", "Pakistan consumer-price inflation", "percent_yoy", "annual", "inflation", (_pbs_unverified("CPI_YOY"), _imf("PAK", "PCPIPCH"), _wb("PAK", "FP.CPI.TOTL.ZG"))),
@@ -175,8 +205,42 @@ MACRO_SERIES = (
             _sbp("sbp.kibor.3m_offer"),
         ),
     ),
-    MacroSeriesSpec("PK_EXPORTS_USD", "Pakistan exports of goods and services", "USD", "annual", "external", (_sbp_unverified("EXPORTS_USD"), _wb("PAK", "BX.GSR.GNFS.CD"))),
-    MacroSeriesSpec("PK_IMPORTS_USD", "Pakistan imports of goods and services", "USD", "annual", "external", (_sbp_unverified("IMPORTS_USD"), _wb("PAK", "BM.GSR.GNFS.CD"))),
+    # MacroSeriesSpec("PK_EXPORTS_USD", "Pakistan exports of goods and services", "USD", "annual", "external", (_sbp_unverified("EXPORTS_USD"), _wb("PAK", "BX.GSR.GNFS.CD"))),
+    MacroSeriesSpec(
+        "PK_EXPORTS_USD",
+        "Pakistan exports of goods",
+        "USD",
+        "monthly",
+        "external",
+        (
+            _sbp_monthly(
+                "EXPORTS_USD",
+            ),
+            _wb(
+                "PAK",
+                "BX.GSR.GNFS.CD",
+                30,
+            ),
+        ),
+    ),
+    # MacroSeriesSpec("PK_IMPORTS_USD", "Pakistan imports of goods and services", "USD", "annual", "external", (_sbp_unverified("IMPORTS_USD"), _wb("PAK", "BM.GSR.GNFS.CD"))),
+    MacroSeriesSpec(
+        "PK_IMPORTS_USD",
+        "Pakistan imports of goods",
+        "USD",
+        "monthly",
+        "external",
+        (
+            _sbp_monthly(
+                "IMPORTS_USD",
+            ),
+            _wb(
+                "PAK",
+                "BM.GSR.GNFS.CD",
+                30,
+            ),
+        ),
+    ),
     MacroSeriesSpec("PK_UNEMPLOYMENT", "Pakistan unemployment rate", "percent", "annual", "labor", (_pbs_unverified("UNEMPLOYMENT"), _wb("PAK", "SL.UEM.TOTL.ZS"))),
     MacroSeriesSpec("PK_CENTRAL_GOV_DEBT_GDP", "Pakistan central-government debt", "percent_gdp", "annual", "fiscal", (_imf("PAK", "GGXWDG_NGDP"), _wb("PAK", "GC.DOD.TOTL.GD.ZS"))),
     MacroSeriesSpec("PK_NET_LENDING_GDP", "Pakistan general-government net lending/borrowing", "percent_gdp", "annual", "fiscal", (_imf("PAK", "GGXCNL_NGDP"), _wb("PAK", "GC.NLD.TOTL.GD.ZS"))),
@@ -191,6 +255,33 @@ MACRO_SERIES = (
     MacroSeriesSpec("GLOBAL_CRUDE_OIL_USD_BBL", "World Bank average crude-oil price", "USD_per_bbl", "monthly", "oil", (MacroProviderSpec("world_bank_pink:crude_oil_average", "world_bank_pink", "World Bank Commodity Markets", "https://thedocs.worldbank.org", "world_bank.commodity.crude_oil_average", 20, "official_international", "xlsx_download"),)),
     MacroSeriesSpec("BRENT_USD_BBL", "Brent crude-oil spot price", "USD_per_bbl", "daily", "oil", _fred("DCOILBRENTEU")),
     MacroSeriesSpec("GLOBAL_UREA_USD_MT", "World Bank urea price", "USD_per_mt", "monthly", "fertilizer", (MacroProviderSpec("world_bank_pink:urea", "world_bank_pink", "World Bank Commodity Markets", "https://thedocs.worldbank.org", "world_bank.commodity.urea", 10, "official_international", "xlsx_download"),)),
+    MacroSeriesSpec(
+        "PK_REMITTANCES_USD",
+        "Pakistan workers' remittances",
+        "USD",
+        "monthly",
+        "external",
+        (
+            _sbp_remittances_provider(),
+            _wb(
+                "PAK",
+                "BX.TRF.PWKR.CD.DT",
+                30,
+            ),
+        ),
+    ),
+    MacroSeriesSpec(
+        "PK_CURRENT_ACCOUNT_USD",
+        "Pakistan current-account balance",
+        "USD",
+        "monthly",
+        "external",
+        (
+            _sbp_monthly(
+                "CURRENT_ACCOUNT_USD",
+            ),
+        ),
+    ),
     MacroSeriesSpec(
         "HENRY_HUB_USD_MMBTU",
         "Henry Hub natural-gas spot price",
@@ -221,3 +312,4 @@ MACRO_SERIES = (
 )
 
 MACRO_SERIES_BY_KEY = {spec.key: spec for spec in MACRO_SERIES}
+

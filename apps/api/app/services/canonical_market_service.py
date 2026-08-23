@@ -278,10 +278,13 @@ def reconcile_market_observations(
     return selected_count
 
 
-def _from_observation(db: Session, observation: MarketObservation, symbol: str) -> CanonicalPrice:
+def _from_observation_parts(
+    observation: MarketObservation,
+    artifact: SourceArtifact | None,
+    source: DataSource | None,
+    symbol: str,
+) -> CanonicalPrice:
     values = json.loads(observation.values_json)
-    artifact = db.get(SourceArtifact, observation.artifact_id)
-    source = db.get(DataSource, artifact.data_source_id) if artifact else None
     return CanonicalPrice(
         instrument_id=observation.instrument_id,
         symbol=symbol,
@@ -303,6 +306,12 @@ def _from_observation(db: Session, observation: MarketObservation, symbol: str) 
     )
 
 
+def _from_observation(db: Session, observation: MarketObservation, symbol: str) -> CanonicalPrice:
+    artifact = db.get(SourceArtifact, observation.artifact_id)
+    source = db.get(DataSource, artifact.data_source_id) if artifact else None
+    return _from_observation_parts(observation, artifact, source, symbol)
+
+
 def price_series(
     db: Session,
     symbol: str,
@@ -311,10 +320,11 @@ def price_series(
     *,
     allow_legacy_fallback: bool = True,
 ) -> list[CanonicalPrice]:
-    instrument = db.scalar(select(Instrument).where(func.upper(Instrument.symbol) == symbol.upper()))
+    normalized_symbol = symbol.strip().upper()
+    instrument = db.scalar(select(Instrument).where(Instrument.symbol == normalized_symbol))
     if instrument:
         statement = (
-            select(MarketObservation)
+            select(MarketObservation, SourceArtifact, DataSource)
             .join(SourceArtifact, SourceArtifact.id == MarketObservation.artifact_id)
             .join(DataSource, DataSource.id == SourceArtifact.data_source_id)
             .where(
@@ -333,12 +343,18 @@ def price_series(
             statement = statement.where(MarketObservation.effective_at >= datetime.combine(start, datetime.min.time()))
         if end:
             statement = statement.where(MarketObservation.effective_at < datetime.combine(end, datetime.max.time()))
-        rows = list(db.scalars(statement.order_by(MarketObservation.effective_at)))
+        rows = list(db.execute(statement.order_by(MarketObservation.effective_at)))
         if rows:
-            return [_from_observation(db, row, instrument.symbol) for row in rows]
+            return [
+                _from_observation_parts(observation, artifact, source, instrument.symbol)
+                for observation, artifact, source in rows
+            ]
     if not allow_legacy_fallback:
         return []
-    statement = select(MarketPrice).where(func.upper(MarketPrice.symbol) == symbol.upper())
+    # Provider ingestion normalizes symbols to uppercase. Keeping this predicate
+    # sargable lets PostgreSQL use the existing (symbol, trade_date, source)
+    # unique index instead of scanning the entire price table for every holding.
+    statement = select(MarketPrice).where(MarketPrice.symbol == normalized_symbol)
     if not synthetic_market_data_allowed():
         statement = statement.where(func.lower(MarketPrice.source) != "mock")
     if start:
@@ -402,5 +418,60 @@ def canonical_prices_for_date(db: Session, trade_date: date) -> list[CanonicalPr
 
 
 def latest_price(db: Session, symbol: str, as_of: date | None = None) -> CanonicalPrice | None:
-    rows = price_series(db, symbol, end=as_of)
-    return rows[-1] if rows else None
+    """Return one canonical row without materializing the symbol's full history."""
+
+    normalized_symbol = symbol.strip().upper()
+    instrument = db.scalar(select(Instrument).where(Instrument.symbol == normalized_symbol))
+    if instrument:
+        statement = (
+            select(MarketObservation, SourceArtifact, DataSource)
+            .join(SourceArtifact, SourceArtifact.id == MarketObservation.artifact_id)
+            .join(DataSource, DataSource.id == SourceArtifact.data_source_id)
+            .where(
+                MarketObservation.instrument_id == instrument.id,
+                MarketObservation.is_selected.is_(True),
+                MarketObservation.frequency == "daily",
+            )
+        )
+        if not synthetic_market_data_allowed():
+            statement = statement.where(
+                ~func.lower(DataSource.name).in_(SYNTHETIC_SOURCE_NAMES),
+                ~func.lower(SourceArtifact.source_url).like("demo://%"),
+                ~func.lower(SourceArtifact.source_url).like("normalized://mock/%"),
+            )
+        if as_of:
+            statement = statement.where(
+                MarketObservation.effective_at < datetime.combine(as_of, datetime.max.time())
+            )
+        row = db.execute(statement.order_by(MarketObservation.effective_at.desc()).limit(1)).first()
+        if row:
+            observation, artifact, source = row
+            return _from_observation_parts(observation, artifact, source, instrument.symbol)
+
+    statement = select(MarketPrice).where(MarketPrice.symbol == normalized_symbol)
+    if not synthetic_market_data_allowed():
+        statement = statement.where(func.lower(MarketPrice.source) != "mock")
+    if as_of:
+        statement = statement.where(MarketPrice.trade_date <= as_of)
+    row = db.scalar(statement.order_by(MarketPrice.trade_date.desc()).limit(1))
+    if row is None:
+        return None
+    return CanonicalPrice(
+        instrument_id=instrument.id if instrument else None,
+        symbol=row.symbol,
+        trade_date=row.trade_date,
+        open=row.open,
+        high=row.high,
+        low=row.low,
+        close=row.close,
+        previous_close=row.previous_close,
+        volume=row.volume,
+        market_cap=row.market_cap,
+        source=row.source,
+        source_url=row.source_url,
+        artifact_id=None,
+        artifact_sha256=None,
+        observed_at=row.ingested_at,
+        adjustment_state="unknown",
+        quality_status="legacy_fallback",
+    )
