@@ -21,6 +21,7 @@ from app.models.workstation import (
     MacroSeries,
     MacroSeriesProvider,
     SourceArtifact,
+    StandardizedFinancialFact,
 )
 from app.schemas.research import InstrumentResponse
 from app.services.portfolio_service import get_portfolio_summary
@@ -292,6 +293,17 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
         if all_provenance.get(fact.document_id or "", {}).get("is_observed", False)
     ]
     facts = _display_facts(observed_facts)
+    standardized_facts = list(
+        db.scalars(
+            select(StandardizedFinancialFact)
+            .where(
+                StandardizedFinancialFact.instrument_id == instrument.id,
+                StandardizedFinancialFact.quality_status == "observed",
+            )
+            .order_by(StandardizedFinancialFact.period_end.desc(), StandardizedFinancialFact.retrieved_at.desc())
+            .limit(200)
+        )
+    )
     provenance = _document_provenance(db, {fact.document_id for fact in facts if fact.document_id})
     market_research = _market_research(db, instrument)
     documents = _display_documents(list(db.scalars(select(Document).where(Document.symbol == instrument.symbol, Document.document_type != "synthetic_demo_facts", ~func.lower(Document.source_name).contains("demo"), or_(Document.source_url.is_(None), ~func.lower(Document.source_url).like("demo://%")), or_(Document.visibility == "public", Document.owner_user_id == user.id)).order_by(Document.published_date.desc(), Document.created_at.desc()).limit(50))))[:20]
@@ -329,7 +341,38 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
         "instrument": serialize_instrument(instrument).model_dump(),
         "market": None if latest is None else {"date": latest.trade_date, "close": latest.close, "volume": latest.volume, "change_percent": latest.change_percent, "source": latest.source, "source_url": latest.source_url, "artifact_id": latest.artifact_id, "artifact_sha256": latest.artifact_sha256, "quality_status": latest.quality_status, "adjustment_state": latest.adjustment_state},
         "market_research": market_research,
-        "fundamentals": [{"taxonomy_key": fact.taxonomy_key, "period_type": fact.period_type, "period_end": fact.period_end, "filing_date": fact.filing_date, "value": fact.value, "unit": fact.unit, "currency": fact.currency, "document_id": fact.document_id, "page_number": fact.page_number, "provenance": _fact_provenance(provenance, fact.document_id)} for fact in facts],
+        "fundamentals": [
+            *[{"taxonomy_key": fact.taxonomy_key, "period_type": fact.period_type, "period_end": fact.period_end, "filing_date": fact.filing_date, "value": fact.value, "unit": fact.unit, "currency": fact.currency, "document_id": fact.document_id, "page_number": fact.page_number, "classification": "filing_extracted", "source_url": provenance.get(fact.document_id or "", {}).get("source_url"), "provenance": _fact_provenance(provenance, fact.document_id)} for fact in facts],
+            *[
+                {
+                    "taxonomy_key": fact.metric,
+                    "period_type": fact.period_type,
+                    "period_end": fact.period_end,
+                    "filing_date": None,
+                    "value": fact.value,
+                    "unit": fact.unit,
+                    "currency": fact.currency,
+                    "document_id": None,
+                    "page_number": None,
+                    "classification": fact.classification,
+                    "source_url": fact.source_url,
+                    "provenance": {
+                        "source_name": fact.source.upper(),
+                        "document_type": "standardized_financials",
+                        "is_synthetic": False,
+                        "is_observed": True,
+                        "ingested_at": fact.retrieved_at,
+                    },
+                }
+                for fact in standardized_facts
+                if not any(
+                    _normalized_taxonomy(existing.taxonomy_key) == _normalized_taxonomy(fact.metric)
+                    and existing.period_type == fact.period_type
+                    and existing.period_end == fact.period_end
+                    for existing in facts
+                )
+            ],
+        ],
         "derived_fundamentals": _derived_fundamentals(facts, provenance),
         "documents": [{"id": document.id, "title": document.title, "document_type": document.document_type, "published_date": document.published_date, "source_url": document.source_url, "is_synthetic": document.document_type == "synthetic_demo_facts"} for document in documents],
         "events": [{"id": event.id, "title": event.title, "event_type": event.event_type, "occurred_at": event.occurred_at, "direction": event.direction, "confidence": event.confidence} for event in events if event and db.scalar(select(EventSource.id).where(EventSource.event_id == event.id, EventSource.source_name != "Deterministic Demo Seed"))],

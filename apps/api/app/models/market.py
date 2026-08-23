@@ -131,5 +131,8 @@ class MarketIngestionRun(Base):
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     latest_trade_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    attempted_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    accepted_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    rejected_count: Mapped[int] = mapped_column(default=0, nullable=False)
     records_written: Mapped[int] = mapped_column(default=0, nullable=False)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)

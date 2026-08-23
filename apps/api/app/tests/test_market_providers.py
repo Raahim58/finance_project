@@ -5,6 +5,7 @@ from pathlib import Path
 from datetime import date
 
 import pandas as pd
+import httpx
 from sqlalchemy import func, select
 
 from app.db.session import SessionLocal
@@ -106,8 +107,70 @@ def test_dps_symbol_history_is_normalized_oldest_first():
     html = (DPS_FIXTURES / "historical_mebl.sample.html").read_text()
     rows = DpsMarketDataProvider.parse_symbol_history(html, "MEBL")
     assert [row.trade_date for row in rows] == [date(2026, 8, 6), date(2026, 8, 7), date(2026, 8, 10)]
+    assert rows[0].previous_close is None
     assert rows[1].previous_close == Decimal("587.93")
     assert rows[2].volume == 48_388
+
+
+def test_dps_history_uses_prior_session_before_requested_window(monkeypatch):
+    history_html = (DPS_FIXTURES / "historical_mebl.sample.html").read_text()
+    empty_html = '<table id="historicalTable"><tr><th>DATE</th><th>OPEN</th><th>HIGH</th><th>LOW</th><th>CLOSE</th><th>VOLUME</th></tr></table>'
+
+    class FixtureClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def post(self, path, data):
+            body = history_html if data["month"] == "8" else empty_html
+            request = httpx.Request("POST", f"https://dps.psx.com.pk{path}", data=data)
+            return httpx.Response(200, text=body, headers={"content-type": "text/html"}, request=request)
+
+    provider = DpsMarketDataProvider()
+    monkeypatch.setattr(provider, "_client", lambda: FixtureClient())
+
+    rows = provider.fetch_symbol_history("MEBL", date(2026, 8, 7), date(2026, 8, 10))
+
+    assert [row.trade_date for row in rows] == [date(2026, 8, 7), date(2026, 8, 10)]
+    assert rows[0].previous_close == Decimal("587.93")
+
+
+def test_dps_refresh_reports_missing_ordinary_symbols_as_partial(tmp_path, monkeypatch):
+    from app.core.config import settings
+
+    provider = DpsMarketDataProvider()
+
+    def fixture_prices():
+        provider.observed_universe = [
+            {"symbol": "AAA", "name": "Alpha", "sector": "Test", "is_debt": False, "is_etf": False, "is_gem": False},
+            {"symbol": "BBB", "name": "Beta", "sector": "Test", "is_debt": False, "is_etf": False, "is_gem": False},
+        ]
+        return [
+            LatestPriceRow(
+                symbol="AAA",
+                name="Alpha",
+                sector="Test",
+                trade_date=date(2026, 8, 10),
+                open=Decimal("99"),
+                high=Decimal("102"),
+                low=Decimal("98"),
+                close=Decimal("101"),
+                previous_close=Decimal("100"),
+                volume=1000,
+                source_url="https://dps.psx.com.pk/historical?date=2026-08-10",
+            )
+        ]
+
+    monkeypatch.setattr(settings, "source_artifact_root", str(tmp_path / "artifacts"))
+    monkeypatch.setattr(provider, "fetch_latest_prices", fixture_prices)
+    with SessionLocal() as db:
+        result = provider.refresh_latest(db)
+
+    assert result["coverage_status"] == "partial"
+    assert (result["attempted"], result["accepted"], result["rejected"]) == (2, 1, 1)
+    assert result["missing_symbols"] == ["BBB"]
 
 
 def test_dps_parser_rejects_contract_header_drift():

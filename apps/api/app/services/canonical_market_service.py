@@ -151,7 +151,13 @@ def persist_normalized_observations(db: Session, rows: Iterable, source_name: st
     content = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     digest = sha256(content).hexdigest()
     data_source = _source(db, source_name)
-    artifact = db.scalar(select(SourceArtifact).where(SourceArtifact.sha256 == digest))
+    artifact = db.scalar(
+        select(SourceArtifact).where(
+            SourceArtifact.data_source_id == data_source.id,
+            SourceArtifact.request_fingerprint == digest,
+            SourceArtifact.sha256 == digest,
+        )
+    )
     if artifact is None:
         artifact = SourceArtifact(
             data_source_id=data_source.id,

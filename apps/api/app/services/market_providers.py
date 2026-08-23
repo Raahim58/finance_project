@@ -304,7 +304,7 @@ class DpsMarketDataProvider(MarketDataProvider):
         result: list[SymbolHistoryRow] = []
         previous_close: Decimal | None = None
         for day, open_price, high, low, close, volume in parsed:
-            result.append(SymbolHistoryRow(symbol=_normalize_symbol(symbol), trade_date=day, close=close, previous_close=previous_close or close, open=open_price, high=high, low=low, volume=volume, source_url=f"https://dps.psx.com.pk/historical?symbol={_normalize_symbol(symbol)}"))
+            result.append(SymbolHistoryRow(symbol=_normalize_symbol(symbol), trade_date=day, close=close, previous_close=previous_close, open=open_price, high=high, low=low, volume=volume, source_url=f"https://dps.psx.com.pk/historical?symbol={_normalize_symbol(symbol)}"))
             previous_close = close
         return result
 
@@ -379,6 +379,13 @@ class DpsMarketDataProvider(MarketDataProvider):
         latest_prices = self.fetch_latest_prices()
         if not latest_prices:
             raise RuntimeError("DPS returned no usable market price rows")
+        expected_symbols = {
+            row["symbol"]
+            for row in self.observed_universe
+            if not row.get("is_debt") and not row.get("is_etf") and not row.get("is_gem")
+        }
+        accepted_symbols = {row.symbol for row in latest_prices}
+        missing_symbols = sorted(expected_symbols - accepted_symbols)
         from app.services.market_ingestion import sync_observed_dps_universe
         universe_count = sync_observed_dps_universe(db, self.observed_universe)
         result = persist_market_data(db, latest_prices=latest_prices, source=self.source)
@@ -391,7 +398,14 @@ class DpsMarketDataProvider(MarketDataProvider):
         artifacts_by_date = {}
         for captured in self.captured_responses:
             digest = sha256(captured["content"]).hexdigest()
-            existing_artifact = db.scalar(select(SourceArtifact).where(SourceArtifact.sha256 == digest))
+            request_fingerprint = sha256(captured["method"].encode() + captured["url"].encode() + captured["request_content"]).hexdigest()
+            existing_artifact = db.scalar(
+                select(SourceArtifact).where(
+                    SourceArtifact.data_source_id == data_source.id,
+                    SourceArtifact.request_fingerprint == request_fingerprint,
+                    SourceArtifact.sha256 == digest,
+                )
+            )
             if existing_artifact is not None:
                 if captured["effective_date"]:
                     artifacts_by_date[captured["effective_date"]] = existing_artifact
@@ -401,7 +415,6 @@ class DpsMarketDataProvider(MarketDataProvider):
             effective_at = None
             if captured["effective_date"]:
                 effective_at = datetime.combine(captured["effective_date"], datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi"))
-            request_fingerprint = sha256(captured["method"].encode() + captured["url"].encode() + captured["request_content"]).hexdigest()
             artifact = SourceArtifact(data_source_id=data_source.id, source_url=captured["url"], http_method=captured["method"], request_fingerprint=request_fingerprint, effective_at=effective_at, sha256=stored.sha256, content_type=captured["content_type"], storage_path=stored.storage_path, parser_version=self.parser_version, status="parsed", response_metadata_json=json.dumps({"bytes": stored.bytes}))
             db.add(artifact); db.flush()
             if captured["effective_date"]:
@@ -430,7 +443,25 @@ class DpsMarketDataProvider(MarketDataProvider):
         db.flush()
         reconcile_market_observations(db)
         db.commit()
-        result.update({"attempted_provider": self.source, "used_provider": self.source, "artifacts_written": artifact_count, "observations_written": observation_count, "observed_active_universe": universe_count, "message": "Refreshed the observed DPS ordinary-equity universe and verified market data with immutable raw artifacts."})
+        persisted_rejected = int(result.get("rejected", 0))
+        result.update({
+            "attempted_provider": self.source,
+            "used_provider": self.source,
+            "attempted": len(expected_symbols),
+            "accepted": len(accepted_symbols),
+            "rejected": len(missing_symbols) + persisted_rejected,
+            "coverage_status": "complete" if not missing_symbols and not persisted_rejected else "partial",
+            "coverage_ratio": len(accepted_symbols) / len(expected_symbols) if expected_symbols else 0.0,
+            "missing_symbols": missing_symbols,
+            "artifacts_written": artifact_count,
+            "observations_written": observation_count,
+            "observed_active_universe": universe_count,
+            "message": (
+                "Refreshed the complete observed DPS ordinary-equity universe with immutable raw artifacts."
+                if not missing_symbols and not persisted_rejected
+                else f"DPS refresh was partial: accepted {len(accepted_symbols)} of {len(expected_symbols)} ordinary symbols; missing={','.join(missing_symbols[:20]) or 'none'}."
+            ),
+        })
         return result
 
     def fetch_symbol_history(
@@ -441,8 +472,11 @@ class DpsMarketDataProvider(MarketDataProvider):
     ) -> list[SymbolHistoryRow]:
         symbol = _normalize_symbol(symbol)
         end = end_date or date.today()
-        start = start_date or date(end.year - 5, end.month, 1)
-        cursor = date(start.year, start.month, 1)
+        requested_start = start_date or date(end.year - 5, end.month, 1)
+        # Fetch a short lookback so the first requested observation uses the
+        # actual prior session close instead of manufacturing a zero return.
+        lookup_start = requested_start.fromordinal(requested_start.toordinal() - 10)
+        cursor = date(lookup_start.year, lookup_start.month, 1)
         rows: dict[date, SymbolHistoryRow] = {}
         with self._client() as client:
             while cursor <= end:
@@ -450,13 +484,13 @@ class DpsMarketDataProvider(MarketDataProvider):
                 response.raise_for_status()
                 self._capture(response, cursor)
                 for row in self.parse_symbol_history(response.text, symbol):
-                    if start <= row.trade_date <= end:
+                    if lookup_start <= row.trade_date <= end:
                         rows[row.trade_date] = row
                 cursor = date(cursor.year + (cursor.month == 12), 1 if cursor.month == 12 else cursor.month + 1, 1)
         ordered = [rows[day] for day in sorted(rows)]
         for index in range(1, len(ordered)):
             ordered[index].previous_close = ordered[index - 1].close
-        return ordered
+        return [row for row in ordered if requested_start <= row.trade_date <= end]
 
     def fetch_sector_stats(self) -> list[SectorStatRow]:
         return []

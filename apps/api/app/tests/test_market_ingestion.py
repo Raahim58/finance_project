@@ -65,6 +65,36 @@ def test_run_market_data_cycle_records_actual_provider_used(monkeypatch):
     assert stored.attempted_provider == "auto"
     assert stored.used_provider == "yahoo"
     assert stored.records_written == 7
+    assert stored.attempted_count == 7
+    assert stored.accepted_count == 7
+    assert stored.rejected_count == 0
+
+
+def test_run_market_data_cycle_marks_explicit_dps_coverage_gap_partial(monkeypatch):
+    class FakeProvider:
+        mode = "dps"
+        source = "dps"
+
+        def refresh_latest(self, db):
+            return {
+                "attempted_provider": "dps",
+                "used_provider": "dps",
+                "attempted": 3,
+                "accepted": 2,
+                "rejected": 1,
+                "coverage_status": "partial",
+                "prices": 2,
+                "latest_trade_date": date(2026, 6, 30),
+                "message": "DPS refresh was partial.",
+            }
+
+    monkeypatch.setattr("app.services.market_providers.get_market_data_provider", lambda mode: FakeProvider())
+
+    with SessionLocal() as db:
+        run = run_market_data_cycle(db, mode="dps")
+
+    assert run.status == "partial"
+    assert (run.attempted_count, run.accepted_count, run.rejected_count) == (3, 2, 1)
 
 
 def test_scheduler_run_once_prints_attempted_and_used_provider(monkeypatch, capsys):
@@ -113,3 +143,4 @@ def test_scheduler_succeeds_when_yahoo_fetches_at_least_one_symbol(monkeypatch):
     assert run.status == "success"
     assert run.used_provider == "yahoo"
     assert run.records_written == 1
+    assert (run.attempted_count, run.accepted_count, run.rejected_count) == (2, 1, 1)

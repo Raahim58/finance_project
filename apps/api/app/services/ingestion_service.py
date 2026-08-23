@@ -63,7 +63,7 @@ def refresh_provider(db: Session, provider: str, run_key: str | None = None):
             market_run = run_market_data_cycle(db, normalized)
             if market_run.status == "failed":
                 raise RuntimeError(market_run.message or f"{normalized} market refresh failed")
-            result = {"attempted": market_run.records_written, "accepted": market_run.records_written, "rejected": 0, "latest_observation_at": datetime.combine(market_run.latest_trade_date, datetime.min.time(), tzinfo=UTC) if market_run.latest_trade_date else None, "diagnostics": {"used_provider": market_run.used_provider, "message": market_run.message}}
+            result = {"attempted": market_run.attempted_count, "accepted": market_run.accepted_count, "rejected": market_run.rejected_count, "latest_observation_at": datetime.combine(market_run.latest_trade_date, datetime.min.time(), tzinfo=UTC) if market_run.latest_trade_date else None, "diagnostics": {"attempted_provider": market_run.attempted_provider, "used_provider": market_run.used_provider, "message": market_run.message}}
         elif normalized in {"pbs", "world_bank"}:
             provider_object = PbsPriceProvider() if normalized == "pbs" else WorldBankCommodityProvider()
             observations = provider_object.fetch()
@@ -232,42 +232,25 @@ def refresh_company_research(db: Session, instrument_id: str, limit: int = 5) ->
 
 
 def _refresh_mettis(db: Session) -> dict[str, object]:
-    from decimal import Decimal
-    from app.providers.news.mettis import MettisProvider
-    from app.services.rag_service import ParsedPage, create_document_from_pages
+    from app.ingestion.evidence_catalog import build_pass1_registry
+    from app.services.evidence_pipeline import run_source_once
 
-    provider = MettisProvider()
-    articles = provider.fetch_listing()
-    data_source = source(db, "Mettis Global", "news_metadata", provider.listing_url, 50, 240, "Headline, timestamp and visible-summary metadata only; article bodies are not republished.")
-    content = json.dumps([{"title": item.title, "url": item.url, "summary": item.summary} for item in articles], sort_keys=True).encode()
-    artifact = store_artifact(db, data_source, content, url=provider.listing_url, method="GET", parser_version=provider.parser_version, content_type="application/json")
-    instruments = list(db.scalars(select(Instrument)))
-    attempted = len(articles); accepted = rejected = 0
-    latest_at: datetime | None = None
-    errors: list[str] = []
-    for listed in articles:
-        if db.scalar(select(EventSource.id).where(EventSource.source_url == listed.url)):
-            continue
-        try:
-            article = provider.fetch_article_metadata(listed.url)
-            text = article.summary or listed.summary
-            document = None
-            if text:
-                document = create_document_from_pages(db, [ParsedPage(1, text)], title=article.title or listed.title, document_type="news_summary", source_name="Mettis Global", source_url=listed.url, published_date=article.published_at.date() if article.published_at else None, visibility="public", artifact_id=artifact.id, commit=False)
-            occurred_at = article.published_at or datetime.now(UTC)
-            latest_at = max(latest_at or occurred_at, occurred_at)
-            event = Event(event_type="news", title=(article.title or listed.title)[:255], occurred_at=occurred_at, confidence=Decimal("0.750000"), details_json=json.dumps({"summary": text, "author": article.author, "timestamp_observed": article.published_at is not None}))
-            db.add(event); db.flush()
-            db.add(EventSource(event_id=event.id, source_url=listed.url, source_name="Mettis Global", artifact_id=artifact.id, document_id=document.id if document else None))
-            searchable = f"{article.title or listed.title} {text or ''}".upper()
-            for instrument in instruments:
-                if instrument.symbol.upper() in searchable.split():
-                    db.add(EventEntityLink(event_id=event.id, entity_type="instrument", entity_key=instrument.symbol, link_method="exact_symbol_token", confidence=Decimal("1.000000")))
-            db.commit(); accepted += 1
-        except Exception as exc:
-            db.rollback(); rejected += 1
-            errors.append(f"{listed.url}: {type(exc).__name__}: {str(exc)[:240]}")
-    return {"attempted": attempted, "accepted": accepted, "rejected": rejected, "latest_observation_at": latest_at, "diagnostics": {"errors": errors}}
+    result = run_source_once(db, build_pass1_registry().get("mettis"), limit=50)
+    accepted = result.selected + result.duplicates
+    rejected = result.rejected + result.failed
+    return {
+        "attempted": result.discovered,
+        "accepted": accepted,
+        "rejected": rejected,
+        "latest_observation_at": datetime.now(UTC) if accepted else None,
+        "diagnostics": {
+            "pipeline": "unified_evidence",
+            "evaluated": result.evaluated,
+            "selected": result.selected,
+            "duplicates": result.duplicates,
+            "failed": result.failed,
+        },
+    }
 
 
 def run_due_ingestion_jobs(db: Session) -> list[dict[str, object]]:
@@ -276,7 +259,6 @@ def run_due_ingestion_jobs(db: Session) -> list[dict[str, object]]:
         return []
     today = date.today()
     schedules = [
-        ("mettis", today.isoformat()),
         ("sbp", today.isoformat()),
         ("scstrade", f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"),
         ("pbs", f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"),

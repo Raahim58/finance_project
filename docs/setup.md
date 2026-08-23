@@ -81,6 +81,13 @@ The live universe is synchronized from observed DPS symbol data; there is no con
 
 `MARKET_DATA_MODE=mock` is development-only. `dps` uses the verified direct DPS adapter; `auto` tries DPS and uses Yahoo only as a labeled real-data fallback. A failed live refresh retains prior observed rows and records failure/staleness; it never generates mock replacements. NCCPL remains a manual CSV import because ordinary retrieval is blocked; no anti-bot bypass is implemented.
 
+DPS latest-price coverage uses the currently observed DPS ordinary-equity universe
+as its denominator. A response that omits any ordinary symbol is recorded as
+`partial` with the missing symbols and accepted/rejected counts; Yahoo or SCSTrade
+rows never satisfy DPS health. DPS standardized company-page facts are exposed as
+observed secondary fundamentals, while facts extracted from official filings retain
+precedence for the same metric and period.
+
 Enable and run the independent Global Evidence services with a shared artifact/spool
 volume:
 
@@ -93,6 +100,10 @@ celery -A app.celery_app worker -n pdf@%h -Q evidence_pdf --concurrency=2 --logl
 celery -A app.celery_app worker -n index@%h -Q evidence_index --concurrency=4 --loglevel=INFO
 celery -A app.celery_app worker -n historical@%h -Q historical_hydrate --concurrency=2 --loglevel=INFO
 ```
+
+Mettis is scheduled only through this evidence pipeline. It is intentionally not
+also run by the generic market/macro scheduler, which prevents duplicate ingestion
+paths with different entity-linking and story-deduplication behavior.
 
 The bounded Pass 4 official-source canary is disabled by default. Its `.venv`
 rollout, hard budgets, included source matrix, smoke test, and live status command

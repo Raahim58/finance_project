@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import io
 import json
-from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
@@ -16,6 +15,7 @@ import pandas as pd
 
 from app.core.config import settings
 from app.ingestion.macro_catalog import MacroProviderSpec
+from app.providers.macro.contracts import ProviderObservation, ProviderResult
 from app.providers.macro.official_workbooks import WorldBankCommodityProvider
 from app.providers.macro.sbp import SbpKeyIndicatorsProvider
 from app.providers.macro.pakistan_monthly import (
@@ -25,25 +25,6 @@ from app.providers.macro.pakistan_monthly import (
 
 USER_AGENT = f"psx-ai-portfolio-agent/0.1 ({settings.evidence_contact_email})"
 MAX_MACRO_RESPONSE_BYTES = 25 * 1024 * 1024
-
-
-@dataclass(frozen=True)
-class ProviderObservation:
-    effective_date: date
-    value: Decimal
-    vintage_date: date | None = None
-
-
-@dataclass(frozen=True)
-class ProviderResult:
-    provider_key: str
-    source_series_id: str
-    url: str
-    content: bytes
-    content_type: str
-    parser_version: str
-    retrieved_at: datetime
-    observations: tuple[ProviderObservation, ...]
 
 
 def _decimal(value: Any) -> Decimal | None:

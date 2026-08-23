@@ -369,7 +369,7 @@ def evidence_operational_status(db: Session) -> dict[str, object]:
         parsed_count / max(1, sum(row.status != "fetch_ready" for row in candidates))
     )
     event_count = db.scalar(
-        select(func.count()).select_from(Event).where(Event.event_type == "evidence_story")
+        select(func.count()).select_from(Event).where(Event.cluster_key.is_not(None))
     ) or 0
     selected_sources = db.scalar(
         select(func.count()).select_from(EventSource).where(EventSource.selection_status == "selected")

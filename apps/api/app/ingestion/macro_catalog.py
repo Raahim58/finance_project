@@ -191,7 +191,6 @@ MACRO_SERIES = (
             _wb("PAK", "FI.RES.TOTL.CD"),
         ),
     ),
-    MacroSeriesSpec("PK_REMITTANCES_USD", "Pakistan personal remittances received", "USD", "annual", "external", (_sbp_unverified("REMITTANCES_USD"), _wb("PAK", "BX.TRF.PWKR.CD.DT"))),
     MacroSeriesSpec("PK_FDI_NET_USD", "Pakistan foreign direct investment net inflows", "USD", "annual", "external", (_sbp_unverified("FDI_NET_USD"), _wb("PAK", "BX.KLT.DINV.CD.WD"))),
     MacroSeriesSpec("PK_POLICY_RATE", "SBP policy rate", "percent", "daily", "rates", (_sbp("sbp.policy_rate"),)),
     # MacroSeriesSpec("PK_TBILL_3M", "Pakistan 3-month treasury-bill yield", "percent", "auction", "rates", (_sbp("sbp.tbill.3m_yield"),)),
@@ -312,4 +311,3 @@ MACRO_SERIES = (
 )
 
 MACRO_SERIES_BY_KEY = {spec.key: spec for spec in MACRO_SERIES}
-

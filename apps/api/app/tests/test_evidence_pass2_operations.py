@@ -37,7 +37,7 @@ class StagedDawnSource:
             observed_url="https://www.dawn.com/news/staged-pass2",
             canonical_url="https://www.dawn.com/news/staged-pass2",
             external_id="staged-pass2",
-            headline="Pakistan inflation and SBP policy rate outlook",
+            headline="MEBL outlook amid Pakistan inflation and SBP policy rates",
             publisher="Dawn",
             discovered_at=NOW,
             published_at=NOW,
@@ -47,7 +47,7 @@ class StagedDawnSource:
         return DiscoveryBatch((candidate,)[:limit], {"last_id": candidate.external_id})
 
     def fetch(self, candidate):
-        html = b'''<html><script type="application/ld+json">{"@type":"NewsArticle","headline":"Pakistan inflation and SBP policy rate outlook","datePublished":"2026-08-14T10:00:00Z","articleBody":"Pakistan inflation and the SBP policy rate remain central to the current economic outlook and reserve position."}</script></html>'''
+        html = b'''<html><script type="application/ld+json">{"@type":"NewsArticle","headline":"MEBL outlook amid Pakistan inflation and SBP policy rates","datePublished":"2026-08-14T10:00:00Z","articleBody":"Meezan Bank Limited and MEBL are assessing Pakistan inflation and the SBP policy rate outlook."}</script></html>'''
         return RawContent(candidate, html, "text/html", NOW, candidate.observed_url)
 
     def normalize(self, raw):
@@ -61,6 +61,8 @@ def test_staged_pipeline_spools_then_indexes_selected_evidence(tmp_path, monkeyp
     spool = EvidenceSpool(tmp_path)
     source = StagedDawnSource()
     with SessionLocal() as db:
+        db.add(Instrument(symbol="MEBL", name="Meezan Bank Limited", sector="Commercial Banks"))
+        db.flush()
         discovered = discover_stage(db, source, limit=10)
         candidate_id = discovered.candidate_ids[0]
         fetched = fetch_stage(db, source, candidate_id, spool=spool)
@@ -77,7 +79,9 @@ def test_staged_pipeline_spools_then_indexes_selected_evidence(tmp_path, monkeyp
         assert indexed.outcome == "selected"
         assert db.get(DiscoveryCandidate, candidate_id).status == "selected"
         assert db.scalar(select(EventSource)).selection_status == "selected"
-        assert db.scalar(select(Document)).document_type == "selected_evidence"
+        document = db.scalar(select(Document))
+        assert document.document_type == "selected_evidence"
+        assert document.symbol == "MEBL"
         assert not (spool.root / f"{candidate_id}.raw").exists()
 
 

@@ -21,19 +21,26 @@ def source(db: Session, name: str, source_type: str, base_url: str | None, prior
 
 
 def store_artifact(db: Session, data_source: DataSource, content: bytes, *, url: str, method: str, parser_version: str, content_type: str, effective_at: datetime | None = None) -> SourceArtifact:
-    digest = sha256(content).hexdigest(); existing = db.scalar(select(SourceArtifact).where(SourceArtifact.sha256 == digest))
+    digest = sha256(content).hexdigest()
+    request_fingerprint = sha256(f"{method}:{url}".encode()).hexdigest()
+    identity = (
+        SourceArtifact.data_source_id == data_source.id,
+        SourceArtifact.request_fingerprint == request_fingerprint,
+        SourceArtifact.sha256 == digest,
+    )
+    existing = db.scalar(select(SourceArtifact).where(*identity))
     if existing: return existing
     suffix = next((value for marker, value in (("pdf", ".pdf"), ("json", ".json"), ("csv", ".csv"), ("excel", ".xlsx")) if marker in content_type.lower()), ".bin")
     stored = LocalArtifactStore(settings.source_artifact_root).put(content, suffix)
-    row = SourceArtifact(data_source_id=data_source.id, source_url=url, http_method=method, request_fingerprint=sha256(f"{method}:{url}".encode()).hexdigest(), effective_at=effective_at, sha256=digest, content_type=content_type, storage_path=stored.storage_path, parser_version=parser_version, status="parsed", response_metadata_json=json.dumps({"bytes": len(content)}))
+    row = SourceArtifact(data_source_id=data_source.id, source_url=url, http_method=method, request_fingerprint=request_fingerprint, effective_at=effective_at, sha256=digest, content_type=content_type, storage_path=stored.storage_path, parser_version=parser_version, status="parsed", response_metadata_json=json.dumps({"bytes": len(content)}))
     try:
         with db.begin_nested():
             db.add(row); db.flush()
         return row
     except IntegrityError:
-        # Parallel company/month tasks can observe identical generic/error
-        # bodies. The SHA key is the idempotency boundary; recover the winner.
-        existing = db.scalar(select(SourceArtifact).where(SourceArtifact.sha256 == digest))
+        # The same source request/content is idempotent, while identical bytes
+        # observed from another source or URL retain independent provenance.
+        existing = db.scalar(select(SourceArtifact).where(*identity))
         if existing is None:
             raise
         return existing

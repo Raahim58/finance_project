@@ -596,6 +596,9 @@ def record_market_ingestion_run(
     status: str,
     started_at: datetime,
     latest_trade_date: date | None = None,
+    attempted_count: int = 0,
+    accepted_count: int = 0,
+    rejected_count: int = 0,
     records_written: int = 0,
     message: str | None = None,
 ) -> MarketIngestionRun:
@@ -607,6 +610,9 @@ def record_market_ingestion_run(
         started_at=started_at,
         finished_at=datetime.now(UTC),
         latest_trade_date=latest_trade_date,
+        attempted_count=attempted_count,
+        accepted_count=accepted_count,
+        rejected_count=rejected_count,
         records_written=records_written,
         message=message,
     )
@@ -628,15 +634,41 @@ def run_market_data_cycle(db: Session, mode: str) -> MarketIngestionRun:
             latest_trade_date = db.scalar(
                 select(func.max(MarketPrice.trade_date)).where(MarketPrice.source == result["used_provider"])
             )
+        successful_symbols = result.get("successful_symbols")
+        skipped_symbols = result.get("skipped_symbols")
+        failed_symbols = result.get("failed_symbols")
+        attempted_symbols = result.get("attempted_symbols")
+        if "accepted" in result:
+            accepted = int(result["accepted"])
+        elif isinstance(successful_symbols, list):
+            accepted = len(successful_symbols)
+        else:
+            accepted = int(result.get("prices", 0))
+        if "rejected" in result:
+            rejected = int(result["rejected"])
+        else:
+            rejected = (len(skipped_symbols) if isinstance(skipped_symbols, list) else 0) + (
+                len(failed_symbols) if isinstance(failed_symbols, list) else 0
+            )
+        if "attempted" in result:
+            attempted = int(result["attempted"])
+        elif isinstance(attempted_symbols, list):
+            attempted = len(attempted_symbols)
+        else:
+            attempted = accepted + rejected
+        status = "partial" if result.get("coverage_status") == "partial" else "success"
         return record_market_ingestion_run(
             db,
             mode=provider.mode,
             attempted_provider=str(result.get("attempted_provider", provider.source)),
             used_provider=str(result.get("used_provider", provider.source)),
-            status="success",
+            status=status,
             started_at=started_at,
             latest_trade_date=latest_trade_date if isinstance(latest_trade_date, date) else None,
-            records_written=int(result.get("prices", 0)),
+            attempted_count=attempted,
+            accepted_count=accepted,
+            rejected_count=rejected,
+            records_written=int(result.get("prices", accepted)),
             message=str(result.get("message", f"Refreshed market data via {provider.source}.")),
         )
     except Exception as exc:
@@ -648,6 +680,9 @@ def run_market_data_cycle(db: Session, mode: str) -> MarketIngestionRun:
             used_provider=None,
             status="failed",
             started_at=started_at,
+            attempted_count=0,
+            accepted_count=0,
+            rejected_count=0,
             records_written=0,
             message=str(exc),
         )

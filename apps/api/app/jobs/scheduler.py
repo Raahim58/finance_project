@@ -43,7 +43,7 @@ def run_once() -> None:
                 fail_ingestion_run(db, health_run.id, RuntimeError(run.message or "Market-price ingestion failed"))
             else:
                 latest = datetime.combine(run.latest_trade_date, datetime.min.time(), tzinfo=UTC) if run.latest_trade_date else None
-                finish_ingestion_run(db, health_run, {"attempted": getattr(run, "records_written", 0), "accepted": getattr(run, "records_written", 0), "rejected": 0, "latest_observation_at": latest, "diagnostics": {"attempted_provider": run.attempted_provider, "used_provider": run.used_provider}})
+                finish_ingestion_run(db, health_run, {"attempted": getattr(run, "attempted_count", getattr(run, "records_written", 0)), "accepted": getattr(run, "accepted_count", getattr(run, "records_written", 0)), "rejected": getattr(run, "rejected_count", 0), "latest_observation_at": latest, "diagnostics": {"attempted_provider": run.attempted_provider, "used_provider": run.used_provider}})
         corporate_actions = apply_recorded_corporate_actions(db)
         snapshot_count = generate_daily_snapshots(db)
         screening_count = len(compute_screening_snapshots(db)) if run.status == "success" and settings.market_data_mode != "mock" else 0

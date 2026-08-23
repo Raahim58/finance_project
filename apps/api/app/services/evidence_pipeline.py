@@ -345,6 +345,28 @@ def _cluster(db: Session, row: DiscoveryCandidate, parsed: ParsedEvidence, score
     entity_set = set(score.entity_keys)
     row_metadata = json.loads(row.metadata_json or "{}")
     official_symbol = str(row_metadata.get("symbol") or "").strip().upper()
+
+    def merge_entities(event: Event) -> Event:
+        details = json.loads(event.details_json or "{}")
+        merged = sorted(set(details.get("entity_keys", [])) | entity_set)
+        details["entity_keys"] = merged
+        if official_symbol:
+            details["official_entity_key"] = official_symbol
+        event.details_json = _json(details)
+        if event.event_type == "evidence_story":
+            event.event_type = "announcement" if parsed.source_key == "psx_announcements" else "news"
+        linked = set(
+            db.scalars(
+                select(EventEntityLink.entity_key).where(
+                    EventEntityLink.event_id == event.id,
+                    EventEntityLink.entity_type == "instrument",
+                )
+            )
+        )
+        for entity in sorted(entity_set - linked):
+            db.add(EventEntityLink(event_id=event.id, entity_type="instrument", entity_key=entity, link_method="exact_alias", confidence=Decimal("1.000000")))
+        return event
+
     for event in events:
         details = json.loads(event.details_json or "{}")
         if parsed.source_key == "psx_announcements":
@@ -360,7 +382,7 @@ def _cluster(db: Session, row: DiscoveryCandidate, parsed: ParsedEvidence, score
         ):
             prior_end = _utc_datetime(event.event_time_end) if event.event_time_end else occurred_at
             event.event_time_end = max(prior_end, occurred_at)
-            return event
+            return merge_entities(event)
     bucket = occurred_at.astimezone(UTC).strftime("%Y-%m-%d")
     signature = " ".join(sorted(title_tokens))
     identity = official_symbol if parsed.source_key == "psx_announcements" else ""
@@ -371,9 +393,9 @@ def _cluster(db: Session, row: DiscoveryCandidate, parsed: ParsedEvidence, score
     if existing is not None:
         prior_end = _utc_datetime(existing.event_time_end) if existing.event_time_end else occurred_at
         existing.event_time_end = max(prior_end, occurred_at)
-        return existing
+        return merge_entities(existing)
     event = Event(
-        event_type="evidence_story",
+        event_type="announcement" if parsed.source_key == "psx_announcements" else "news",
         title=parsed.title[:255],
         occurred_at=occurred_at,
         event_time_end=occurred_at,
@@ -401,10 +423,8 @@ def _cluster(db: Session, row: DiscoveryCandidate, parsed: ParsedEvidence, score
             raise
         prior_end = _utc_datetime(existing.event_time_end) if existing.event_time_end else occurred_at
         existing.event_time_end = max(prior_end, occurred_at)
-        return existing
-    for entity in score.entity_keys:
-        db.add(EventEntityLink(event_id=event.id, entity_type="instrument", entity_key=entity, link_method="exact_alias", confidence=Decimal("1.000000")))
-    return event
+        return merge_entities(existing)
+    return merge_entities(event)
 
 
 def _evidence_role(config: EvidenceSourceConfig) -> str:
@@ -424,6 +444,7 @@ def _select_and_index(
     event: Event,
     candidate: Candidate,
     parsed: ParsedEvidence,
+    score: Score,
     raw_content: bytes,
     content_type: str,
 ) -> bool:
@@ -464,7 +485,7 @@ def _select_and_index(
         content_type=f"application/gzip; original={content_type[:80]}",
         effective_at=parsed.published_at,
     )
-    symbol = next((key for key in parsed.entity_keys if len(key) <= 30), None)
+    symbol = next((key for key in score.entity_keys if len(key) <= 30), None)
     document = create_document_from_pages(
         db,
         [ParsedPage(1, parsed.body)],
@@ -582,7 +603,7 @@ def run_source_once(db: Session, evidence_source: EvidenceSource, *, limit: int 
                 row.scoring_reasons_json = _json((selection_decision.reason,))
                 row.next_attempt_at = next_utc_day()
                 continue
-            if _select_and_index(db, data_source, config, row, event, candidate, parsed, raw.content, raw.content_type):
+            if _select_and_index(db, data_source, config, row, event, candidate, parsed, score, raw.content, raw.content_type):
                 counts["selected"] += 1
             else:
                 counts["rejected"] += 1

@@ -59,6 +59,14 @@ class DataSource(Base):
 
 class SourceArtifact(Base):
     __tablename__ = "source_artifacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "data_source_id",
+            "request_fingerprint",
+            "sha256",
+            name="uq_source_artifact_capture",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     data_source_id: Mapped[str] = mapped_column(ForeignKey("data_sources.id"), index=True)
@@ -68,7 +76,7 @@ class SourceArtifact(Base):
     retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     source_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     effective_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    sha256: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     content_type: Mapped[str | None] = mapped_column(String(120))
     storage_path: Mapped[str | None] = mapped_column(String(1000))
     parser_version: Mapped[str] = mapped_column(String(80), nullable=False)

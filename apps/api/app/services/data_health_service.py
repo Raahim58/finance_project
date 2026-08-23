@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 from datetime import UTC, date, datetime, timedelta
 
 from fastapi import HTTPException
@@ -6,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.document import Document
+from app.models.evidence import DiscoveryCandidate, EvidenceSourceConfig, EvidenceSourceState
 from app.models.market import MarketPrice
 from app.models.workstation import (
     DataSource,
@@ -17,6 +19,7 @@ from app.models.workstation import (
     Instrument,
     MacroObservation,
     MacroSeriesProvider,
+    StandardizedFinancialFact,
 )
 
 
@@ -28,7 +31,7 @@ class SourceDefinition:
 
 
 SOURCE_DEFINITIONS = (
-    SourceDefinition("DPS", ("dps", "auto", "psxdata", "yahoo", "market_prices"), 4_320),
+    SourceDefinition("DPS", ("dps", "auto"), 4_320),
     SourceDefinition("Mettis", ("mettis",), 480),
     SourceDefinition("PSX Financial Reports", ("psx_financials",), 10_080),
     SourceDefinition("SBP", ("sbp",), 4_320),
@@ -36,7 +39,6 @@ SOURCE_DEFINITIONS = (
     SourceDefinition("World Bank", ("world_bank",), 50_400),
     SourceDefinition("Canonical Macro", ("provider_ladder",), 10_080),
     SourceDefinition("SCSTrade", ("scstrade",), 10_080),
-    # Phase 1 intentionally has no real announcements provider.
     SourceDefinition("PSX Announcements", ("psx_announcements",), None),
 )
 
@@ -75,7 +77,7 @@ def _configured_sla(db: Session, definition: SourceDefinition) -> int | None:
 
 def _latest_data_at(db: Session, source_name: str) -> datetime | None:
     if source_name == "DPS":
-        value = db.scalar(select(func.max(MarketPrice.trade_date)).where(MarketPrice.source != "mock"))
+        value = db.scalar(select(func.max(MarketPrice.trade_date)).where(MarketPrice.source == "dps"))
     elif source_name == "SCSTrade":
         value = db.scalar(select(func.max(MarketPrice.trade_date)).where(MarketPrice.source == "scstrade"))
     elif source_name == "Mettis":
@@ -135,6 +137,15 @@ def source_health(db: Session, *, now: datetime | None = None) -> dict[str, obje
                 .order_by(IngestionRun.started_at.desc())
             )
         )
+        if definition.source == "DPS":
+            runs = [
+                run for run in runs
+                if run.provider == "dps"
+                or (
+                    run.provider == "auto"
+                    and json.loads(run.diagnostics_json or "{}").get("used_provider") == "dps"
+                )
+            ]
         latest = runs[0] if runs else None
         successful = next((run for run in runs if run.status in SUCCESS_STATUSES), None)
         latest_data_at = _latest_data_at(db, definition.source)
@@ -166,6 +177,67 @@ def source_health(db: Session, *, now: datetime | None = None) -> dict[str, obje
                 "freshness_sla_minutes": sla,
             }
         )
+    positions = {row["source"]: index for index, row in enumerate(sources)}
+    evidence_rows = db.execute(
+        select(EvidenceSourceConfig, EvidenceSourceState, DataSource)
+        .join(EvidenceSourceState, EvidenceSourceState.source_config_id == EvidenceSourceConfig.id)
+        .join(DataSource, DataSource.id == EvidenceSourceConfig.data_source_id)
+        .where(DataSource.enabled.is_(True))
+    ).all()
+    for config, state, data_source in evidence_rows:
+        status_counts = dict(
+            db.execute(
+                select(DiscoveryCandidate.status, func.count())
+                .where(DiscoveryCandidate.source_config_id == config.id)
+                .group_by(DiscoveryCandidate.status)
+            ).all()
+        )
+        attempted = sum(status_counts.values())
+        accepted = status_counts.get("selected", 0) + status_counts.get("duplicate", 0)
+        rejected = status_counts.get("rejected", 0) + status_counts.get("failed", 0)
+        latest_data_at = _as_utc_datetime(
+            db.scalar(
+                select(func.max(func.coalesce(EventSource.published_at, DiscoveryCandidate.selected_at)))
+                .join(DiscoveryCandidate, DiscoveryCandidate.id == EventSource.candidate_id)
+                .where(DiscoveryCandidate.source_config_id == config.id)
+            )
+        )
+        sla = data_source.freshness_sla_minutes
+        diagnostics = json.loads(state.diagnostics_json or "{}")
+        if state.last_attempted_at is None:
+            status = "never_run"
+        elif state.consecutive_failures:
+            status = "failed"
+        elif diagnostics.get("failed"):
+            status = "partial"
+        elif state.last_success_at is None:
+            status = "stale"
+        elif sla is not None and current - _as_utc_datetime(state.last_success_at) > timedelta(minutes=sla):
+            status = "stale"
+        else:
+            status = "healthy"
+        display_name = {
+            "mettis": "Mettis",
+            "psx_announcements": "PSX Announcements",
+        }.get(config.source_key, data_source.name)
+        evidence_health = {
+            "source": display_name,
+            "status": status,
+            "last_attempt": state.last_attempted_at,
+            "last_success": state.last_success_at,
+            "latest_data_at": latest_data_at,
+            "attempted": attempted,
+            "accepted": accepted,
+            "updated": 0,
+            "rejected": rejected,
+            "error": state.last_error_message,
+            "freshness_sla_minutes": sla,
+        }
+        if display_name in positions:
+            sources[positions[display_name]] = evidence_health
+        else:
+            positions[display_name] = len(sources)
+            sources.append(evidence_health)
     return {"sources": sources}
 
 
@@ -200,6 +272,20 @@ def company_completeness(db: Session, symbol: str) -> dict[str, object]:
             Document.document_type != "synthetic_demo_facts",
         )
     ).one()
+    standardized_count, latest_standardized_period = db.execute(
+        select(
+            func.count(StandardizedFinancialFact.id),
+            func.max(StandardizedFinancialFact.period_end),
+        ).where(
+            StandardizedFinancialFact.instrument_id == instrument.id,
+            StandardizedFinancialFact.quality_status == "observed",
+        )
+    ).one()
+    fact_count = int(fact_count or 0) + int(standardized_count or 0)
+    latest_period = max(
+        (value for value in (latest_period, latest_standardized_period) if value is not None),
+        default=None,
+    )
     report_count, latest_report = db.execute(
         select(func.count(Document.id), func.max(Document.published_date)).where(
             *_observed_document_filter(normalized),
@@ -244,6 +330,6 @@ def company_completeness(db: Session, symbol: str) -> dict[str, object]:
             "latest_period": _as_utc_datetime(latest_period),
         },
         "reports": category(report_count, latest_report, "No observed company reports are stored for this security."),
-        "announcements": category(announcement_count, latest_announcement, "No real announcements provider is configured in Phase 1."),
+        "announcements": category(announcement_count, latest_announcement, "No observed PSX announcements are linked to this security."),
         "news": category(news_count, latest_news, "No sourced news is linked to this security."),
     }

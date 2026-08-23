@@ -474,6 +474,7 @@ def parse_stage(
         row.relevance_score = Decimal(f"{score.relevance:.6f}")
         row.quality_score = Decimal(f"{parsed.extraction_quality:.6f}")
         row.scoring_reasons_json = _json(score.reasons)
+        pipeline["entity_keys"] = list(score.entity_keys)
         if score.relevance < 0.30:
             _transition(row, CandidateStatus.REJECTED)
             _record_request_outcome(db, row, "rejected")
@@ -581,7 +582,7 @@ def index_stage(db: Session, candidate_id: str, *, spool: EvidenceSpool | None =
             content_type=f"application/gzip; original={content_type[:80]}",
             effective_at=parsed.published_at,
         )
-        symbol = next((key for key in parsed.entity_keys if len(key) <= 30), None)
+        symbol = next((str(key) for key in pipeline.get("entity_keys", []) if len(str(key)) <= 30), None)
         document = create_document_from_pages(
             db,
             [ParsedPage(1, parsed.body)],

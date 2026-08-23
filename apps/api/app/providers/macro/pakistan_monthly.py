@@ -12,7 +12,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 
 from app.core.config import settings
-from app.providers.macro.series import ProviderObservation, ProviderResult
+from app.providers.macro.contracts import ProviderObservation, ProviderResult
 
 
 USER_AGENT = (

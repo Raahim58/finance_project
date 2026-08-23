@@ -9,7 +9,7 @@ import hashlib
 from app.ingestion.evidence import Candidate, DiscoveryBatch, ParsedEvidence, RawContent
 from app.models.document import Citation, Document, DocumentChunk
 from app.models.evidence import DiscoveryCandidate, EvidenceSourceState
-from app.models.workstation import Event, EventSource, Instrument, InstrumentAlias, MacroObservation
+from app.models.workstation import Event, EventEntityLink, EventSource, Instrument, InstrumentAlias, MacroObservation
 from app.services.evidence_pipeline import (
     Score,
     _cluster,
@@ -241,7 +241,50 @@ def test_cluster_creation_reuses_deterministic_key_idempotently():
         second = _cluster(db, row, parsed, score)
 
         assert second.id == first.id
+        assert first.event_type == "announcement"
         assert len(db.scalars(select(Event)).all()) == 1
+
+
+def test_reused_story_cluster_merges_new_entity_links():
+    with SessionLocal() as db:
+        config = ensure_source_config(db, "dawn")[1]
+        rows = []
+        parsed_items = []
+        for suffix in ("first", "second"):
+            candidate = Candidate(
+                "dawn",
+                f"https://www.dawn.com/news/{suffix}",
+                "Banks respond to policy rate outlook",
+                "Dawn",
+                FixtureDawnSource.now,
+                "rss_atom",
+                external_id=suffix,
+                topic="pakistan_macro",
+            )
+            row, _ = persist_candidate(db, config, candidate)
+            rows.append(row)
+            parsed_items.append(
+                ParsedEvidence(
+                    canonical_url=candidate.observed_url,
+                    title=candidate.headline,
+                    body="Pakistan banks respond to the policy rate outlook.",
+                    published_at=candidate.discovered_at,
+                    source_key="dawn",
+                    body_sha256=suffix * 8,
+                    parser_method="fixture",
+                    extraction_quality=1.0,
+                )
+            )
+
+        first = _cluster(db, rows[0], parsed_items[0], Score(1.0, (), ("HBL",), "pakistan_macro"))
+        db.flush()
+        reused = _cluster(db, rows[1], parsed_items[1], Score(1.0, (), ("MEBL",), "pakistan_macro"))
+        db.flush()
+        links = set(db.scalars(select(EventEntityLink.entity_key).where(EventEntityLink.event_id == first.id)))
+
+    assert reused.id == first.id
+    assert first.event_type == "news"
+    assert links == {"HBL", "MEBL"}
 
 
 class ClusteredDawnSource(DuplicateDawnSource):
