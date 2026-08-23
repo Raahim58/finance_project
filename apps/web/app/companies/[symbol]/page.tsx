@@ -42,7 +42,7 @@ export default function CompanyPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    void Promise.all([getCompanyDetail(symbol), getCompanyHistory(symbol, 365), getCompanyResearch(symbol), getPortfolios(), getCompanyCompleteness(symbol).catch(() => null)])
+    void Promise.all([getCompanyDetail(symbol), getCompanyHistory(symbol), getCompanyResearch(symbol), getPortfolios(), getCompanyCompleteness(symbol).catch(() => null)])
       .then(([company, prices, analysis, portfolioRows, completeness]) => {
         setDetail(company); setHistory(prices); setResearch(analysis); setPortfolios(portfolioRows); setCoverage(completeness);
       })
@@ -58,6 +58,8 @@ export default function CompanyPage() {
   const relevance = research?.portfolio_relevance?.[0];
   const marketRisk = (research?.market_research?.risk ?? {}) as Record<string, unknown>;
   const derived = research?.derived_fundamentals;
+  const announcements = research?.events.filter(event => event.event_type === "announcement") ?? [];
+  const news = research?.events.filter(event => event.event_type === "news") ?? [];
   return <div className="page-wrap">
     <header className="page-heading">
       <div><Link href="/markets" className="eyebrow">Markets / Security research</Link><div className="mt-2 flex flex-wrap items-baseline gap-3"><h1 className="page-title">{symbol}</h1><span className="text-[15px] font-semibold text-[#3f454b]">{detail.company.name}</span></div><p className="page-subtitle">{detail.company.sector} · {detail.company.exchange.code}</p></div>
@@ -72,7 +74,8 @@ export default function CompanyPage() {
     <div className="mt-4 grid gap-4 xl:grid-cols-2">
       <Section title="Reported fundamentals">{research?.fundamentals.length ? <Facts rows={research.fundamentals} /> : <Unavailable text="Normalized exact facts are unavailable. Documentary evidence is not substituted for numeric fundamentals." />}</Section>
       <Section title="Model-derived ratios">{derived && Object.keys(derived.ratios ?? {}).length ? <Facts rows={Object.entries(derived.ratios ?? {}).map(([taxonomy_key, row]) => ({ taxonomy_key, value: String(row.value ?? "—"), unit: "ratio", period_type: "derived", period_end: String(row.period_end ?? "—"), provenance: (row.provenance as { source_name: string | null; is_synthetic: boolean } | undefined) ?? { source_name: null, is_synthetic: false } }))} /> : <Unavailable text={String(derived?.valuation?.reason ?? "Compatible normalized facts are unavailable for deterministic ratios.")} />}</Section>
-      <Section title="Announcements & events">{research?.events.length ? <div className="divider-list">{research.events.map((event, index) => <article className="py-3 text-[13px]" key={String(event.id ?? index)}><strong>{String(event.title)}</strong><p className="mt-1 text-[11px] text-muted">{event.occurred_at ? new Date(String(event.occurred_at)).toLocaleDateString("en-PK") : "Date unavailable"} · {title(String(event.event_type ?? "event"))}</p></article>)}</div> : <Unavailable text="No structured sourced events are linked to this security." />}</Section>
+      <Section title={`Announcements (${announcements.length})`}><CompanyEvents rows={announcements} empty="No stored PSX announcements are linked to this security." /></Section>
+      <Section title={`News (${news.length})`}><CompanyEvents rows={news} empty="No stored news stories are linked to this security." /></Section>
       <Section title="Company evidence">{research?.documents.length ? <div className="divider-list">{research.documents.map((document, index) => <article className="py-3 text-[13px]" key={String(document.id ?? index)}><div className="flex items-center gap-2"><strong>{String(document.title)}</strong>{document.is_synthetic ? <span className="badge badge-warn">Demo</span> : null}</div><p className="mt-1 text-[11px] text-muted">{String(document.published_date ?? "Date unavailable")} · {title(String(document.document_type ?? "document"))}</p></article>)}</div> : <Unavailable text="No company documents were returned." />}<Link href={`/research?symbol=${symbol}`} className="btn btn-secondary mt-4">Search cited evidence</Link></Section>
     </div>
   </div>;
@@ -179,6 +182,15 @@ function DecisionChanges({ title: heading, rows, empty, tone }: { title: string;
 function Facts({ rows }: { rows: Array<{ taxonomy_key: string; value: string | number; unit: string; period_type: string; period_end: string; provenance?: { source_name: string | null; is_synthetic: boolean } }> }) {
   const display = (row: { value: string | number; unit: string }) => row.unit === "ratio" ? pct(Number(row.value) * 100) : `${num(row.value)} ${row.unit}`;
   return <div className="table-wrap"><table className="data-table"><thead><tr><th>Fact</th><th>Value</th><th>Period</th><th>Basis</th><th>Source</th></tr></thead><tbody>{rows.slice(0, 8).map((row, index) => <tr key={`${row.taxonomy_key}-${row.period_end}-${index}`}><td className="font-semibold">{title(row.taxonomy_key)}</td><td className="data-font">{display(row)}</td><td>{row.period_end}</td><td>{title(row.period_type)}</td><td>{row.provenance?.is_synthetic ? <span className="badge badge-warn">Demo data</span> : row.provenance?.source_name ? <span className="text-[11px] text-muted">{row.provenance.source_name}</span> : <span className="text-[11px] text-muted">Unavailable</span>}</td></tr>)}</tbody></table></div>;
+}
+
+function CompanyEvents({ rows, empty }: { rows: CompanyResearch["events"]; empty: string }) {
+  if (!rows.length) return <Unavailable text={empty} />;
+  return <div className="divider-list">{rows.map(event => <article className="py-3 text-[13px]" key={event.id}>
+    <strong>{event.title}</strong>
+    <p className="mt-1 text-[11px] text-muted">{event.occurred_at ? new Date(event.occurred_at).toLocaleDateString("en-PK") : "Date unavailable"}</p>
+    <div className="mt-2 flex flex-wrap gap-2">{event.sources.map(source => <a className="text-[11px] font-semibold text-accent hover:underline" href={source.source_url} target="_blank" rel="noreferrer" key={`${event.id}-${source.source_url}`}>{source.source_name}</a>)}</div>
+  </article>)}</div>;
 }
 
 function Metric({ label, value, term }: { label: string; value: string; term?: string }) { return <div className="metric"><p className="metric-label inline-flex items-center gap-1">{label}{term ? <TermHelp term={term} /> : null}</p><p className="metric-value data-font">{value}</p></div>; }

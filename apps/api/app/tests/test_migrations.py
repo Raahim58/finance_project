@@ -151,3 +151,37 @@ def test_global_evidence_migration_round_trip(tmp_path: Path) -> None:
     assert "cluster_key" not in event_columns
 
     _alembic(database_url, "head")
+
+
+def test_stored_evidence_events_are_classified_from_retained_sources(tmp_path: Path) -> None:
+    database_path = tmp_path / "stored-evidence-classification.sqlite"
+    database_url = f"sqlite:///{database_path}"
+    _alembic(database_url, "0021_ingestion_audit_repairs")
+
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            INSERT INTO events(id, event_type, title, occurred_at, details_json)
+            VALUES
+              ('psx-event', 'evidence_story', 'PSX notice', CURRENT_TIMESTAMP, '{}'),
+              ('publisher-event', 'evidence_story', 'Publisher story', CURRENT_TIMESTAMP, '{}'),
+              ('unsourced-event', 'evidence_story', 'No retained source', CURRENT_TIMESTAMP, '{}');
+            INSERT INTO event_sources(id, event_id, source_url, source_name)
+            VALUES
+              ('psx-source', 'psx-event', 'https://dps.psx.com.pk/notice/1', 'Pakistan Stock Exchange'),
+              ('publisher-source', 'publisher-event', 'https://example.test/story/1', 'Observed Publisher');
+            """
+        )
+
+    _alembic(database_url, "head")
+
+    with sqlite3.connect(database_path) as connection:
+        classifications = dict(
+            connection.execute("SELECT id, event_type FROM events").fetchall()
+        )
+
+    assert classifications == {
+        "psx-event": "announcement",
+        "publisher-event": "news",
+        "unsourced-event": "evidence_story",
+    }

@@ -26,6 +26,7 @@ from app.models.workstation import (
 from app.schemas.research import InstrumentResponse
 from app.services.portfolio_service import get_portfolio_summary
 from app.services.canonical_market_service import latest_price, price_series
+from app.services.company_event_service import sourced_company_events
 from app.domain.quant import risk_metrics
 from app.domain.quant import market_model_event_study
 from app.schemas.research import EventStudyRequest
@@ -307,8 +308,7 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
     provenance = _document_provenance(db, {fact.document_id for fact in facts if fact.document_id})
     market_research = _market_research(db, instrument)
     documents = _display_documents(list(db.scalars(select(Document).where(Document.symbol == instrument.symbol, Document.document_type != "synthetic_demo_facts", ~func.lower(Document.source_name).contains("demo"), or_(Document.source_url.is_(None), ~func.lower(Document.source_url).like("demo://%")), or_(Document.visibility == "public", Document.owner_user_id == user.id)).order_by(Document.published_date.desc(), Document.created_at.desc()).limit(50))))[:20]
-    event_links = list(db.scalars(select(EventEntityLink).where(EventEntityLink.entity_key == instrument.symbol)))
-    events = [db.get(Event, link.event_id) for link in event_links]
+    company_events = sourced_company_events(db, instrument)
     relevance = []
     from app.models.portfolio import Portfolio, PortfolioHolding
     relevance_rows = db.execute(select(Portfolio, PortfolioHolding).join(PortfolioHolding, PortfolioHolding.portfolio_id == Portfolio.id).where(Portfolio.user_id == user.id, PortfolioHolding.symbol == instrument.symbol)) if include_portfolio_relevance else []
@@ -375,7 +375,28 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
         ],
         "derived_fundamentals": _derived_fundamentals(facts, provenance),
         "documents": [{"id": document.id, "title": document.title, "document_type": document.document_type, "published_date": document.published_date, "source_url": document.source_url, "is_synthetic": document.document_type == "synthetic_demo_facts"} for document in documents],
-        "events": [{"id": event.id, "title": event.title, "event_type": event.event_type, "occurred_at": event.occurred_at, "direction": event.direction, "confidence": event.confidence} for event in events if event and db.scalar(select(EventSource.id).where(EventSource.event_id == event.id, EventSource.source_name != "Deterministic Demo Seed"))],
+        "events": [
+            {
+                "id": event.id,
+                "title": event.title,
+                "event_type": event.event_type,
+                "occurred_at": event.occurred_at,
+                "direction": event.direction,
+                "confidence": event.confidence,
+                "sources": [
+                    {
+                        "source_name": source.source_name,
+                        "source_url": source.source_url,
+                        "published_at": source.published_at,
+                        "selection_status": source.selection_status,
+                    }
+                    for source in event_sources
+                ],
+            }
+            for row in company_events
+            for event in (row.event,)
+            for event_sources in (row.sources,)
+        ],
         "portfolio_relevance": relevance,
         "has_synthetic_data": False,
         "excluded_synthetic_research": len(observed_facts) != len(all_facts),

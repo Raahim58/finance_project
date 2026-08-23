@@ -21,6 +21,7 @@ from app.models.workstation import (
     MacroSeriesProvider,
     StandardizedFinancialFact,
 )
+from app.services.company_event_service import sourced_company_events
 
 
 @dataclass(frozen=True)
@@ -293,19 +294,11 @@ def company_completeness(db: Session, symbol: str) -> dict[str, object]:
         )
     ).one()
 
+    company_events = sourced_company_events(db, instrument)
+
     def event_coverage(event_type: str) -> tuple[int, datetime | None]:
-        return db.execute(
-            select(func.count(Event.id), func.max(Event.occurred_at))
-            .join(EventEntityLink, EventEntityLink.event_id == Event.id)
-            .join(EventSource, EventSource.event_id == Event.id)
-            .where(
-                Event.event_type == event_type,
-                EventEntityLink.entity_type == "instrument",
-                func.upper(EventEntityLink.entity_key) == normalized,
-                ~func.lower(EventSource.source_name).contains("demo"),
-                ~EventSource.source_url.startswith("demo://"),
-            )
-        ).one()
+        matching = [row.event for row in company_events if row.event.event_type == event_type]
+        return len(matching), max((row.occurred_at for row in matching), default=None)
 
     announcement_count, latest_announcement = event_coverage("announcement")
     news_count, latest_news = event_coverage("news")

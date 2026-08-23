@@ -17,6 +17,6 @@ export const getMarketOverview=()=>request<MarketOverview>("/market/overview");
 export const getMarketFreshness=()=>request<MarketFreshness>("/market/freshness");
 export const getDataHealth=()=>request<DataHealth>("/ingestion/health");
 export const getCompanyCompleteness=(symbol:string)=>request<CompanyCompleteness>(`/ingestion/companies/${encodeURIComponent(symbol)}/completeness`);
-export function getCompanies(query?:string,options?:{signal?:AbortSignal}){const params=query?`?q=${encodeURIComponent(query)}`:"";return request<Company[]>(`/market/companies${params}`,options?.signal?{signal:options.signal}:{})}
+export function getCompanies(query?:string,options?:{signal?:AbortSignal}){const params=new URLSearchParams({limit:"1000"});if(query)params.set("q",query);return request<Company[]>(`/market/companies?${params.toString()}`,options?.signal?{signal:options.signal}:{})}
 export const getCompanyDetail=(symbol:string)=>request<CompanyDetail>(`/market/company/${encodeURIComponent(symbol)}`);
-export const getCompanyHistory=(symbol:string,limit=180)=>request<MarketPrice[]>(`/market/company/${encodeURIComponent(symbol)}/history?limit=${encodeURIComponent(String(limit))}`);
+export const getCompanyHistory=(symbol:string,limit=2000)=>request<MarketPrice[]>(`/market/company/${encodeURIComponent(symbol)}/history?limit=${encodeURIComponent(String(limit))}`);

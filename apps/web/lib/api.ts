@@ -29,13 +29,15 @@ export type LLMKey = {
 
 
 export type FactProvenance = {source_name:string|null;document_type:string|null;is_synthetic:boolean;ingested_at:string|null};
+export type CompanyEventSource = {source_name:string;source_url:string;published_at?:string|null;selection_status?:string|null};
+export type CompanyEvent = {id:string;title:string;event_type:string;occurred_at:string;direction?:string|null;confidence?:string|number|null;sources:CompanyEventSource[]};
 export type CompanyResearch = {
   instrument: { id:string; symbol:string; name:string; sector?:string|null };
   market: Record<string,unknown>|null;
   market_research: Record<string,unknown>;
   fundamentals: Array<{taxonomy_key:string;period_type:string;period_end:string;filing_date?:string|null;value:string|number;unit:string;currency?:string|null;document_id?:string|null;page_number?:number|null;provenance:FactProvenance}>;
   derived_fundamentals: { latest?:Record<string,Record<string,unknown>>; growth?:Record<string,Record<string,unknown>>; ratios?:Record<string,Record<string,unknown>>; valuation?:Record<string,unknown> };
-  documents: Array<Record<string,unknown>>; events: Array<Record<string,unknown>>; portfolio_relevance:Array<Record<string,unknown>>;
+  documents: Array<Record<string,unknown>>; events: CompanyEvent[]; portfolio_relevance:Array<Record<string,unknown>>;
   has_synthetic_data: boolean;
 };
 

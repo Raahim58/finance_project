@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clearApiCache, getPortfolioSummary } from "./api";
+import { clearApiCache, getCompanies, getCompanyHistory, getPortfolioSummary } from "./api";
 
 describe("API GET cache", () => {
   beforeEach(() => {
@@ -51,5 +51,17 @@ describe("API GET cache", () => {
     expect(localStorage.getItem("psx_ai_token")).toBe("fresh-sample-session");
     const retryHeaders = new Headers(fetchMock.mock.calls[2][1]?.headers);
     expect(retryHeaders.get("Authorization")).toBe("Bearer fresh-sample-session");
+  });
+
+  it("requests the complete stored company directory and five-year-sized history", async () => {
+    localStorage.setItem("psx_ai_token", "test-session");
+    const response = { ok: true, status: 200, json: vi.fn().mockResolvedValue([]) };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(response as unknown as Response);
+
+    await getCompanies();
+    await getCompanyHistory("MEBL");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/market/companies?limit=1000");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/market/company/MEBL/history?limit=2000");
   });
 });

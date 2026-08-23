@@ -267,7 +267,7 @@ def get_company_history(
     symbol: str,
     start_date: date | None = None,
     end_date: date | None = None,
-    limit: int = 365,
+    limit: int = 2000,
 ) -> list[MarketPriceResponse]:
     company_exists = db.scalar(select(Company.id).where(func.upper(Company.symbol) == symbol.upper()))
     if not company_exists:

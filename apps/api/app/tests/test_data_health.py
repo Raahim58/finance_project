@@ -136,7 +136,7 @@ def test_company_completeness_counts_normalized_announcement_and_news_events():
         for event_type, suffix in (("announcement", "notice"), ("news", "story")):
             event = Event(
                 event_type=event_type,
-                title=f"MEBL {suffix}",
+                title=f"{'Meezan Bank Limited' if event_type == 'news' else 'MEBL'} {suffix}",
                 occurred_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
                 details_json="{}",
             )
@@ -211,6 +211,66 @@ def test_company_research_exposes_observed_standardized_fundamentals(client):
     fact = next(row for row in response.json()["fundamentals"] if row["taxonomy_key"] == "revenue")
     assert fact["classification"] == "standardized_secondary"
     assert fact["provenance"]["source_name"] == "DPS"
+
+
+def test_company_research_exposes_linked_event_publishers(client):
+    headers = _auth(client)
+    with SessionLocal() as db:
+        generate_mock_market_data(db, days=1, end_date=date(2026, 8, 13))
+        instrument = db.scalar(select(Instrument).where(Instrument.symbol == "MEBL"))
+        assert instrument is not None
+        instrument_id = instrument.id
+        event = Event(
+            event_type="news",
+            title="Meezan Bank Limited stored publisher story",
+            occurred_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+            details_json="{}",
+        )
+        db.add(event)
+        db.flush()
+        db.add(EventEntityLink(event_id=event.id, entity_type="instrument", entity_key="mebl", link_method="exact_alias", confidence=1))
+        db.add(EventSource(event_id=event.id, source_url="https://publisher.test/mebl", source_name="Observed Publisher"))
+        db.commit()
+
+    response = client.get(f"/companies/{instrument_id}/overview", headers=headers)
+
+    assert response.status_code == 200
+    event_row = response.json()["events"][0]
+    assert event_row["event_type"] == "news"
+    assert event_row["sources"] == [
+        {
+            "source_name": "Observed Publisher",
+            "source_url": "https://publisher.test/mebl",
+            "published_at": None,
+            "selection_status": "legacy",
+        }
+    ]
+
+
+def test_company_research_rejects_legacy_lowercase_word_news_links(client):
+    headers = _auth(client)
+    with SessionLocal() as db:
+        instrument = Instrument(symbol="CASH", name="Cash Corporation", sector="Other")
+        event = Event(
+            event_type="news",
+            title="Households face a cash squeeze",
+            occurred_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+            details_json="{}",
+        )
+        db.add_all([instrument, event])
+        db.flush()
+        instrument_id = instrument.id
+        db.add(EventEntityLink(event_id=event.id, entity_type="instrument", entity_key="CASH", link_method="exact_alias", confidence=1))
+        db.add(EventSource(event_id=event.id, source_url="https://publisher.test/cash-squeeze", source_name="Observed Publisher"))
+        db.commit()
+
+    overview = client.get(f"/companies/{instrument_id}/overview", headers=headers)
+    completeness = client.get("/ingestion/companies/CASH/completeness", headers=headers)
+
+    assert overview.status_code == 200
+    assert overview.json()["events"] == []
+    assert completeness.status_code == 200
+    assert completeness.json()["news"]["available"] is False
 
 
 def test_health_and_completeness_apis_require_auth_and_return_missing_states(client):

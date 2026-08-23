@@ -48,6 +48,10 @@ def test_market_overview_and_rankings(client):
 def test_company_detail_history_and_search(client):
     _seed_market_data()
 
+    directory = client.get("/market/companies")
+    assert directory.status_code == 200
+    assert len(directory.json()) == 37
+
     search = client.get("/market/companies?q=meb")
     assert search.status_code == 200
     assert search.json()[0]["symbol"] == "MEBL"
@@ -61,6 +65,10 @@ def test_company_detail_history_and_search(client):
     assert history.status_code == 200
     assert len(history.json()) == 4
     assert history.json()[-1]["trade_date"] == "2026-06-30"
+
+    full_history = client.get("/market/company/MEBL/history")
+    assert full_history.status_code == 200
+    assert len(full_history.json()) == 8
 
 
 def test_missing_market_date_returns_404(client):

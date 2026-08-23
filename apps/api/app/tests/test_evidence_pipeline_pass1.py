@@ -169,6 +169,35 @@ def test_official_psx_scoring_trusts_declared_symbol_not_incidental_aliases():
         assert score.entity_keys == ("AAA",)
 
 
+def test_news_scoring_does_not_treat_lowercase_words_as_tickers():
+    with SessionLocal() as db:
+        db.add(Instrument(symbol="CASH", name="Cash Corporation", sector="Other"))
+        db.flush()
+        candidate = Candidate(
+            "dawn",
+            "https://example.com/liquidity",
+            "Households face a cash squeeze",
+            "Dawn",
+            FixtureDawnSource.now,
+            "rss",
+        )
+        body = "Higher costs may reduce cash balances next quarter."
+        parsed = ParsedEvidence(
+            canonical_url=candidate.observed_url,
+            title=candidate.headline,
+            body=body,
+            published_at=candidate.discovered_at,
+            source_key=candidate.source_key,
+            body_sha256=hashlib.sha256(body.encode()).hexdigest(),
+            parser_method="fixture",
+            extraction_quality=1.0,
+        )
+
+        score = score_evidence(db, parsed, candidate)
+
+        assert "CASH" not in score.entity_keys
+
+
 def test_official_psx_same_title_does_not_cluster_or_deduplicate_across_symbols():
     with SessionLocal() as db:
         config = ensure_source_config(db, "psx_announcements")[1]

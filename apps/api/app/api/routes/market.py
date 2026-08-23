@@ -95,7 +95,7 @@ def sector_performance(
 @router.get("/companies", response_model=list[CompanyResponse])
 def companies(
     q: str | None = None,
-    limit: int = Query(default=20, ge=1, le=100),
+    limit: int = Query(default=1000, ge=1, le=1000),
     db: Session = Depends(get_db),
 ):
     return search_companies(db, q, limit)
@@ -111,7 +111,7 @@ def company_history(
     symbol: str,
     start_date: date | None = None,
     end_date: date | None = None,
-    limit: int = Query(default=365, ge=1, le=2000),
+    limit: int = Query(default=2000, ge=1, le=2000),
     db: Session = Depends(get_db),
 ):
     return get_company_history(db, symbol, start_date, end_date, limit)

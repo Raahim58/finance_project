@@ -35,6 +35,7 @@ from app.services.evidence_canary_service import (
 )
 from app.services.ingestion_persistence import store_artifact
 from app.services.rag_service import ParsedPage, create_document_from_pages
+from app.services.company_event_service import contains_explicit_instrument_reference
 
 WORD_RE = re.compile(r"[a-z0-9][a-z0-9&./-]*")
 STOP_WORDS = frozenset({"a", "an", "and", "at", "by", "for", "from", "in", "of", "on", "the", "to", "with"})
@@ -232,7 +233,8 @@ def persist_candidate(db: Session, config: EvidenceSourceConfig, candidate: Cand
 def score_evidence(db: Session, parsed: ParsedEvidence, candidate: Candidate) -> Score:
     """Score substantive matches; source tier and recency never qualify a story alone."""
 
-    text = f"{parsed.title}\n{parsed.body}".lower()
+    original_text = f"{parsed.title}\n{parsed.body}"
+    text = original_text.lower()
     reasons: list[str] = []
     entities = set(parsed.entity_keys)
     relevance = 0.0
@@ -249,8 +251,7 @@ def score_evidence(db: Session, parsed: ParsedEvidence, candidate: Candidate) ->
     # unrelated official announcements.
     if candidate.source_key != "psx_announcements":
         for symbol, name in names:
-            patterns = (symbol, name)
-            if any(re.search(rf"(?<![a-z0-9]){re.escape(value.lower())}(?![a-z0-9])", text) for value in patterns if len(value) >= 2):
+            if contains_explicit_instrument_reference(original_text, symbol, (name,)):
                 entities.add(symbol)
                 relevance += 0.65
                 reasons.append(f"instrument:{symbol}")
