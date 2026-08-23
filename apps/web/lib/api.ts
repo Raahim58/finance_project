@@ -31,6 +31,7 @@ export type LLMKey = {
 export type FactProvenance = {source_name:string|null;document_type:string|null;is_synthetic:boolean;ingested_at:string|null};
 export type CompanyEventSource = {source_name:string;source_url:string;published_at?:string|null;selection_status?:string|null};
 export type CompanyEvent = {id:string;title:string;event_type:string;occurred_at:string;direction?:string|null;confidence?:string|number|null;sources:CompanyEventSource[]};
+export type ResearchEvent = CompanyEvent & {materiality?:string|null;details?:Record<string,unknown>};
 export type CompanyResearch = {
   instrument: { id:string; symbol:string; name:string; sector?:string|null };
   market: Record<string,unknown>|null;
@@ -499,6 +500,7 @@ export function searchInstruments(query = "") {
 }
 
 export async function getCompanyResearch(symbol:string){const matches=await searchInstruments(symbol);const instrument=matches.find(item=>item.symbol.toUpperCase()===symbol.toUpperCase());if(!instrument)throw new Error("Instrument not found");return request<CompanyResearch>(`/companies/${encodeURIComponent(instrument.id)}/overview`);}
+export function getResearchEvents(eventType?:string,limit=30){const params=new URLSearchParams({limit:String(limit)});if(eventType)params.set("event_type",eventType);return request<ResearchEvent[]>(`/research/events?${params.toString()}`);}
 export function getSecurityIntelligence(symbol:string,portfolioId?:string){const query=portfolioId?`?portfolio_id=${encodeURIComponent(portfolioId)}`:"";return request<SecurityIntelligence>(`/intelligence/securities/${encodeURIComponent(symbol)}${query}`);}
 export function evaluateSecurity(symbol:string,payload:Record<string,unknown>){return request<CandidateEvaluation>(`/intelligence/securities/${encodeURIComponent(symbol)}/evaluate`,{method:"POST",body:JSON.stringify(payload)});}
 export function saveSecurityProposal(symbol:string,payload:Record<string,unknown>){return request<{proposal:AllocationSet;evaluation:CandidateEvaluation;ledger_mutated:false}>(`/intelligence/securities/${encodeURIComponent(symbol)}/proposals`,{method:"POST",body:JSON.stringify(payload)});}

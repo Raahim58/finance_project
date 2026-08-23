@@ -56,7 +56,7 @@ def _security_context(db, user, payload: SecurityContextInput):
 
 
 def _events(db, _user, payload: EventInput):
-    return {"events": list_events(db, payload.entity_key, payload.limit)}
+    return {"events": list_events(db, entity_key=payload.entity_key, limit=payload.limit)}
 
 
 def _instruments(db, _user, payload: InstrumentSearchInput):

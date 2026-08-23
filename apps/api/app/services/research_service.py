@@ -403,10 +403,17 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
     }
 
 
-def list_events(db: Session, entity_key: str | None = None, limit: int = 100):
+def list_events(
+    db: Session,
+    entity_key: str | None = None,
+    event_type: str | None = None,
+    limit: int = 100,
+):
     statement = select(Event)
     if entity_key:
         statement = statement.join(EventEntityLink, EventEntityLink.event_id == Event.id).where(EventEntityLink.entity_key == entity_key.upper())
+    if event_type:
+        statement = statement.where(Event.event_type == event_type)
     rows = list(db.scalars(statement.order_by(Event.occurred_at.desc()).limit(limit)))
     result = []
     for event in rows:

@@ -86,6 +86,19 @@ Available Pass 1 keys are `psx_announcements`, `dawn`, `business_recorder`,
 `mettis`, `sbp_releases`, `imf_news`, and `gdelt`. These commands do not start a
 scheduler and do not modify Phase 2 queue production.
 
+Rebuild company links from already-stored news without discovery or network access:
+
+```bash
+cd apps/api
+python -m app.jobs.relink_stored_news          # dry-run audit
+python -m app.jobs.relink_stored_news --apply  # replace legacy news links
+```
+
+The relinker uses only retained event/candidate headlines and summaries, canonical
+company names, unambiguous aliases, explicit ticker notation, and case-sensitive
+tickers with Pakistan-market context. It removes links that cannot be reproduced
+from that stored evidence and leaves the underlying news events untouched.
+
 Hybrid demo/live initialization:
 
 ```bash

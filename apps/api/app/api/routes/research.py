@@ -93,8 +93,13 @@ def relevance(instrument_id: str, current_user: User = Depends(get_current_user)
 
 
 @router.get("/research/events")
-def events(entity_key: str | None = None, limit: int = Query(default=100, ge=1, le=500), db: Session = Depends(get_db)):
-    return list_events(db, entity_key, limit)
+def events(
+    entity_key: str | None = None,
+    event_type: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    return list_events(db, entity_key, event_type, limit)
 
 
 @router.post("/research/event-study")

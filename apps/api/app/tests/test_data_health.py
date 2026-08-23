@@ -7,7 +7,8 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.market import MarketPrice
-from app.models.workstation import Event, EventEntityLink, EventSource, IngestionRun, Instrument, StandardizedFinancialFact
+from app.models.workstation import Event, EventEntityLink, EventSource, IngestionRun, Instrument, InstrumentAlias, StandardizedFinancialFact
+from app.services.company_event_service import relink_stored_news
 from app.services.data_health_service import company_completeness, source_health
 from app.services.ingestion_run_service import fail_ingestion_run, finish_ingestion_run, start_ingestion_run
 from app.services.ingestion_service import refresh_provider, run_due_ingestion_jobs
@@ -271,6 +272,75 @@ def test_company_research_rejects_legacy_lowercase_word_news_links(client):
     assert overview.json()["events"] == []
     assert completeness.status_code == 200
     assert completeness.json()["news"]["available"] is False
+
+
+def test_stored_news_relink_replaces_false_links_with_name_alias_and_ticker_matches():
+    with SessionLocal() as db:
+        instruments = [
+            Instrument(symbol="CASH", name="Cash Corporation", sector="Other"),
+            Instrument(symbol="MEBL", name="Meezan Bank Limited", sector="Banks"),
+            Instrument(symbol="KEL", name="K-Electric Limited", sector="Power"),
+            Instrument(symbol="ALPHA", name="Alpha Holdings Limited", sector="Other"),
+        ]
+        db.add_all(instruments)
+        db.flush()
+        db.add(InstrumentAlias(instrument_id=instruments[3].id, provider="fixture", alias="Alpha Finance"))
+        events = [
+            Event(event_type="news", title="Households face a cash squeeze", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json='{"entity_keys":["CASH"]}'),
+            Event(event_type="news", title="Meezan Bank expands its branch network", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json="{}"),
+            Event(event_type="news", title="PSX:KEL files an operational update", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json="{}"),
+            Event(event_type="news", title="Alpha Finance announces a new service", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json="{}"),
+            Event(event_type="news", title="MEBL shares rise on PSX after financial results", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json="{}"),
+        ]
+        db.add_all(events)
+        db.flush()
+        event_ids = [event.id for event in events]
+        db.add(EventEntityLink(event_id=events[0].id, entity_type="instrument", entity_key="CASH", link_method="exact_alias", confidence=1))
+        for index, event in enumerate(events):
+            db.add(EventSource(event_id=event.id, source_url=f"https://publisher.test/{index}", source_name="Observed Publisher"))
+        db.commit()
+
+        dry_run = relink_stored_news(db)
+        assert dry_run["links_written"] == 4
+        assert db.scalar(select(EventEntityLink.entity_key)) == "CASH"
+
+        applied = relink_stored_news(db, apply=True)
+        links = {
+            (row.event_id, row.entity_key, row.link_method)
+            for row in db.scalars(select(EventEntityLink))
+        }
+        rerun = relink_stored_news(db, apply=True)
+
+    assert applied["old_links"] == 1
+    assert applied["links_written"] == 4
+    assert links == {
+        (event_ids[1], "MEBL", "stored_company_name"),
+        (event_ids[2], "KEL", "stored_ticker"),
+        (event_ids[3], "ALPHA", "stored_alias"),
+        (event_ids[4], "MEBL", "stored_ticker_context"),
+    }
+    assert rerun["old_links"] == 4
+    assert rerun["links_written"] == 4
+
+
+def test_research_events_can_filter_stored_news(client):
+    with SessionLocal() as db:
+        db.add_all(
+            [
+                Event(event_type="announcement", title="Issuer notice", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json="{}"),
+                Event(event_type="news", title="Stored publisher story", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json="{}"),
+            ]
+        )
+        db.flush()
+        news_event = db.scalar(select(Event).where(Event.event_type == "news"))
+        db.add(EventSource(event_id=news_event.id, source_url="https://publisher.test/story", source_name="Observed Publisher"))
+        db.commit()
+
+    response = client.get("/research/events?event_type=news&limit=30")
+
+    assert response.status_code == 200
+    assert [row["event_type"] for row in response.json()] == ["news"]
+    assert response.json()[0]["sources"][0]["source_name"] == "Observed Publisher"
 
 
 def test_health_and_completeness_apis_require_auth_and_return_missing_states(client):
