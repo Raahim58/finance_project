@@ -311,7 +311,8 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
     documents = _display_documents(list(db.scalars(select(Document).where(Document.symbol == instrument.symbol, Document.document_type != "synthetic_demo_facts", ~func.lower(Document.source_name).contains("demo"), or_(Document.source_url.is_(None), ~func.lower(Document.source_url).like("demo://%")), or_(Document.visibility == "public", Document.owner_user_id == user.id)).order_by(Document.published_date.desc(), Document.created_at.desc()).limit(50))))[:20]
     company_events = sourced_company_events(db, instrument)
     intelligence_events = list_normalized_events(
-        db, subject_type="instrument", subject_key=instrument.symbol, limit=50
+        db, subject_type="instrument", subject_key=instrument.symbol,
+        view="company_relevant", limit=50,
     )
     relevance = []
     from app.models.portfolio import Portfolio, PortfolioHolding

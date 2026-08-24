@@ -182,7 +182,7 @@ announcements/news in bounded batches:
 ```bash
 cd apps/api
 alembic upgrade head
-python -m app.jobs.normalize_events --all --limit 500
+python -m app.jobs.normalize_events --rebuild --confirm-rebuild --all --limit 500
 ```
 
 The command processes bounded batches until `scanned` is zero. New evidence processed by the background

@@ -1,6 +1,7 @@
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 import json
+from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
@@ -16,11 +17,16 @@ from app.models.workstation import (
     NormalizedEventEvidence,
     NormalizedEventSubject,
 )
-from app.services.event_intelligence_service import normalize_raw_event
+from app.services.event_intelligence_service import (
+    list_normalized_events,
+    normalize_raw_event,
+    rebuild_normalized_event_cache,
+)
 from app.services.market_ingestion import generate_mock_market_data
 
 
 NOW = datetime.now(UTC).replace(microsecond=0)
+CLASSIFICATION_CASES = Path(__file__).resolve().parents[1] / "evaluation" / "phase6_event_classification.json"
 
 
 def _seed_market() -> None:
@@ -99,10 +105,29 @@ def test_deterministic_rules_classify_rates_and_materiality_without_llm():
         ("rupee depreciation changes the exchange rate", "fx"),
         ("new oil discovery starts production", "oil_commodities"),
         ("trade sanctions follow geopolitical tensions", "geopolitical_risk"),
+        ("Appointment of Chief Financial Officer", "governance"),
+        ("Disclosure of Interest by a Director CEO", "insider_transaction"),
+        ("Notice of Annual General Meeting", "corporate_calendar"),
+        ("Presentation of Corporate Briefing Session", "briefing_research"),
+        ("Mandatory Shariah Disclosure for the Half Year", "compliance_disclosure"),
+        ("Transmission of 3rd Quarterly Financial Statements", "earnings"),
+        ("Capacity expansion and commencement of operations", "operational_development"),
+        ("Issuance of Sukuk for project financing", "financing"),
+        ("Unusual Movement in Price or Volume of the Shares", "market_notice"),
     ],
 )
 def test_controlled_taxonomy_is_phrase_rule_driven(text, expected_type):
     assert classify_event(text).event_type == expected_type
+
+
+def test_real_title_classification_acceptance_set():
+    cases = json.loads(CLASSIFICATION_CASES.read_text())
+    failures = [
+        {**case, "actual": classify_event(case["title"]).event_type}
+        for case in cases
+        if classify_event(case["title"]).event_type != case["expected"]
+    ]
+    assert failures == []
 
 
 def test_normalization_preserves_raw_evidence_and_direct_issuer_subject():
@@ -168,7 +193,7 @@ def test_duplicate_coverage_clusters_and_preserves_both_sources():
 
 
 def test_unsupported_item_remains_unclassified_and_does_not_invent_impact():
-    raw_id = _raw_event(title="Notice of postal ballot availability", symbol=None)
+    raw_id = _raw_event(title="Read More", symbol=None)
     with SessionLocal() as db:
         normalized = normalize_raw_event(db, raw_id)
         details = normalized.details_json
@@ -179,7 +204,7 @@ def test_unsupported_item_remains_unclassified_and_does_not_invent_impact():
 
 
 def test_prototype_similarity_cannot_publish_an_event(monkeypatch):
-    raw_id = _raw_event(title="Notice of postal ballot availability")
+    raw_id = _raw_event(title="Read More")
     monkeypatch.setattr(
         "app.services.event_intelligence_service._prototype_match",
         lambda _text: ("earnings", 0.99),
@@ -273,3 +298,32 @@ def test_sector_subject_alone_never_becomes_direct_company_event(client):
     )
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_views_keep_low_materiality_company_intelligence_without_flooding_material_feed():
+    _seed_market()
+    raw_id = _raw_event(title="Appointment of Director", symbol="MEBL")
+    with SessionLocal() as db:
+        normalized = normalize_raw_event(db, raw_id)
+        assert normalized.event_type == "governance"
+        assert normalized.materiality == "low"
+        assert list_normalized_events(db, view="material") == []
+        company_rows = list_normalized_events(
+            db,
+            subject_type="instrument",
+            subject_key="MEBL",
+            view="company_relevant",
+        )
+        assert [row["event_type"] for row in company_rows] == ["governance"]
+
+
+def test_unresolved_view_is_explicit_and_rebuild_preserves_raw_evidence():
+    raw_id = _raw_event(title="Read More")
+    with SessionLocal() as db:
+        normalize_raw_event(db, raw_id)
+        unresolved = list_normalized_events(db, view="unresolved")
+        assert [row["classification_status"] for row in unresolved] == ["unclassified"]
+        removed = rebuild_normalized_event_cache(db)
+        assert removed["normalized_events"] == 1
+        assert db.get(Event, raw_id) is not None
+        assert db.scalar(select(func.count()).select_from(EventSource)) == 1

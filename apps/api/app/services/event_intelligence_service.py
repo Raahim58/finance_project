@@ -9,7 +9,7 @@ from decimal import Decimal
 from functools import lru_cache
 from urllib.parse import urlparse
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.domain.event_intelligence import (
@@ -339,6 +339,17 @@ def normalize_pending_events(db: Session, *, limit: int = 500) -> dict[str, int]
     return {"scanned": len(rows), "classified": classified, "unclassified": unclassified}
 
 
+def rebuild_normalized_event_cache(db: Session) -> dict[str, int]:
+    """Clear only reproducible Phase 6 derivatives; raw events and evidence remain intact."""
+
+    subjects = db.execute(delete(NormalizedEventSubject)).rowcount or 0
+    evidence = db.execute(delete(NormalizedEventEvidence)).rowcount or 0
+    events = db.execute(delete(NormalizedEvent)).rowcount or 0
+    db.commit()
+    _prototype_vectors.cache_clear()
+    return {"normalized_events": events, "evidence_links": evidence, "subjects": subjects}
+
+
 def serialize_normalized_event(db: Session, event: NormalizedEvent) -> dict[str, object]:
     subjects = list(db.scalars(select(NormalizedEventSubject).where(
         NormalizedEventSubject.normalized_event_id == event.id
@@ -388,12 +399,21 @@ def list_normalized_events(
     subject_key: str | None = None,
     event_type: str | None = None,
     materiality: str | None = None,
+    view: str = "material",
     include_unclassified: bool = False,
     limit: int = 100,
 ) -> list[dict[str, object]]:
+    if view not in {"material", "company_relevant", "portfolio_relevant", "all_classified", "unresolved", "all"}:
+        raise ValueError("Unsupported intelligence event view")
     statement = select(NormalizedEvent)
-    if not include_unclassified:
+    if include_unclassified or view == "all":
+        pass
+    elif view == "unresolved":
+        statement = statement.where(NormalizedEvent.classification_status == "unclassified")
+    else:
         statement = statement.where(NormalizedEvent.classification_status == "classified")
+        if view in {"material", "portfolio_relevant"}:
+            statement = statement.where(NormalizedEvent.materiality.in_(("medium", "high")))
     if subject_key or subject_type:
         statement = statement.join(
             NormalizedEventSubject,
@@ -428,6 +448,7 @@ def portfolio_event_exposure(db: Session, user, portfolio_id: str, *, limit: int
         )
         .where(
             NormalizedEvent.classification_status == "classified",
+            NormalizedEvent.materiality.in_(("medium", "high")),
             NormalizedEventSubject.subject_type == "instrument",
             NormalizedEventSubject.is_direct.is_(True),
             func.upper(NormalizedEventSubject.subject_key).in_(weights),

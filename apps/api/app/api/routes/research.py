@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
@@ -115,6 +116,7 @@ def intelligence_events(
     subject_key: str | None = None,
     event_type: str | None = None,
     materiality: str | None = None,
+    view: Literal["material", "company_relevant", "portfolio_relevant", "all_classified", "unresolved", "all"] = "material",
     include_unclassified: bool = False,
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -125,6 +127,7 @@ def intelligence_events(
         subject_key=subject_key,
         event_type=event_type,
         materiality=materiality,
+        view=view,
         include_unclassified=include_unclassified,
         limit=limit,
     )
