@@ -80,7 +80,7 @@ def test_staged_pipeline_spools_then_indexes_selected_evidence(tmp_path, monkeyp
         assert db.get(DiscoveryCandidate, candidate_id).status == "selected"
         assert db.scalar(select(EventSource)).selection_status == "selected"
         document = db.scalar(select(Document))
-        assert document.document_type == "selected_evidence"
+        assert document.document_type == "news"
         assert document.symbol == "MEBL"
         assert not (spool.root / f"{candidate_id}.raw").exists()
 

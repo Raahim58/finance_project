@@ -185,3 +185,25 @@ def test_stored_evidence_events_are_classified_from_retained_sources(tmp_path: P
         "publisher-event": "news",
         "unsourced-event": "evidence_story",
     }
+
+
+def test_phase6_normalized_event_tables_are_additive(tmp_path: Path) -> None:
+    database_path = tmp_path / "phase6-events.sqlite"
+    database_url = f"sqlite:///{database_path}"
+    _alembic(database_url, "head")
+
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        normalized_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info('normalized_events')")
+        }
+
+    assert {"events", "normalized_events", "normalized_event_evidence", "normalized_event_subjects"}.issubset(tables)
+    assert {
+        "event_type", "classification_status", "factor", "materiality", "confidence",
+        "freshness_score", "freshness_status", "detection_version",
+    }.issubset(normalized_columns)

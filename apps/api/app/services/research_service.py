@@ -27,6 +27,7 @@ from app.schemas.research import InstrumentResponse
 from app.services.portfolio_service import get_portfolio_summary
 from app.services.canonical_market_service import latest_price, price_series
 from app.services.company_event_service import sourced_company_events
+from app.services.event_intelligence_service import list_normalized_events
 from app.domain.quant import risk_metrics
 from app.domain.quant import market_model_event_study
 from app.schemas.research import EventStudyRequest
@@ -309,6 +310,9 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
     market_research = _market_research(db, instrument)
     documents = _display_documents(list(db.scalars(select(Document).where(Document.symbol == instrument.symbol, Document.document_type != "synthetic_demo_facts", ~func.lower(Document.source_name).contains("demo"), or_(Document.source_url.is_(None), ~func.lower(Document.source_url).like("demo://%")), or_(Document.visibility == "public", Document.owner_user_id == user.id)).order_by(Document.published_date.desc(), Document.created_at.desc()).limit(50))))[:20]
     company_events = sourced_company_events(db, instrument)
+    intelligence_events = list_normalized_events(
+        db, subject_type="instrument", subject_key=instrument.symbol, limit=50
+    )
     relevance = []
     from app.models.portfolio import Portfolio, PortfolioHolding
     relevance_rows = db.execute(select(Portfolio, PortfolioHolding).join(PortfolioHolding, PortfolioHolding.portfolio_id == Portfolio.id).where(Portfolio.user_id == user.id, PortfolioHolding.symbol == instrument.symbol)) if include_portfolio_relevance else []
@@ -397,6 +401,7 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
             for event in (row.event,)
             for event_sources in (row.sources,)
         ],
+        "intelligence_events": intelligence_events,
         "portfolio_relevance": relevance,
         "has_synthetic_data": False,
         "excluded_synthetic_research": len(observed_facts) != len(all_facts),

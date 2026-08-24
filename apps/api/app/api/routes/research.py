@@ -8,7 +8,9 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
 from app.models.workstation import DataSource
+from app.schemas.event_intelligence import NormalizedEventResponse
 from app.schemas.research import EventStudyRequest, HistoricalReplayRequest, InstrumentResponse, ScenarioDefinitionCreate, ScenarioDefinitionResponse
+from app.services.event_intelligence_service import list_normalized_events
 from app.services.research_service import company_overview, instrument_detail, list_events, list_macro_series, macro_releases, market_series, run_event_study, search_instruments
 from app.services.scenario_service import create_definition, historical_replay, list_definitions, list_scenario_templates
 from app.services.regime_service import macro_regime
@@ -87,6 +89,11 @@ def company_events(instrument_id: str, current_user: User = Depends(get_current_
     return company_overview(db, current_user, instrument_id)["events"]
 
 
+@router.get("/companies/{instrument_id}/intelligence-events", response_model=list[NormalizedEventResponse])
+def company_intelligence_events(instrument_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return company_overview(db, current_user, instrument_id)["intelligence_events"]
+
+
 @router.get("/companies/{instrument_id}/portfolio-relevance")
 def relevance(instrument_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return company_overview(db, current_user, instrument_id)["portfolio_relevance"]
@@ -100,6 +107,27 @@ def events(
     db: Session = Depends(get_db),
 ):
     return list_events(db, entity_key, event_type, limit)
+
+
+@router.get("/research/intelligence-events", response_model=list[NormalizedEventResponse])
+def intelligence_events(
+    subject_type: str | None = None,
+    subject_key: str | None = None,
+    event_type: str | None = None,
+    materiality: str | None = None,
+    include_unclassified: bool = False,
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    return list_normalized_events(
+        db,
+        subject_type=subject_type,
+        subject_key=subject_key,
+        event_type=event_type,
+        materiality=materiality,
+        include_unclassified=include_unclassified,
+        limit=limit,
+    )
 
 
 @router.post("/research/event-study")

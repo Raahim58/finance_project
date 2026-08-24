@@ -16,6 +16,8 @@ from app.ingestion.evidence_catalog import build_pass1_registry
 from app.models.evidence import DiscoveryCandidate, EvidenceRefreshRequest, EvidenceSourceConfig
 from app.providers.evidence.sources import HttpEvidenceSource
 from app.services.evidence_operations import discover_stage, fetch_stage, index_stage, parse_stage
+from app.services.event_intelligence_service import normalize_raw_event
+from app.models.workstation import EventSource
 from app.services.evidence_history_service import run_historical_discovery_slice
 
 NETWORK_RETRY = {
@@ -141,7 +143,13 @@ def pdf(candidate_id: str) -> dict[str, object]:
 @celery_app.task(name="evidence.index")
 def index(candidate_id: str) -> dict[str, object]:
     with SessionLocal() as db:
-        return asdict(index_stage(db, candidate_id))
+        result = index_stage(db, candidate_id)
+        payload = asdict(result)
+        if result.outcome in {"selected", "idempotent_selected"}:
+            source = db.scalar(select(EventSource).where(EventSource.candidate_id == candidate_id))
+            if source:
+                payload["normalized_event_id"] = normalize_raw_event(db, source.event_id).id
+        return payload
 
 
 @celery_app.task(name="evidence.targeted_refresh", **NETWORK_RETRY)

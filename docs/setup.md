@@ -174,6 +174,21 @@ python -m app.jobs.test_retrieval --query "deposit growth" --symbol MEBL
 
 For production semantic retrieval, set `EMBEDDING_BACKEND=sentence_transformers`, install requirements, then run `python -m app.jobs.reindex_rag`. PostgreSQL stores 384-dimensional vectors with an indexed cosine search; SQLite stores vectors as JSON and scans only for tests/local use. Private uploads must be queried through their owner/portfolio scope.
 
+## Event intelligence
+
+After Phase 5 evidence is indexed, apply the current migration and normalize retained
+announcements/news in bounded batches:
+
+```bash
+cd apps/api
+alembic upgrade head
+python -m app.jobs.normalize_events --all --limit 500
+```
+
+The command processes bounded batches until `scanned` is zero. New evidence processed by the background
+evidence-index worker is normalized automatically. See `docs/event-intelligence.md` for
+the event contract, deterministic boundaries, and read APIs.
+
 ## Safety assumptions
 
 No broker password storage, browser automation, or trade placement exists. Rebalance output is only a proposal. Market prices and exact portfolio values come from database queries, while document retrieval supplies narrative evidence only.

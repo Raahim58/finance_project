@@ -24,6 +24,8 @@ from app.schemas.portfolio import (
     TransactionResponse,
     TransactionUpdate,
 )
+from app.schemas.event_intelligence import PortfolioEventsResponse
+from app.services.event_intelligence_service import portfolio_event_exposure
 from app.services.portfolio_service import (
     add_holding,
     add_transaction,
@@ -172,6 +174,18 @@ def portfolio_exposure(
     db: Session = Depends(get_db),
 ) -> PortfolioExposureResponse:
     return get_portfolio_exposure(db, current_user, portfolio_id)
+
+
+@router.get("/{portfolio_id}/events", response_model=PortfolioEventsResponse)
+def portfolio_events(
+    portfolio_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PortfolioEventsResponse:
+    return PortfolioEventsResponse.model_validate(
+        portfolio_event_exposure(db, current_user, portfolio_id, limit=limit)
+    )
 
 
 @router.get("/{portfolio_id}/performance", response_model=list[PortfolioPerformancePoint])

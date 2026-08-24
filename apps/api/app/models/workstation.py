@@ -606,6 +606,63 @@ class EventEntityLink(Base):
     confidence: Mapped[Decimal] = mapped_column(Numeric(8, 6), nullable=False)
 
 
+class NormalizedEvent(Base):
+    __tablename__ = "normalized_events"
+    __table_args__ = (
+        UniqueConstraint("cluster_key", name="uq_normalized_event_cluster_key"),
+        Index("ix_normalized_event_type_occurred", "event_type", "occurred_at"),
+        Index("ix_normalized_event_factor_occurred", "factor", "occurred_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    event_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    classification_status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    event_time_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cluster_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    factor: Mapped[str | None] = mapped_column(String(80), index=True)
+    geography: Mapped[str | None] = mapped_column(String(80), index=True)
+    magnitude: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    magnitude_unit: Mapped[str | None] = mapped_column(String(30))
+    materiality: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    confidence: Mapped[Decimal] = mapped_column(Numeric(8, 6), nullable=False)
+    freshness_score: Mapped[Decimal] = mapped_column(Numeric(8, 6), nullable=False)
+    freshness_status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    detection_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    details_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class NormalizedEventEvidence(Base):
+    __tablename__ = "normalized_event_evidence"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    normalized_event_id: Mapped[str] = mapped_column(ForeignKey("normalized_events.id"), nullable=False, index=True)
+    raw_event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), nullable=False, unique=True, index=True)
+    evidence_role: Mapped[str] = mapped_column(String(30), nullable=False)
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class NormalizedEventSubject(Base):
+    __tablename__ = "normalized_event_subjects"
+    __table_args__ = (
+        UniqueConstraint(
+            "normalized_event_id", "subject_type", "subject_key",
+            name="uq_normalized_event_subject",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    normalized_event_id: Mapped[str] = mapped_column(ForeignKey("normalized_events.id"), nullable=False, index=True)
+    subject_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    subject_key: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    link_method: Mapped[str] = mapped_column(String(40), nullable=False)
+    confidence: Mapped[Decimal] = mapped_column(Numeric(8, 6), nullable=False)
+    is_direct: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
 class Conversation(Base):
     __tablename__ = "assistant_conversations"
 
