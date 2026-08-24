@@ -59,6 +59,7 @@ class RagChunkResponse(BaseModel):
     id: str
     document_id: str
     symbol: str | None
+    document_type: str
     chunk_index: int
     chunk_text: str
     token_count: int

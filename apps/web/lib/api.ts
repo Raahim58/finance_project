@@ -216,6 +216,7 @@ export type RagChunk = {
   id: string;
   document_id: string;
   symbol?: string | null;
+  document_type: string;
   chunk_index: number;
   chunk_text: string;
   token_count: number;

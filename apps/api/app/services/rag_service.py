@@ -83,7 +83,7 @@ def _semantic_model():
             "sentence-transformers is required when EMBEDDING_BACKEND=sentence_transformers"
         ) from exc
     model = SentenceTransformer(settings.embedding_model_name)
-    dimension = model.get_sentence_embedding_dimension()
+    dimension = model.get_embedding_dimension()
     if dimension != EMBEDDING_DIMENSIONS:
         raise RuntimeError(f"Embedding model dimension {dimension} does not match configured {EMBEDDING_DIMENSIONS}")
     return model
@@ -690,7 +690,7 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         [semantic_ranking, lexical_ranking], k=settings.retrieval_rrf_k
     )
     table_intent = has_table_intent(plan.query)
-    ranked: list[tuple[float, float, float, float, DocumentChunk, Citation]] = []
+    ranked: list[tuple[float, float, float, float, DocumentChunk, Document, Citation]] = []
     for chunk_id, fused_score in rrf_scores.items():
         chunk, document, citation = candidates[chunk_id]
         semantic = semantic_scores[chunk_id]
@@ -698,6 +698,7 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         semantic_ok = (
             settings.embedding_backend == "sentence_transformers"
             and semantic >= settings.retrieval_min_semantic_score
+            and lexical > 0
         )
         lexical_ok = lexical >= settings.retrieval_min_lexical_score
         if not (semantic_ok or lexical_ok):
@@ -721,14 +722,14 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
             + source_adjustment(document.source_tier)
             + content_adjustment(chunk.content_type, table_intent=table_intent)
         )
-        ranked.append((final_score, fused_score, semantic, lexical, chunk, citation))
+        ranked.append((final_score, fused_score, semantic, lexical, chunk, document, citation))
 
     ranked.sort(key=lambda item: (-item[0], item[4].id))
     selected = ranked[: plan.limit]
     chunks: list[RagChunkResponse] = []
     citations: list[CitationResponse] = []
     scores: list[float] = []
-    for score, fused_score, semantic, lexical, chunk, citation in selected:
+    for score, fused_score, semantic, lexical, chunk, document, citation in selected:
         citation_response = serialize_citation(citation)
         citations.append(citation_response)
         scores.append(round(score, 6))
@@ -737,6 +738,7 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
                 id=chunk.id,
                 document_id=chunk.document_id,
                 symbol=chunk.symbol,
+                document_type=document.document_type,
                 chunk_index=chunk.chunk_index,
                 chunk_text=chunk.chunk_text,
                 token_count=chunk.token_count,

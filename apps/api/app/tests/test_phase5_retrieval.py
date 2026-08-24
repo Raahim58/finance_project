@@ -134,6 +134,7 @@ def test_explicit_entity_and_announcement_filters_are_hard(client):
     body = response.json()
     assert body["status"] == "ok"
     assert {row["document_id"] for row in body["chunks"]} == {mebl_id}
+    assert {row["document_type"] for row in body["chunks"]} == {"announcement"}
     assert body["audit"]["plan"]["document_types"] == ["announcement"]
 
 

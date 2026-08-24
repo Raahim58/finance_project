@@ -47,6 +47,8 @@ def main() -> None:
                 metadata["content_type"] = chunk.content_type
                 metadata["source_tier"] = document.source_tier
                 metadata["data_status"] = document.data_status
+                metadata["document_type"] = document.document_type
+                metadata["symbol"] = document.symbol
                 chunk.metadata_json = json.dumps(metadata)
                 db.add(chunk)
                 db.add(document)
