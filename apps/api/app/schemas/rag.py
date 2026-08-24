@@ -1,6 +1,8 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class DocumentResponse(BaseModel):
@@ -20,6 +22,8 @@ class DocumentResponse(BaseModel):
     published_date: date | None
     parsed_at: datetime | None
     status: str
+    source_tier: int
+    data_status: str
     error_message: str | None
     created_at: datetime
 
@@ -59,11 +63,31 @@ class RagChunkResponse(BaseModel):
     chunk_text: str
     token_count: int
     score: float
+    semantic_score: float
+    lexical_score: float
+    rrf_score: float
     source_url: str | None
     page_number: int | None
     section_title: str | None
     metadata: dict
     citation: CitationResponse
+    citation_eligible: bool
+
+
+class RagSearchAudit(BaseModel):
+    plan: dict
+    semantic_candidates: int
+    lexical_candidates: int
+    fused_candidates: int
+    admitted_candidates: int
+    rejected_by_reason: dict[str, int]
+    embedding_model: str
+    rrf_k: int
+
+
+class RagDisambiguation(BaseModel):
+    symbols: list[str]
+    reason: str
 
 
 class RagSearchRequest(BaseModel):
@@ -73,11 +97,23 @@ class RagSearchRequest(BaseModel):
     document_types: list[str] | None = None
     date_from: date | None = None
     date_to: date | None = None
+    time_horizon: Literal["week", "month", "quarter", "six_months", "year", "all"] | None = None
     portfolio_id: str | None = None
     limit: int = Field(default=5, ge=1, le=25)
 
+    @model_validator(mode="after")
+    def validate_date_range(self) -> "RagSearchRequest":
+        if self.date_from and self.date_to and self.date_from > self.date_to:
+            raise ValueError("date_from must be on or before date_to")
+        if self.time_horizon and (self.date_from or self.date_to):
+            raise ValueError("time_horizon cannot be combined with explicit date bounds")
+        return self
+
 
 class RagSearchResponse(BaseModel):
+    status: Literal["ok", "insufficient_evidence", "needs_disambiguation"] = "ok"
     chunks: list[RagChunkResponse]
     citations: list[CitationResponse]
     scores: list[float]
+    audit: RagSearchAudit
+    disambiguation: RagDisambiguation | None = None

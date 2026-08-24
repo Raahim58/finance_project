@@ -1,7 +1,7 @@
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
-from sqlalchemy import Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
 
@@ -37,6 +37,8 @@ class Document(Base):
     downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     parsed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(40), default="parsed", nullable=False, index=True)
+    source_tier: Mapped[int] = mapped_column(Integer, default=3, nullable=False, index=True)
+    data_status: Mapped[str] = mapped_column(String(30), default="observed", nullable=False, index=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
@@ -78,6 +80,10 @@ class DocumentChunk(Base):
     source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     page_number: Mapped[int | None] = mapped_column(nullable=True)
     section_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content_type: Mapped[str] = mapped_column(String(20), default="narrative", nullable=False, index=True)
+    embedding_model: Mapped[str] = mapped_column(String(160), default="unknown", nullable=False, index=True)
+    embedding_index_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, index=True)
+    embedding_status: Mapped[str] = mapped_column(String(20), default="indexed", nullable=False, index=True)
 
     document: Mapped[Document] = relationship(back_populates="chunks")
 

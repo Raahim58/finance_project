@@ -1,0 +1,22 @@
+[
+  {"query":"80 percent interim cash dividend entitlement","symbols":["MEBL"],"document_types":["announcement"],"expected_title_contains":"80% INTERIM CASH DIVIDEND"},
+  {"query":"half year financial results June 2026","symbols":["HBL"],"document_types":["announcement"],"expected_title_contains":"Financial Results for the Half Year"},
+  {"query":"extension term president chief executive officer","symbols":["NBP"],"document_types":["announcement"],"expected_title_contains":"EXTENSION IN TERM"},
+  {"query":"third corporate briefing","symbols":["FFC"],"document_types":["announcement"],"expected_title_contains":"Third Corporate Briefing"},
+  {"query":"AI ready data centre campus","symbols":["MARI"],"document_types":["announcement"],"expected_title_contains":"AI Ready Data Centre"},
+  {"query":"Bobi Deep production fast track","symbols":["OGDC"],"document_types":["announcement"],"expected_title_contains":"Bobi Deep-1 into Production"},
+  {"query":"VIS entity rating reaffirmed","symbols":["ILP"],"document_types":["announcement"],"expected_title_contains":"VIS Reaffirms Entity Ratings"},
+  {"query":"corporate briefing session video June 2026","symbols":["SYS"],"document_types":["announcement"],"expected_title_contains":"Video Recording Of Corporate Briefing"},
+  {"query":"quarter financial results March 2026","symbols":["LUCK"],"document_types":["announcement"],"expected_title_contains":"Financial Results for the Quarter"},
+  {"query":"third interim cash dividend credit","symbols":["HUBC"],"document_types":["announcement"],"expected_title_contains":"Third Interim Cash Dividend"},
+  {"query":"Sahito discovery gas production Khewari","symbols":["OGDC"],"document_types":["announcement"],"expected_title_contains":"Gas Production from Sahito"},
+  {"query":"employee share option allotment","symbols":["MEBL"],"document_types":["announcement"],"expected_title_contains":"ALLOTMENT OF SHARES"},
+  {"query":"change chief financial officer","symbols":["ILP"],"document_types":["announcement"],"expected_title_contains":"Change of Chief Financial Officer"},
+  {"query":"oil discovery Bobi Deep Sanghar","symbols":["OGDC"],"document_types":["announcement"],"expected_title_contains":"Oil Discovery from Bobi Deep"},
+  {"query":"first quarter financial results March 2026","symbols":["SYS"],"document_types":["announcement"],"expected_title_contains":"Financial Results for the First Quarter"},
+  {"query":"quarter results June 2026","symbols":["FFC"],"document_types":["announcement"],"expected_title_contains":"Financial Results for the Quarter"},
+  {"query":"appointment director board","symbols":["NBP"],"document_types":["announcement"],"expected_title_contains":"APPOINTMENT OF DIRECTOR"},
+  {"query":"credit first interim cash dividend","symbols":["HBL"],"document_types":["announcement"],"expected_title_contains":"Credit of Interim Cash Dividend"},
+  {"query":"farm-in additional working interest Qadirpur","symbols":["OGDC"],"document_types":["announcement"],"expected_title_contains":"FARM-IN TRANSACTION"},
+  {"query":"Spinwam gas bidding media clarification","symbols":["MARI"],"document_types":["announcement"],"expected_title_contains":"Spinwam Gas Bidding"}
+]

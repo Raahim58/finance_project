@@ -491,7 +491,7 @@ def _select_and_index(
         db,
         [ParsedPage(1, parsed.body)],
         title=parsed.title,
-        document_type="selected_evidence",
+        document_type="announcement" if config.source_key == "psx_announcements" else "news",
         symbol=symbol,
         source_name=candidate.publisher,
         source_url=parsed.canonical_url,

@@ -587,7 +587,7 @@ def index_stage(db: Session, candidate_id: str, *, spool: EvidenceSpool | None =
             db,
             [ParsedPage(1, parsed.body)],
             title=parsed.title,
-            document_type="selected_evidence",
+            document_type="announcement" if config.source_key == "psx_announcements" else "news",
             symbol=symbol,
             source_name=row.publisher,
             source_url=parsed.canonical_url,

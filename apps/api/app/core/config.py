@@ -45,8 +45,13 @@ class Settings(BaseSettings):
     research_report_limit_per_run: int = 20
     source_artifact_root: str = "./data/artifacts"
     embedding_dimensions: int = 384
-    embedding_backend: str = "hash"
+    embedding_backend: str = "sentence_transformers"
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_index_version: int = Field(default=2, ge=1)
+    retrieval_rrf_k: int = Field(default=60, ge=1, le=1000)
+    retrieval_candidate_depth: int = Field(default=50, ge=10, le=500)
+    retrieval_min_semantic_score: float = Field(default=0.25, ge=-1, le=1)
+    retrieval_min_lexical_score: float = Field(default=0.50, ge=0, le=1)
     assistant_max_tool_iterations: int = 12
     assistant_max_tool_cost_units: int = 18
     assistant_max_retrieved_chunks: int = 8

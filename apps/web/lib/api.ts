@@ -194,6 +194,8 @@ export type ApiDocument = {
   published_date?: string | null;
   parsed_at?: string | null;
   status: string;
+  source_tier: number;
+  data_status: string;
   error_message?: string | null;
   created_at: string;
 };
@@ -218,17 +220,33 @@ export type RagChunk = {
   chunk_text: string;
   token_count: number;
   score: number;
+  semantic_score: number;
+  lexical_score: number;
+  rrf_score: number;
   source_url?: string | null;
   page_number?: number | null;
   section_title?: string | null;
   metadata: Record<string, unknown>;
   citation: RagCitation;
+  citation_eligible: boolean;
 };
 
 export type RagSearchResponse = {
+  status: "ok" | "insufficient_evidence" | "needs_disambiguation";
   chunks: RagChunk[];
   citations: RagCitation[];
   scores: number[];
+  audit: {
+    plan: Record<string, unknown>;
+    semantic_candidates: number;
+    lexical_candidates: number;
+    fused_candidates: number;
+    admitted_candidates: number;
+    rejected_by_reason: Record<string, number>;
+    embedding_model: string;
+    rrf_k: number;
+  };
+  disambiguation?: { symbols: string[]; reason: string } | null;
 };
 
 export type PortfolioQuant = {
@@ -411,6 +429,9 @@ export function searchRag(payload: {
   symbols?: string[];
   sectors?: string[];
   document_types?: string[];
+  date_from?: string;
+  date_to?: string;
+  time_horizon?: "week"|"month"|"quarter"|"six_months"|"year"|"all";
   portfolio_id?: string;
   limit?: number;
 }) {
