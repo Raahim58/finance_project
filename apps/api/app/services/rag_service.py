@@ -644,7 +644,13 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
             .order_by(DocumentChunk.embedding_vector.cosine_distance(query_vector))
             .limit(candidate_depth)
         ).all()
-        vector = func.to_tsvector("english", DocumentChunk.chunk_text)
+        lexical_document = func.concat_ws(
+            " ",
+            Document.title,
+            func.coalesce(DocumentChunk.section_title, ""),
+            DocumentChunk.chunk_text,
+        )
+        vector = func.to_tsvector("english", lexical_document)
         lexical_query = func.websearch_to_tsquery("english", plan.query)
         lexical_rows = db.execute(
             base_query.where(vector.op("@@")(lexical_query))
@@ -667,14 +673,17 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
     semantic_scores: dict[str, float] = {}
     lexical_scores: dict[str, float] = {}
     rejected: Counter = Counter()
-    for chunk_id, (chunk, _document, _citation) in candidates.items():
+    for chunk_id, (chunk, document, _citation) in candidates.items():
         try:
             stored_vector = json.loads(chunk.embedding_json)
             semantic_scores[chunk_id] = cosine_similarity(query_vector, stored_vector)
         except (TypeError, ValueError, json.JSONDecodeError):
             semantic_scores[chunk_id] = -1.0
             rejected["malformed_embedding"] += 1
-        lexical_scores[chunk_id] = lexical_score(plan.query_tokens, chunk.chunk_text)
+        lexical_text = " ".join(
+            value for value in (document.title, chunk.section_title, chunk.chunk_text) if value
+        )
+        lexical_scores[chunk_id] = lexical_score(plan.query_tokens, lexical_text)
 
     semantic_ranking = (
         sorted(candidates, key=lambda item: (-semantic_scores[item], item))[:candidate_depth]

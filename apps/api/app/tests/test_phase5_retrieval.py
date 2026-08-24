@@ -138,6 +138,34 @@ def test_explicit_entity_and_announcement_filters_are_hard(client):
     assert body["audit"]["plan"]["document_types"] == ["announcement"]
 
 
+def test_lexical_retrieval_searches_document_title(client):
+    _seed_companies()
+    headers = _auth_headers(client)
+    document_id = _public_document(
+        title="Extraordinary Sapphire Expansion Notice",
+        text="The issuer has published the attached notice for shareholders.",
+        symbol="MEBL",
+        document_type="announcement",
+        published_date=date(2026, 8, 20),
+    )
+
+    response = client.post(
+        "/rag/search",
+        headers=headers,
+        json={
+            "query": "sapphire expansion notice",
+            "symbols": ["MEBL"],
+            "document_types": ["announcement"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["chunks"][0]["document_id"] == document_id
+    assert body["chunks"][0]["lexical_score"] == 1.0
+
+
 def test_weak_results_and_uncitable_results_are_not_padded(client):
     _seed_companies()
     headers = _auth_headers(client)
