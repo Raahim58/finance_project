@@ -30,3 +30,13 @@ Project rules for `psx-ai-portfolio-agent`.
 - RAG search results must return citation metadata and must not fabricate source titles, URLs, snippets, or page numbers.
 - Market data architecture must assume automatic current-data ingestion; mock mode is development-only.
 - Agent decisions must consider market freshness and portfolio source metadata before presenting analysis.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specifications are tracked in GitHub Issues for `Raahim58/finance_project`. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+This repository uses a single-context domain documentation layout. See `docs/agents/domain.md`.
