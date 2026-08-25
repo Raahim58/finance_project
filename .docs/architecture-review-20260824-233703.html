@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture review for psx-ai-portfolio-agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose", flowchart: { curve: "basis" } });
+    </script>
+    <style>
+      :root { color-scheme: light; }
+      .seam { border-style: dashed; }
+      .deep { background: linear-gradient(135deg, #0f172a, #1e293b); color: white; }
+      .diagram { min-height: 318px; }
+      .interface-bar { height: 18px; background: #c7d2fe; border: 1px solid #818cf8; }
+      .implementation-mass { background: linear-gradient(180deg, #e0e7ff, #eef2ff); border: 1px solid #a5b4fc; }
+      .leak-arrow { color: #dc2626; font-weight: 800; }
+      code { overflow-wrap: anywhere; }
+      @media print { article { break-inside: avoid; } }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans">
+    <main class="mx-auto max-w-6xl space-y-12 px-6 py-12">
+      <header class="border-b border-slate-200 pb-8">
+        <div class="flex flex-wrap items-end justify-between gap-5">
+          <div>
+            <p class="text-xs font-semibold uppercase tracking-[.2em] text-indigo-700">Architecture review · Phases 7–11</p>
+            <h1 class="mt-2 text-4xl font-semibold tracking-tight">psx-ai-portfolio-agent</h1>
+            <p class="mt-2 text-sm text-slate-500">24 August 2026 · scoped to intelligence, reasoning, research, events, and chat</p>
+          </div>
+          <div class="grid grid-cols-2 gap-x-5 gap-y-2 text-xs text-slate-600">
+            <span class="flex items-center gap-2"><i class="h-4 w-6 border border-slate-500 bg-white"></i>module</span>
+            <span class="flex items-center gap-2"><i class="h-4 w-6 border border-dashed border-slate-500 bg-white"></i>seam</span>
+            <span class="flex items-center gap-2"><i class="h-1 w-6 bg-red-600"></i>leakage</span>
+            <span class="flex items-center gap-2"><i class="h-4 w-6 bg-slate-800"></i>deep module</span>
+          </div>
+        </div>
+        <div class="mt-5 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-600">
+          YAGNI scope: only work needed for Phases 7–11. Redis, broker scaffolding, dead widgets, and advanced quant stay out.
+        </div>
+      </header>
+
+      <section id="candidates" class="space-y-12">
+        <article id="context-builder" class="rounded-2xl border border-slate-200 bg-white p-7 shadow-sm">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-wider text-indigo-700">Candidate 1 · Phase 7</p>
+              <h2 class="mt-1 text-2xl font-semibold tracking-tight">Deepen the Canonical Intelligence Context module</h2>
+            </div>
+            <div class="flex gap-2"><span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Strong</span><span class="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-800">in-process</span></div>
+          </div>
+          <div class="mt-5 rounded-lg bg-slate-50 p-4 font-mono text-xs leading-6 text-slate-700">
+            apps/api/app/services/intelligence_service.py<br />
+            apps/api/app/services/research_service.py<br />
+            apps/api/app/ai/orchestrator.py<br />
+            apps/api/app/tools/research_tools.py · apps/api/app/schemas/intelligence.py
+          </div>
+          <div class="mt-6 grid gap-4 lg:grid-cols-2">
+            <section class="diagram rounded-xl border border-red-200 bg-red-50/40 p-4">
+              <p class="text-xs font-semibold uppercase tracking-wider text-red-700">Before · three context shapes</p>
+              <pre class="mermaid mt-3">
+flowchart TD
+  CO[company_overview] --> M[market + facts]
+  CO --> E[events + documents]
+  CO --> PR[portfolio relevance]
+  SI[security_intelligence] --> CO
+  SI --> PC[_portfolio_context]
+  SI --> MR[macro_regime]
+  RA[run_assistant] --> SI
+  RA --> Q[quant + IPS + RAG]
+  CO -. duplicated quant path .-> PC
+  classDef leak stroke:#dc2626,stroke-width:2px,color:#991b1b;
+  class CO,PC,RA leak
+              </pre>
+            </section>
+            <section class="diagram deep rounded-xl p-4">
+              <p class="text-xs font-semibold uppercase tracking-wider text-indigo-200">After · one deep assembly module</p>
+              <div class="mt-5 rounded-xl border-2 border-indigo-300 bg-slate-900 p-5">
+                <div class="rounded-md bg-indigo-300 px-3 py-2 text-center text-xs font-bold uppercase tracking-wider text-slate-900">Narrow context interface</div>
+                <div class="mt-4 grid grid-cols-3 gap-2 text-center text-[11px] text-slate-200">
+                  <span class="rounded border border-slate-600 p-3">portfolio + IPS</span><span class="rounded border border-slate-600 p-3">company facts</span><span class="rounded border border-slate-600 p-3">market + risk</span>
+                  <span class="rounded border border-slate-600 p-3">sector + macro</span><span class="rounded border border-slate-600 p-3">material events</span><span class="rounded border border-slate-600 p-3">RAG evidence</span>
+                </div>
+                <div class="mt-3 rounded border border-dashed border-amber-300 p-3 text-center text-xs text-amber-100">freshness, provenance, missing-data flags</div>
+              </div>
+              <p class="mt-4 text-center text-xs text-slate-300">Company research and Assistant cross the same seam.</p>
+            </section>
+          </div>
+          <dl class="mt-6 grid gap-4 md:grid-cols-3">
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Problem</dt><dd class="mt-1 text-sm">Context assembly leaks across three modules, and no current shape contains the full Phase 7 evidence set.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Solution</dt><dd class="mt-1 text-sm">Give one deep module ownership of current-data assembly while deterministic calculators and retrieval remain behind its seam.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Deletion test</dt><dd class="mt-1 text-sm">Deleting the current helper only moves orchestration into its callers; it has too little depth.</dd></div>
+          </dl>
+          <ul class="mt-5 flex flex-wrap gap-2 text-xs"><li class="rounded bg-emerald-50 px-3 py-2">locality: missing flags align</li><li class="rounded bg-emerald-50 px-3 py-2">leverage: two consumers</li><li class="rounded bg-emerald-50 px-3 py-2">tests hit one interface</li><li class="rounded bg-emerald-50 px-3 py-2">no permanent context vector</li></ul>
+        </article>
+
+        <article id="reasoning" class="rounded-2xl border border-slate-200 bg-white p-7 shadow-sm">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div><p class="text-xs font-semibold uppercase tracking-wider text-indigo-700">Candidate 2 · Phase 8</p><h2 class="mt-1 text-2xl font-semibold tracking-tight">Collapse Assistant reasoning into a deep module</h2></div>
+            <div class="flex gap-2"><span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Strong</span><span class="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-800">ports &amp; adapters</span></div>
+          </div>
+          <div class="mt-5 rounded-lg bg-slate-50 p-4 font-mono text-xs leading-6 text-slate-700">apps/api/app/ai/orchestrator.py<br />apps/api/app/ai/intent.py · apps/api/app/ai/evidence.py<br />apps/api/app/ai/providers/* · apps/api/app/tools/*<br />apps/api/app/tests/test_assistant_orchestrator.py</div>
+          <div class="mt-6 grid gap-4 lg:grid-cols-2">
+            <section class="diagram rounded-xl border border-red-200 bg-red-50/40 p-4">
+              <p class="text-xs font-semibold uppercase tracking-wider text-red-700">Before · orchestration owns everything</p>
+              <div class="mt-5 space-y-2">
+                <div class="border-l-4 border-red-500 bg-white p-3 text-xs">conversation persistence</div>
+                <div class="border-l-4 border-red-500 bg-white p-3 text-xs">intent routing + eager retrieval</div>
+                <div class="border-l-4 border-red-500 bg-white p-3 text-xs">deterministic prose + evidence IDs</div>
+                <div class="border-l-4 border-red-500 bg-white p-3 text-xs">LLM tool planning — except security_fit</div>
+                <div class="border-l-4 border-red-500 bg-white p-3 text-xs">prompt + schema validation + fallback</div>
+              </div>
+              <p class="mt-4 text-xs font-semibold text-red-700">613 lines; failures are spread across call order.</p>
+            </section>
+            <section class="diagram rounded-xl border border-indigo-200 bg-indigo-50/40 p-4">
+              <p class="text-xs font-semibold uppercase tracking-wider text-indigo-700">After · deterministic core, LLM adapter</p>
+              <pre class="mermaid mt-3">
+flowchart TD
+  Q[question + page scope] --> P[deep reasoning module]
+  C[Canonical Intelligence Context] --> P
+  P --> D[deterministic facts + fallback]
+  P --> T[normal planning rounds]
+  T --> A1[LLM adapter]
+  D --> G[evidence-ID grounding]
+  A1 --> G
+  G --> O[explicit mode + answer]
+  classDef deep fill:#0f172a,color:#fff,stroke:#818cf8,stroke-width:3px;
+  class P deep
+              </pre>
+            </section>
+          </div>
+          <dl class="mt-6 grid gap-4 md:grid-cols-3">
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Problem</dt><dd class="mt-1 text-sm">The interface is the test surface, but current tests must enter a call-order-heavy implementation where security fit skips normal planning and ordinary fit questions can skip company evidence search.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Solution</dt><dd class="mt-1 text-sm">Concentrate reasoning policy in one deep module; keep provider behavior behind adapters and deterministic truth behind the context seam.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Deletion test</dt><dd class="mt-1 text-sm">Deleting planner or validator helpers merely expands the orchestration function; the policy needs greater locality.</dd></div>
+          </dl>
+          <ul class="mt-5 flex flex-wrap gap-2 text-xs"><li class="rounded bg-emerald-50 px-3 py-2">locality: policy in one module</li><li class="rounded bg-emerald-50 px-3 py-2">leverage: every intent</li><li class="rounded bg-emerald-50 px-3 py-2">two adapters justify seam</li><li class="rounded bg-emerald-50 px-3 py-2">fallback tests survive</li></ul>
+        </article>
+
+        <article id="research-view" class="rounded-2xl border border-slate-200 bg-white p-7 shadow-sm">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div><p class="text-xs font-semibold uppercase tracking-wider text-indigo-700">Candidate 3 · Phase 9</p><h2 class="mt-1 text-2xl font-semibold tracking-tight">Deepen the Company Intelligence View module</h2></div>
+            <div class="flex gap-2"><span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Strong</span><span class="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-800">local-substitutable</span></div>
+          </div>
+          <div class="mt-5 rounded-lg bg-slate-50 p-4 font-mono text-xs leading-6 text-slate-700">apps/web/app/research/page.tsx<br />apps/web/app/companies/[symbol]/page.tsx<br />apps/web/lib/api.ts<br />apps/api/app/api/routes/research.py · apps/api/app/services/research_service.py</div>
+          <div class="mt-6 grid gap-4 lg:grid-cols-2">
+            <section class="diagram rounded-xl border border-red-200 bg-red-50/40 p-4">
+              <p class="text-xs font-semibold uppercase tracking-wider text-red-700">Before · page-local assembly</p>
+              <div class="relative mt-5 grid grid-cols-2 gap-4 text-center text-xs">
+                <div class="rounded-lg border border-slate-300 bg-white p-4"><b>Research</b><div class="mt-3 space-y-2 text-slate-600"><p>RAG chunks</p><p>raw news</p><p>document library</p></div></div>
+                <div class="rounded-lg border border-slate-300 bg-white p-4"><b>Company</b><div class="mt-3 space-y-2 text-slate-600"><p>5 parallel requests</p><p>page calculations</p><p>long flat sections</p></div></div>
+                <div class="col-span-2 flex items-center justify-center gap-2 text-red-700"><span>market</span><span class="leak-arrow">↔</span><span>facts</span><span class="leak-arrow">↔</span><span>events</span><span class="leak-arrow">↔</span><span>evidence</span></div>
+              </div>
+            </section>
+            <section class="diagram deep rounded-xl p-4">
+              <p class="text-xs font-semibold uppercase tracking-wider text-indigo-200">After · one intelligence projection</p>
+              <div class="mt-5 rounded-xl border-2 border-indigo-300 p-5">
+                <div class="interface-bar rounded"></div>
+                <p class="mt-2 text-center text-xs font-semibold uppercase tracking-wider text-indigo-200">small view interface</p>
+                <div class="mt-4 grid gap-2 text-xs text-slate-200 sm:grid-cols-2">
+                  <p class="rounded bg-slate-700 p-3">what changed</p><p class="rounded bg-slate-700 p-3">why it matters</p><p class="rounded bg-slate-700 p-3">portfolio relevance</p><p class="rounded bg-slate-700 p-3">material events only</p>
+                </div>
+                <p class="mt-4 rounded border border-dashed border-slate-500 p-3 text-center text-xs text-slate-300">raw RAG remains expandable evidence</p>
+              </div>
+            </section>
+          </div>
+          <dl class="mt-6 grid gap-4 md:grid-cols-3">
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Problem</dt><dd class="mt-1 text-sm">Research is still a chunk-search page, while the company page assembles a separate intelligence view and hides impact inside a long implementation.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Solution</dt><dd class="mt-1 text-sm">Give one deep presentation module ownership of intelligence ordering, summaries, empty states, and expandable evidence.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Deletion test</dt><dd class="mt-1 text-sm">Deleting page-local formatting would duplicate it on the next intelligence surface; a shared seam creates leverage.</dd></div>
+          </dl>
+          <ul class="mt-5 flex flex-wrap gap-2 text-xs"><li class="rounded bg-emerald-50 px-3 py-2">locality: one view policy</li><li class="rounded bg-emerald-50 px-3 py-2">leverage: research + company</li><li class="rounded bg-emerald-50 px-3 py-2">tests assert meaning</li><li class="rounded bg-emerald-50 px-3 py-2">RAG becomes evidence</li></ul>
+        </article>
+
+        <article id="event-lens" class="rounded-2xl border border-slate-200 bg-white p-7 shadow-sm">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div><p class="text-xs font-semibold uppercase tracking-wider text-indigo-700">Candidate 4 · Phase 10</p><h2 class="mt-1 text-2xl font-semibold tracking-tight">Deepen the Material Event Lens module</h2></div>
+            <div class="flex gap-2"><span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">Worth exploring</span><span class="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-800">in-process</span></div>
+          </div>
+          <div class="mt-5 rounded-lg bg-slate-50 p-4 font-mono text-xs leading-6 text-slate-700">apps/api/app/services/event_intelligence_service.py<br />apps/api/app/services/company_event_service.py<br />apps/api/app/api/routes/research.py · apps/api/app/api/routes/portfolio.py<br />apps/web/app/market/page.tsx · apps/web/app/companies/[symbol]/page.tsx · apps/web/components/WorkspacePage.tsx</div>
+          <div class="mt-6 grid gap-4 lg:grid-cols-2">
+            <section class="diagram rounded-xl border border-red-200 bg-red-50/40 p-4">
+              <p class="text-xs font-semibold uppercase tracking-wider text-red-700">Before · selection varies by caller</p>
+              <pre class="mermaid mt-3">
+flowchart TD
+  NE[normalized events] --> L[list_normalized_events]
+  NE --> PE[portfolio_event_exposure]
+  L --> C[company view]
+  PE --> P[portfolio endpoint]
+  L -. no market consumer .-> M[market view]
+  C -. raw lists .-> U[users]
+  P -. impact not implemented .-> U
+  classDef leak stroke:#dc2626,stroke-width:2px,color:#991b1b;
+  class L,PE,C,P leak
+              </pre>
+            </section>
+            <section class="diagram deep rounded-xl p-4">
+              <p class="text-xs font-semibold uppercase tracking-wider text-indigo-200">After · one materiality and exposure policy</p>
+              <div class="mt-6 flex items-center justify-center gap-3 text-xs">
+                <div class="rounded border border-slate-500 p-3 text-center">current events</div><span>→</span>
+                <div class="rounded-lg border-2 border-indigo-300 bg-slate-900 p-5 text-center"><b>Material Event Lens</b><p class="mt-2 text-slate-300">relevance · exposure · freshness · missing impact</p></div><span>→</span>
+                <div class="space-y-2"><p class="rounded bg-slate-700 p-2">market</p><p class="rounded bg-slate-700 p-2">company</p><p class="rounded bg-slate-700 p-2">portfolio</p></div>
+              </div>
+              <p class="mt-6 text-center text-xs text-slate-300">One policy prevents giant feeds without inventing impact.</p>
+            </section>
+          </div>
+          <dl class="mt-6 grid gap-4 md:grid-cols-3">
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Problem</dt><dd class="mt-1 text-sm">Classification exists, but relevance, exposure, ranking, and “impact unavailable” behavior leak across separate callers.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Solution</dt><dd class="mt-1 text-sm">Deepen the existing event module around one materiality policy consumed by market, company, and portfolio views.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Deletion test</dt><dd class="mt-1 text-sm">Deleting either current event path forces each caller to rebuild ranking and exposure rules; the seam is real.</dd></div>
+          </dl>
+          <ul class="mt-5 flex flex-wrap gap-2 text-xs"><li class="rounded bg-emerald-50 px-3 py-2">locality: relevance policy</li><li class="rounded bg-emerald-50 px-3 py-2">leverage: three consumers</li><li class="rounded bg-emerald-50 px-3 py-2">materiality tests survive</li><li class="rounded bg-emerald-50 px-3 py-2">missing impact stays explicit</li></ul>
+        </article>
+
+        <article id="chat-workspace" class="rounded-2xl border border-slate-200 bg-white p-7 shadow-sm">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div><p class="text-xs font-semibold uppercase tracking-wider text-indigo-700">Candidate 5 · Phase 11 — last</p><h2 class="mt-1 text-2xl font-semibold tracking-tight">Deepen the Conversation Workspace module</h2></div>
+            <div class="flex gap-2"><span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">Worth exploring</span><span class="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-800">ports &amp; adapters</span></div>
+          </div>
+          <div class="mt-5 rounded-lg bg-slate-50 p-4 font-mono text-xs leading-6 text-slate-700">apps/web/app/assistant/page.tsx<br />apps/web/components/AppShell.tsx<br />apps/web/lib/api.ts<br />apps/api/app/api/routes/assistant.py · apps/api/app/schemas/assistant.py<br />apps/api/app/models/workstation.py</div>
+          <div class="mt-6 grid gap-4 lg:grid-cols-2">
+            <section class="diagram rounded-xl border border-red-200 bg-red-50/40 p-4">
+              <p class="text-xs font-semibold uppercase tracking-wider text-red-700">Before · persistence stops at the backend</p>
+              <pre class="mermaid mt-3">
+sequenceDiagram
+  participant Page as Current page
+  participant Full as Assistant page
+  participant Store as Conversations
+  Page->>Full: navigate with query scope
+  Full->>Store: create one message
+  Store-->>Full: one response
+  Note over Full: no history switcher<br/>no continued thread<br/>no page context contract
+              </pre>
+            </section>
+            <section class="diagram rounded-xl border border-indigo-200 bg-indigo-50/40 p-4">
+              <p class="text-xs font-semibold uppercase tracking-wider text-indigo-700">After · two adapters, one deep workspace</p>
+              <div class="mt-6 grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-center text-xs">
+                <div class="space-y-2"><p class="rounded border border-slate-300 bg-white p-3">drawer adapter</p><p class="rounded border border-slate-300 bg-white p-3">full-page adapter</p></div>
+                <span class="text-xl">→</span>
+                <div class="deep rounded-xl border-2 border-indigo-300 p-5"><b>Conversation Workspace</b><div class="mt-3 space-y-2 text-slate-300"><p>active thread</p><p>history</p><p>page scope</p><p>cross-page continuity</p></div></div>
+              </div>
+              <p class="mt-6 text-center text-xs text-slate-500">Two adapters justify the seam.</p>
+            </section>
+          </div>
+          <dl class="mt-6 grid gap-4 md:grid-cols-3">
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Problem</dt><dd class="mt-1 text-sm">Conversation persistence exists in storage, but the frontend exposes one result, the shell owns no page context, and continued messages do not inherit saved portfolio scope.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Solution</dt><dd class="mt-1 text-sm">Concentrate thread state, page scope, history, and continuity in one deep module shared by drawer and full-page adapters.</dd></div>
+            <div><dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Deletion test</dt><dd class="mt-1 text-sm">Without the shared workspace, drawer and full page duplicate async, history, and scope behavior; the seam is real.</dd></div>
+          </dl>
+          <ul class="mt-5 flex flex-wrap gap-2 text-xs"><li class="rounded bg-emerald-50 px-3 py-2">locality: thread state</li><li class="rounded bg-emerald-50 px-3 py-2">leverage: two adapters</li><li class="rounded bg-emerald-50 px-3 py-2">scope tests survive navigation</li><li class="rounded bg-amber-50 px-3 py-2">sequence after Phase 10</li></ul>
+        </article>
+      </section>
+
+      <section id="top-recommendation" class="deep rounded-2xl border-2 border-indigo-300 p-8 shadow-lg">
+        <p class="text-xs font-semibold uppercase tracking-[.2em] text-indigo-200">Top recommendation</p>
+        <a href="#context-builder" class="mt-2 block text-3xl font-semibold tracking-tight text-white underline decoration-indigo-400 underline-offset-4">Deepen the Canonical Intelligence Context module first</a>
+        <p class="mt-3 max-w-3xl text-sm leading-6 text-slate-300">It creates the highest leverage seam: Assistant reasoning, company research, event relevance, and later page-aware chat can all consume the same current, evidence-bearing context without duplicating truth.</p>
+      </section>
+    </main>
+  </body>
+</html>
