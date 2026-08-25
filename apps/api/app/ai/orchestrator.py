@@ -545,7 +545,7 @@ def _deterministic_answer(
     freshness: dict[str, object] | None,
     scenario_history: dict[str, object] | None,
     citations: list[dict[str, object]],
-    security_context: dict[str, object] | None = None,
+    canonical_context_payload: dict[str, object] | None = None,
 ) -> tuple[str, list[str], list[dict[str, object]], set[str]]:
     base_lines, evidence = (
         ([], []) if intent == "security_fit" else _base_portfolio_evidence(summary)
@@ -553,7 +553,7 @@ def _deterministic_answer(
     intent_evidence: list[dict[str, object]] = []
     if intent == "security_fit":
         intent_lines, uncertainty, intent_evidence = _answer_security_fit(
-            security_context, citations
+            canonical_context_payload, citations
         )
     elif intent == "decision_request":
         intent_lines, uncertainty, intent_evidence = _answer_decision_request(
@@ -806,7 +806,7 @@ async def run_assistant(
     summary = quant = compliance = risk_budget = scenario_history = None
     holding_symbols: list[str] = []
     security_symbol: str | None = None
-    security_context = None
+    canonical_context_payload = None
     canonical_request = None
     canonical_context = None
     if payload.instrument_id:
@@ -819,7 +819,7 @@ async def run_assistant(
             question=payload.question,
         )
         security_symbol = canonical_context.symbol
-        security_context = canonical_context.model_dump(mode="json")
+        canonical_context_payload = canonical_context.model_dump(mode="json")
         trace.append(
             {
                 "tool": "intelligence.canonical_context",
@@ -916,7 +916,7 @@ async def run_assistant(
         freshness,
         scenario_history,
         citations,
-        security_context,
+        canonical_context_payload,
     )
     if canonical_context:
         uncertainty = list(dict.fromkeys([*uncertainty, *context_uncertainty(canonical_context)]))
@@ -1024,7 +1024,7 @@ async def run_assistant(
                     "question": payload.question,
                     "intent": intent,
                     "conversation_history": prior_history,
-                    "canonical_context": security_context,
+                    "canonical_context": canonical_context_payload,
                     "calculated_evidence": evidence,
                     "canonical_evidence": canonical_evidence,
                     "source_citations": citation_evidence,

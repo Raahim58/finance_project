@@ -69,13 +69,12 @@ without publishing Celery work inline. The existing Phase 2, macro, evidence, an
 live-market schedulers remain responsible for publication and execution. This keeps
 authenticated requests bounded when Redis or a worker is unavailable.
 
-The retained legacy `security_intelligence()` path differs deliberately during the
-7B parity window: it can expose raw events and application-level investor profile
-fields, while canonical consumers admit material normalized events, retrieve RAG
-only for a supplied purpose/question, source all investment preferences from the
-selected portfolio IPS, and expose section-level missing/stale states. The legacy
-endpoint remains available only for rollback and Phase 7C review; it is not removed
-in this pass.
+Phase 7C retires the legacy security-context assembler, GET route, tool registration,
+frontend contract, and response shape. Canonical Intelligence Context is now the sole
+shared intelligence assembly contract for Company Research and Assistant. Candidate
+evaluation and proposal persistence remain separate deterministic workflows; their
+POST routes, portfolio comparisons, scenarios, IPS checks, and audit behavior are
+unchanged.
 
 Global Evidence v1 is deliberately staged. Pass 0 established persistence and
 contracts. Pass 1 adds the first synchronous vertical slice: configured discovery

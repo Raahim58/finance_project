@@ -15,14 +15,14 @@ Intelligence V1 is orchestration, not a new source of portfolio truth.
 | Stress | Existing scenario templates and shock resolver | Same scenarios evaluated against current and proposed weights |
 | Constraints | Confirmed IPS and compliance service | Current, proposed, and stressed compliance |
 | Saved decision | Existing sandbox `AllocationSet` and audit event | Reviewable proposal with the evaluation assumptions and stress package |
-| Explanation | Assistant tool registry and grounding guard | Security + portfolio context; deterministic numerical evidence remains authoritative |
+| Explanation | Canonical Intelligence Context and grounding guard | Security + portfolio context; deterministic numerical evidence remains authoritative |
 
 ## API flow
 
-- `GET /intelligence/securities/{symbol}?portfolio_id=...` returns observed facts, model outputs, assumptions, evidence provenance, portfolio relevance, and explicit missing-data warnings.
+- `GET /companies/{instrument_id}/overview?portfolio_id=...` returns the versioned Canonical Intelligence Context, compact receipt, portfolio relevance for exactly the selected portfolio, and explicit section-level missing-data states.
 - `POST /intelligence/securities/{symbol}/evaluate` evaluates `add`, `reduce`, or `remove` using a manual target, or optimizer sizing for an add. It returns current/proposed metrics, risk contributions, compliance, stress results, and deterministic trade-offs. It does not mutate holdings or transactions.
 - `POST /intelligence/securities/{symbol}/proposals` repeats the authoritative evaluation and saves the proposed weights as an existing `sandbox` allocation. The existing proposal audit event is recorded.
-- Assistant requests may include `instrument_id` and `portfolio_id`. The allowlisted `intelligence.security_context` tool composes the same context for deterministic or LLM-backed explanations.
+- Assistant requests may include `instrument_id` and `portfolio_id`. Assistant orchestration consumes the same versioned Canonical Intelligence Context for deterministic or LLM-backed explanations; Security Fit requires the selected portfolio and its confirmed IPS.
 
 No database migration is required because V1 deliberately reuses `AllocationSet` for proposals and existing audit infrastructure.
 

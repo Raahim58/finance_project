@@ -47,15 +47,6 @@ export type CompanyResearch = {
   refresh_request_id?:string|null;
 };
 
-export type SecurityIntelligence = {
-  security:{id:string;symbol:string;name:string;sector?:string|null};
-  observed_facts:Record<string,unknown>;
-  model_outputs:{portfolio_relevance?:Record<string,unknown>|null;regime?:Record<string,unknown>};
-  assumptions:Array<string|null>;
-  ai_interpretation:null;
-  evidence:Record<string,unknown>;
-  missing_data:string[];
-};
 export type CandidateEvaluation = {
   candidate:{symbol:string;action:string;sizing:string;current_weight:number;proposed_weight:number};
   comparison:PortfolioComparison;
@@ -534,7 +525,6 @@ export async function getCompanyResearch(symbol:string,options?:{portfolioId?:st
 export function getContextRefresh(refreshId:string){return request<{refresh_request_id:string;status:string;needs_rebuild?:boolean;result?:CompanyResearch}>(`/research/context-refreshes/${encodeURIComponent(refreshId)}`);}
 export function deactivateContextRefresh(refreshId:string){return request<{refresh_request_id:string;active:boolean}>(`/research/context-refreshes/${encodeURIComponent(refreshId)}/deactivate`,{method:"POST"});}
 export function getResearchEvents(eventType?:string,limit=30){const params=new URLSearchParams({limit:String(limit)});if(eventType)params.set("event_type",eventType);return request<ResearchEvent[]>(`/research/events?${params.toString()}`);}
-export function getSecurityIntelligence(symbol:string,portfolioId?:string){const query=portfolioId?`?portfolio_id=${encodeURIComponent(portfolioId)}`:"";return request<SecurityIntelligence>(`/intelligence/securities/${encodeURIComponent(symbol)}${query}`);}
 export function evaluateSecurity(symbol:string,payload:Record<string,unknown>){return request<CandidateEvaluation>(`/intelligence/securities/${encodeURIComponent(symbol)}/evaluate`,{method:"POST",body:JSON.stringify(payload)});}
 export function saveSecurityProposal(symbol:string,payload:Record<string,unknown>){return request<{proposal:AllocationSet;evaluation:CandidateEvaluation;ledger_mutated:false}>(`/intelligence/securities/${encodeURIComponent(symbol)}/proposals`,{method:"POST",body:JSON.stringify(payload)});}
 import type { components as OpenApi } from "@/lib/generated/api";

@@ -9,8 +9,6 @@ from app.services.context_consumer_service import (
 from app.services.rag_service import search_rag
 from app.services.research_service import list_events, search_instruments
 from app.services.ingestion_service import refresh_company_research
-from app.services.intelligence_service import security_intelligence
-from app.models.workstation import Instrument
 from app.tools.registry import ToolDefinition, ToolRegistry
 
 
@@ -26,10 +24,6 @@ class CompanyInput(BaseModel):
     portfolio_id: str | None = None
     research_purpose: ResearchPurpose | None = None
     question: str | None = Field(default=None, min_length=1, max_length=2000)
-
-
-class SecurityContextInput(CompanyInput):
-    portfolio_id: str | None = None
 
 
 class EventInput(BaseModel):
@@ -63,13 +57,6 @@ def _company(db, user, payload: CompanyInput):
             question=payload.question,
         )
     )
-
-
-def _security_context(db, user, payload: SecurityContextInput):
-    instrument = db.get(Instrument, payload.instrument_id)
-    if instrument is None:
-        return {"missing_data": ["Instrument was not found."]}
-    return security_intelligence(db, user, instrument.symbol, payload.portfolio_id)
 
 
 def _events(db, _user, payload: EventInput):
@@ -116,20 +103,6 @@ def register_research_tools(registry: ToolRegistry) -> None:
             12,
             "medium",
             _company,
-        )
-    )
-    registry.register(
-        ToolDefinition(
-            "intelligence.security_context",
-            "1.0",
-            "Security intelligence composed with the selected portfolio and IPS",
-            SecurityContextInput,
-            "research:read",
-            True,
-            False,
-            30,
-            "medium",
-            _security_context,
         )
     )
     registry.register(

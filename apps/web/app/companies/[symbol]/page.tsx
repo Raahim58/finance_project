@@ -13,7 +13,6 @@ import {
   CompanyResearch,
   MarketPrice,
   Portfolio,
-  SecurityIntelligence,
   evaluateSecurity,
   getCompanyCompleteness,
   getCompanyDetail,
@@ -22,7 +21,6 @@ import {
   getContextRefresh,
   deactivateContextRefresh,
   getPortfolios,
-  getSecurityIntelligence,
   saveSecurityProposal,
 } from "@/lib/api";
 import { formatMetric } from "@/lib/analytics";
@@ -116,7 +114,7 @@ function DecisionWorkbench({ symbol, instrumentId, portfolios }: { symbol: strin
   const [action, setAction] = useState("add");
   const [sizing, setSizing] = useState("manual");
   const [target, setTarget] = useState("5");
-  const [context, setContext] = useState<SecurityIntelligence | null>(null);
+  const [context, setContext] = useState<CompanyResearch | null>(null);
   const [result, setResult] = useState<CandidateEvaluation | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -125,21 +123,49 @@ function DecisionWorkbench({ symbol, instrumentId, portfolios }: { symbol: strin
   useEffect(() => { if (!portfolioId && portfolios.length) setPortfolioId(portfolios.find(row => row.is_default)?.id ?? portfolios[0].id); }, [portfolioId, portfolios]);
   useEffect(() => {
     setResult(null); setSavedVersion(null); setContext(null);
-    if (portfolioId) void getSecurityIntelligence(symbol, portfolioId).then(value => {
+    if (portfolioId) void getCompanyResearch(symbol, { portfolioId }).then(value => {
       setContext(value);
-      const relevance = value.model_outputs.portfolio_relevance as Record<string, unknown> | undefined;
-      const ownership = relevance?.ownership as Record<string, unknown> | undefined;
-      setTarget((Number(ownership?.weight ?? 0) * 100 + 5).toFixed(1));
+      const relevance = value.portfolio_relevance[0];
+      setTarget((Number(relevance?.weight ?? 0) * 100 + 5).toFixed(1));
     }).catch((error: Error) => setMessage(error.message));
   }, [symbol, portfolioId]);
 
-  const relevance = context?.model_outputs.portfolio_relevance as Record<string, unknown> | undefined;
-  const ownership = relevance?.ownership as Record<string, unknown> | undefined;
-  const sector = relevance?.sector_exposure as Record<string, unknown> | undefined;
-  const correlation = relevance?.correlation as Record<string, unknown> | undefined;
-  const riskContribution = relevance?.risk_contribution as Record<string, unknown> | undefined;
-  const regime = context?.model_outputs.regime as Record<string, unknown> | undefined;
-  const currentWeight = Number(ownership?.weight ?? 0) * 100;
+  useEffect(() => {
+    const refreshId = context?.refresh_request_id;
+    if (!refreshId) return;
+    let active = true;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const poll = async () => {
+      try {
+        const refresh = await getContextRefresh(refreshId);
+        if (!active) return;
+        if (refresh.status === "rebuilt" && refresh.result) {
+          setContext(refresh.result);
+          if (timer) clearInterval(timer);
+        }
+      } catch {
+        // Keep the current receipt visible; returning to the view rebuilds lazily.
+      }
+    };
+    timer = setInterval(() => void poll(), 5000);
+    void poll();
+    return () => {
+      active = false;
+      if (timer) clearInterval(timer);
+      void deactivateContextRefresh(refreshId).catch(() => undefined);
+    };
+  }, [context?.refresh_request_id]);
+
+  const relevance = context?.portfolio_relevance[0];
+  const sections = context?.context.sections as Record<string, { state?: string; data?: Record<string, unknown> }> | undefined;
+  const ips = sections?.ips?.data;
+  const terms = ips?.terms as Record<string, unknown> | undefined;
+  const macro = sections?.macro?.data;
+  const marketRisk = sections?.market_risk?.data;
+  const riskMetrics = marketRisk?.risk_metrics as Record<string, unknown> | undefined;
+  const currentWeight = Number(relevance?.weight ?? 0) * 100;
+  const positionLimit = Number(terms?.max_instrument_weight);
+  const positionHeadroom = Number.isFinite(positionLimit) ? Math.max(0, positionLimit * 100 - currentWeight) : null;
   const owned = currentWeight > 0;
   const targetNumber = Number(target);
   const valid = sizing === "optimizer" || action === "remove" || (Number.isFinite(targetNumber) && targetNumber >= 0 && targetNumber <= 100 && (action !== "add" || targetNumber + 1e-6 >= currentWeight) && (action !== "reduce" || (owned && targetNumber <= currentWeight + 1e-6)));
@@ -175,12 +201,12 @@ function DecisionWorkbench({ symbol, instrumentId, portfolios }: { symbol: strin
         <label className="field-label">Sizing<select className="field" value={sizing} onChange={event => { setSizing(event.target.value); setResult(null); }} disabled={action !== "add"}><option value="manual">Choose target</option><option value="optimizer">Let optimizer size it</option></select></label>
         <label className="field-label">Target portfolio weight{action === "remove" || sizing === "optimizer" ? <input className="field" value={action === "remove" ? "0%" : "Optimizer determined"} disabled /> : <input className="field" type="number" min="0" max="100" step="0.5" value={target} onChange={event => { setTarget(event.target.value); setResult(null); setSavedVersion(null); }} />}</label>
       </div>}
-      {relevance ? <><p className="eyebrow">Observed portfolio facts</p><div className="metric-strip grid-cols-4"><Metric label={`Current ${symbol} weight`} value={pct(currentWeight)} /><Metric label={`${String(sector?.sector ?? "Sector")} exposure`} value={pct(Number(sector?.current_weight ?? 0) * 100)} /><Metric label="Sector headroom" term="Sector headroom" value={sector?.headroom == null ? "Not configured" : pct(Number(sector.headroom) * 100)} /><Metric label="Position headroom" term="Position headroom" value={relevance.position_headroom == null ? "Not configured" : pct(Number(relevance.position_headroom) * 100)} /></div><p className="eyebrow">Model context</p><div className="metric-strip grid-cols-3"><Metric label="Average holding correlation" term="Average holding correlation" value={correlation?.available ? Number(correlation.average_with_holdings).toFixed(2) : "Unavailable"} /><Metric label="Current risk contribution" term="Risk contribution" value={riskContribution?.available ? pct(Number(riskContribution.percentage) * 100) : "Unavailable"} /><Metric label="Macro regime" term="Macro regime" value={title(String(regime?.regime ?? "not evaluated"))} /></div></> : null}
+      {relevance ? <><p className="eyebrow">Observed portfolio facts</p><div className="metric-strip grid-cols-4"><Metric label={`Current ${symbol} weight`} value={pct(currentWeight)} /><Metric label="Market value" value={relevance.market_value == null ? "Unavailable" : `PKR ${num(relevance.market_value, 0)}`} /><Metric label="Position headroom" term="Position headroom" value={positionHeadroom == null ? "Not configured" : pct(positionHeadroom)} /><Metric label="IPS state" term="IPS" value={title(String(sections?.ips?.state ?? "not evaluated"))} /></div><p className="eyebrow">Model context</p><div className="metric-strip grid-cols-3"><Metric label="Annual volatility" term="Annual volatility" value={riskMetrics?.annual_volatility == null ? "Unavailable" : pct(Number(riskMetrics.annual_volatility) * 100)} /><Metric label="Marginal risk" term="Risk contribution" value="Evaluate change" /><Metric label="Macro regime" term="Macro regime" value={title(String(macro?.regime ?? "not evaluated"))} /></div></> : null}
       {!valid ? <div className="notice notice-warn"><Icon name="warning" /><span>{action === "add" ? `Choose a target at or above the current ${pct(currentWeight)} weight.` : "Choose a target between 0% and the current weight."}</span></div> : null}
       <div className="flex flex-wrap gap-2"><button className="btn btn-primary" disabled={!portfolioId || busy || !valid} onClick={evaluate}>{busy ? "Evaluating…" : "Evaluate change"}</button>{result ? <button className="btn btn-secondary" disabled={busy} onClick={save}>Save for review</button> : null}</div>
       {message ? <div className="notice notice-error"><Icon name="warning" />{message}</div> : null}
       {savedVersion ? <div className="notice notice-good"><Icon name="check" /><span>Proposal v{savedVersion} saved. Holdings were not changed. <Link className="font-semibold underline" href={`/portfolios/${portfolioId}/build`}>Open proposal review</Link></span></div> : null}
-      {context?.missing_data.length ? <div className="notice notice-warn"><Icon name="warning" /><span>{context.missing_data.join(" ")}</span></div> : null}
+      {Array.isArray(context?.context.deficiencies) && context.context.deficiencies.length ? <div className="notice notice-warn"><Icon name="warning" /><span>{context.context.deficiencies.map(item => String((item as Record<string, unknown>).reason ?? "Requested context is incomplete.")).join(" ")}</span></div> : null}
       {result ? <DecisionResult result={result} /> : null}
     </div>
   </section>;
