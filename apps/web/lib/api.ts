@@ -40,6 +40,11 @@ export type CompanyResearch = {
   derived_fundamentals: { latest?:Record<string,Record<string,unknown>>; growth?:Record<string,Record<string,unknown>>; ratios?:Record<string,Record<string,unknown>>; valuation?:Record<string,unknown> };
   documents: Array<Record<string,unknown>>; events: CompanyEvent[]; portfolio_relevance:Array<Record<string,unknown>>;
   has_synthetic_data: boolean;
+  context_contract_version:string;
+  context:Record<string,unknown>;
+  context_receipt:Record<string,unknown>;
+  context_receipt_id:string;
+  refresh_request_id?:string|null;
 };
 
 export type SecurityIntelligence = {
@@ -301,6 +306,10 @@ export type AssistantResult = {
   freshness_warnings: string[];
   tool_trace: Array<Record<string, unknown>>;
   synthesis: {mode:"llm_grounded"|"deterministic_fallback";provider?:string|null;model?:string|null;reason?:string|null};
+  context_contract_version?:string|null;
+  context_status?:string|null;
+  context_receipt?:Record<string,unknown>|null;
+  refresh_request_id?:string|null;
   created_at: string;
 };
 
@@ -521,7 +530,9 @@ export function searchInstruments(query = "") {
   return request<Array<{ id: string; symbol: string; name: string; sector?: string | null }>>(`/instruments?query=${encodeURIComponent(query)}`);
 }
 
-export async function getCompanyResearch(symbol:string){const matches=await searchInstruments(symbol);const instrument=matches.find(item=>item.symbol.toUpperCase()===symbol.toUpperCase());if(!instrument)throw new Error("Instrument not found");return request<CompanyResearch>(`/companies/${encodeURIComponent(instrument.id)}/overview`);}
+export async function getCompanyResearch(symbol:string,options?:{portfolioId?:string;researchPurpose?:"recent_changes"|"outlook"|"risks"|"drivers";question?:string}){const matches=await searchInstruments(symbol);const instrument=matches.find(item=>item.symbol.toUpperCase()===symbol.toUpperCase());if(!instrument)throw new Error("Instrument not found");const params=new URLSearchParams();if(options?.portfolioId)params.set("portfolio_id",options.portfolioId);if(options?.researchPurpose)params.set("research_purpose",options.researchPurpose);if(options?.question)params.set("question",options.question);const query=params.size?`?${params.toString()}`:"";return request<CompanyResearch>(`/companies/${encodeURIComponent(instrument.id)}/overview${query}`);}
+export function getContextRefresh(refreshId:string){return request<{refresh_request_id:string;status:string;needs_rebuild?:boolean;result?:CompanyResearch}>(`/research/context-refreshes/${encodeURIComponent(refreshId)}`);}
+export function deactivateContextRefresh(refreshId:string){return request<{refresh_request_id:string;active:boolean}>(`/research/context-refreshes/${encodeURIComponent(refreshId)}/deactivate`,{method:"POST"});}
 export function getResearchEvents(eventType?:string,limit=30){const params=new URLSearchParams({limit:String(limit)});if(eventType)params.set("event_type",eventType);return request<ResearchEvent[]>(`/research/events?${params.toString()}`);}
 export function getSecurityIntelligence(symbol:string,portfolioId?:string){const query=portfolioId?`?portfolio_id=${encodeURIComponent(portfolioId)}`:"";return request<SecurityIntelligence>(`/intelligence/securities/${encodeURIComponent(symbol)}${query}`);}
 export function evaluateSecurity(symbol:string,payload:Record<string,unknown>){return request<CandidateEvaluation>(`/intelligence/securities/${encodeURIComponent(symbol)}/evaluate`,{method:"POST",body:JSON.stringify(payload)});}

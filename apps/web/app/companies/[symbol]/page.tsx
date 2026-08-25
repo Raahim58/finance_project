@@ -19,6 +19,8 @@ import {
   getCompanyDetail,
   getCompanyHistory,
   getCompanyResearch,
+  getContextRefresh,
+  deactivateContextRefresh,
   getPortfolios,
   getSecurityIntelligence,
   saveSecurityProposal,
@@ -49,6 +51,32 @@ export default function CompanyPage() {
       .catch((reason: Error) => setError(reason.message))
       .finally(() => setLoading(false));
   }, [symbol]);
+
+  useEffect(() => {
+    const refreshId = research?.refresh_request_id;
+    if (!refreshId) return;
+    let active = true;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const poll = async () => {
+      try {
+        const refresh = await getContextRefresh(refreshId);
+        if (!active) return;
+        if (refresh.status === "rebuilt" && refresh.result) {
+          setResearch(refresh.result);
+          if (timer) clearInterval(timer);
+        }
+      } catch {
+        // The visible degraded result remains honest; a later page load rebuilds lazily.
+      }
+    };
+    timer = setInterval(() => void poll(), 5000);
+    void poll();
+    return () => {
+      active = false;
+      if (timer) clearInterval(timer);
+      void deactivateContextRefresh(refreshId).catch(() => undefined);
+    };
+  }, [research?.refresh_request_id]);
 
   const trajectory = useMemo(() => history.length < 2 ? null : (Number(history.at(-1)?.close) / Number(history[0].close) - 1) * 100, [history]);
   if (loading) return <div className="page-wrap"><div className="panel h-96 skeleton" /></div>;

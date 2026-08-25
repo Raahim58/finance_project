@@ -47,6 +47,36 @@ Section reuse checks cheap authoritative dependency versions before invoking the
 section provider, so a cache hit avoids calculations and narrative retrieval rather
 than merely comparing their outputs afterward.
 
+Phase 7B makes Company Research and Assistant consumers of that same contract.
+Company Research is company-only unless one portfolio is explicitly supplied; a
+portfolio switch changes only the portfolio and IPS dependencies while stable
+company evidence remains reusable. The authenticated overview response includes
+the contract version, compact receipt, refresh identifier, and a temporary
+compatibility projection for the existing Company page. That projection is derived
+from canonical sections and does not call the legacy company assembler.
+
+Assistant builds intent-scoped canonical sections before deterministic fallback or
+LLM synthesis. Security Fit requires one owned portfolio and its selected confirmed
+IPS, always includes bounded company RAG and material normalized events, and uses
+the normal safe planning loop. Application-level risk tolerance, horizon, and
+sector preferences are excluded from intelligence; user preferences may still
+choose an LLM provider. Canonical evidence IDs form the synthesis allowlist and the
+saved Assistant message references the exact compact receipt. A completed refresh
+adds a linked deterministic follow-up instead of editing the original answer.
+
+Consumer requests persist reconstructable ingestion coverage and refresh ledgers
+without publishing Celery work inline. The existing Phase 2, macro, evidence, and
+live-market schedulers remain responsible for publication and execution. This keeps
+authenticated requests bounded when Redis or a worker is unavailable.
+
+The retained legacy `security_intelligence()` path differs deliberately during the
+7B parity window: it can expose raw events and application-level investor profile
+fields, while canonical consumers admit material normalized events, retrieve RAG
+only for a supplied purpose/question, source all investment preferences from the
+selected portfolio IPS, and expose section-level missing/stale states. The legacy
+endpoint remains available only for rollback and Phase 7C review; it is not removed
+in this pass.
+
 Global Evidence v1 is deliberately staged. Pass 0 established persistence and
 contracts. Pass 1 adds the first synchronous vertical slice: configured discovery
 through RSS/Atom, sitemaps, GDELT, verified listing pages, and the observed PSX

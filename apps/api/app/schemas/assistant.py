@@ -26,4 +26,8 @@ class AssistantResponse(BaseModel):
     freshness_warnings: list[str]
     tool_trace: list[dict[str, object]]
     synthesis: dict[str, object]
+    context_contract_version: str | None = None
+    context_status: str | None = None
+    context_receipt: dict[str, object] | None = None
+    refresh_request_id: str | None = None
     created_at: datetime

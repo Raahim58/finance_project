@@ -65,8 +65,12 @@ class ContextIngestionRouter:
     def decide(self, deficiency: ContextDeficiency) -> IngestionRoute:
         route = self.ROUTES.get(deficiency.category)
         if route is None:
-            return IngestionRoute(None, None, "The deficiency requires user or application action, not ingestion.")
-        return IngestionRoute(route[0], route[1], "Selected from deficiency category and expected cadence.")
+            return IngestionRoute(
+                None, None, "The deficiency requires user or application action, not ingestion."
+            )
+        return IngestionRoute(
+            route[0], route[1], "Selected from deficiency category and expected cadence."
+        )
 
 
 class RoutedIngestionCoordinator:
@@ -74,7 +78,9 @@ class RoutedIngestionCoordinator:
 
     def __init__(
         self,
-        dispatchers: Mapping[str, Callable[[ContextDeficiency, IngestionRoute], IngestionWorkReference]],
+        dispatchers: Mapping[
+            str, Callable[[ContextDeficiency, IngestionRoute], IngestionWorkReference]
+        ],
         status_lookup: Callable[[str], IngestionWorkReference],
         *,
         router: ContextIngestionRouter | None = None,
@@ -135,7 +141,13 @@ def _upsert_deficiency(
         "last_seen_at": now,
     }
     dialect = db.get_bind().dialect.name
-    factory = postgresql_insert if dialect == "postgresql" else sqlite_insert if dialect == "sqlite" else None
+    factory = (
+        postgresql_insert
+        if dialect == "postgresql"
+        else sqlite_insert
+        if dialect == "sqlite"
+        else None
+    )
     if factory is not None:
         statement = factory(ContextDeficiencyRecord).values(**values)
         statement = statement.on_conflict_do_update(
@@ -151,9 +163,11 @@ def _upsert_deficiency(
         row_id = db.scalar(statement)
         return db.get(ContextDeficiencyRecord, row_id, populate_existing=True)
 
-    row = db.scalar(select(ContextDeficiencyRecord).where(
-        ContextDeficiencyRecord.fingerprint == deficiency.fingerprint
-    ).with_for_update())
+    row = db.scalar(
+        select(ContextDeficiencyRecord)
+        .where(ContextDeficiencyRecord.fingerprint == deficiency.fingerprint)
+        .with_for_update()
+    )
     if row is None:
         try:
             with db.begin_nested():
@@ -162,9 +176,11 @@ def _upsert_deficiency(
                 db.flush()
                 return row
         except IntegrityError:
-            row = db.scalar(select(ContextDeficiencyRecord).where(
-                ContextDeficiencyRecord.fingerprint == deficiency.fingerprint
-            ).with_for_update())
+            row = db.scalar(
+                select(ContextDeficiencyRecord)
+                .where(ContextDeficiencyRecord.fingerprint == deficiency.fingerprint)
+                .with_for_update()
+            )
             if row is None:
                 raise
     row.occurrence_count += 1
@@ -180,10 +196,12 @@ class ContextDeficiencyBridge:
         self.coordinator = coordinator
 
     @classmethod
-    def production(cls, db: Session, user: User) -> "ContextDeficiencyBridge":
+    def production(
+        cls, db: Session, user: User, *, publish: bool = True
+    ) -> "ContextDeficiencyBridge":
         from app.services.context_ingestion_coordinator import DatabaseIngestionCoordinator
 
-        return cls(DatabaseIngestionCoordinator(db, user_id=user.id))
+        return cls(DatabaseIngestionCoordinator(db, user_id=user.id, publish=publish))
 
     def record_and_schedule(
         self,
@@ -193,10 +211,21 @@ class ContextDeficiencyBridge:
         context: IntelligenceContext,
         *,
         active: bool = True,
+        consumer_type: str | None = None,
+        consumer_key: str | None = None,
+        source_message_id: str | None = None,
+        output_id: str | None = None,
     ) -> tuple[IntelligenceContext, ContextRefreshRequest | None]:
         """Persist/deduplicate deficiencies and delegate routing to the coordinator."""
 
-        self.persist_receipt(db, user, context)
+        self.persist_receipt(
+            db,
+            user,
+            context,
+            consumer_type=consumer_type,
+            consumer_key=consumer_key,
+            output_id=output_id,
+        )
         if not context.deficiencies:
             db.commit()
             return context, None
@@ -220,7 +249,13 @@ class ContextDeficiencyBridge:
                         state="failed",
                         coordinator=type(self.coordinator).__name__,
                     )
-                    work.append({"deficiency_id": row.id, **reference.model_dump(), "error": f"{type(exc).__name__}: {str(exc)[:240]}"})
+                    work.append(
+                        {
+                            "deficiency_id": row.id,
+                            **reference.model_dump(),
+                            "error": f"{type(exc).__name__}: {str(exc)[:240]}",
+                        }
+                    )
                     row.status = "failed"
                     continue
                 linked = {"deficiency_id": row.id, **reference.model_dump()}
@@ -237,8 +272,13 @@ class ContextDeficiencyBridge:
             request_json=_json(request),
             deficiency_ids_json=_json([row.id for row in records]),
             work_json=_json(work),
-            status="refreshing" if any(item["state"] not in TERMINAL_STATES for item in work) else "terminal",
+            status="refreshing"
+            if any(item["state"] not in TERMINAL_STATES for item in work)
+            else "terminal",
             active=active,
+            consumer_type=consumer_type,
+            consumer_key=consumer_key,
+            source_message_id=source_message_id,
         )
         db.add(refresh)
         db.commit()
@@ -246,17 +286,29 @@ class ContextDeficiencyBridge:
         refreshing.status = "refreshing"
         refreshing.message = "Up-to-date data is being fetched. This context will refresh once the linked ingestion work finishes."
         for section in refreshing.sections.values():
-            if section.state in {ContextState.MISSING, ContextState.STALE, ContextState.INCOMPLETE, ContextState.NOT_EVALUATED}:
+            if section.state in {
+                ContextState.MISSING,
+                ContextState.STALE,
+                ContextState.INCOMPLETE,
+                ContextState.NOT_EVALUATED,
+            }:
                 section.state = ContextState.REFRESHING
         return refreshing, refresh
 
     @staticmethod
     def _existing_work(db: Session, deficiency_ids: set[str]) -> dict[str, dict]:
         result: dict[str, dict] = {}
-        pending = db.scalars(select(ContextRefreshRequest).where(ContextRefreshRequest.status.in_(("pending", "refreshing")))).all()
+        pending = db.scalars(
+            select(ContextRefreshRequest).where(
+                ContextRefreshRequest.status.in_(("pending", "refreshing"))
+            )
+        ).all()
         for refresh in pending:
             for item in json.loads(refresh.work_json or "[]"):
-                if item.get("deficiency_id") in deficiency_ids and item.get("state") not in TERMINAL_STATES:
+                if (
+                    item.get("deficiency_id") in deficiency_ids
+                    and item.get("state") not in TERMINAL_STATES
+                ):
                     result[item["deficiency_id"]] = item
         return result
 
@@ -331,7 +383,9 @@ class ContextDeficiencyBridge:
         return rebuilt
 
     @staticmethod
-    def _resolve_absent_deficiencies(db: Session, refresh: ContextRefreshRequest, context: IntelligenceContext) -> None:
+    def _resolve_absent_deficiencies(
+        db: Session, refresh: ContextRefreshRequest, context: IntelligenceContext
+    ) -> None:
         remaining = {item.fingerprint for item in context.deficiencies}
         for deficiency_id in json.loads(refresh.deficiency_ids_json or "[]"):
             row = db.get(ContextDeficiencyRecord, deficiency_id)
@@ -340,12 +394,23 @@ class ContextDeficiencyBridge:
                 row.resolved_at = datetime.now(UTC)
 
     @staticmethod
-    def persist_receipt(db: Session, user: User, context: IntelligenceContext) -> IntelligenceContextReceiptRecord:
+    def persist_receipt(
+        db: Session,
+        user: User,
+        context: IntelligenceContext,
+        *,
+        consumer_type: str | None = None,
+        consumer_key: str | None = None,
+        output_id: str | None = None,
+    ) -> IntelligenceContextReceiptRecord:
         receipt = IntelligenceContextReceiptRecord(
             user_id=user.id,
             context_id=context.context_id,
             contract_version=context.contract_version,
             content_hash=context.receipt.content_hash,
+            consumer_type=consumer_type,
+            consumer_key=consumer_key,
+            output_id=output_id,
             receipt_json=_json(context.receipt),
         )
         db.add(receipt)

@@ -4,7 +4,7 @@ import { FormEvent,Suspense,useEffect,useRef,useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { TermHelp } from "@/components/TermHelp";
-import { AssistantResult,Portfolio,getPortfolios,sendAssistantMessage } from "@/lib/api";
+import { AssistantResult,Portfolio,deactivateContextRefresh,getPortfolios,sendAssistantMessage } from "@/lib/api";
 
 export default function AssistantPage(){return <Suspense fallback={<div className="page-wrap"><div className="panel h-96 skeleton"/></div>}><AssistantContent/></Suspense>}
 function AssistantContent(){
@@ -13,6 +13,7 @@ function AssistantContent(){
   // user selection; the list load must never silently switch a question's scope.
   const requestSeq=useRef(0);
   useEffect(()=>{void getPortfolios().then(setPortfolios).catch((reason:unknown)=>setError(reason instanceof Error?`Portfolio scope request failed: ${reason.message}`:"Portfolio scope request failed"))},[]);
+  useEffect(()=>{const refreshId=result?.refresh_request_id;if(!refreshId)return;return()=>{void deactivateContextRefresh(refreshId).catch(()=>undefined)}},[result?.refresh_request_id]);
   async function ask(e:FormEvent){
     e.preventDefault();
     const askedQuestion=question;const askedPortfolioId=portfolioId;

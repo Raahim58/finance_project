@@ -52,7 +52,9 @@ def _month_keys(start: date, end: date):
     cursor = date(start.year, start.month, 1)
     while cursor <= end:
         yield cursor.year, cursor.month
-        cursor = date(cursor.year + (cursor.month == 12), 1 if cursor.month == 12 else cursor.month + 1, 1)
+        cursor = date(
+            cursor.year + (cursor.month == 12), 1 if cursor.month == 12 else cursor.month + 1, 1
+        )
 
 
 class DatabaseIngestionCoordinator:
@@ -65,11 +67,13 @@ class DatabaseIngestionCoordinator:
         user_id: str,
         router: ContextIngestionRouter | None = None,
         now=None,
+        publish: bool = True,
     ) -> None:
         self.db = db
         self.user_id = user_id
         self.router = router or ContextIngestionRouter()
         self.now = now or (lambda: datetime.now(UTC))
+        self.publish = publish
 
     def schedule(self, deficiency: ContextDeficiency) -> IngestionWorkReference:
         route = self.router.decide(deficiency)
@@ -79,28 +83,35 @@ class DatabaseIngestionCoordinator:
                 state="not_applicable",
                 coordinator=type(self).__name__,
             )
-        record = self.db.scalar(select(ContextDeficiencyRecord).where(
-            ContextDeficiencyRecord.fingerprint == deficiency.fingerprint
-        ))
+        record = self.db.scalar(
+            select(ContextDeficiencyRecord).where(
+                ContextDeficiencyRecord.fingerprint == deficiency.fingerprint
+            )
+        )
         if record is None:
             raise RuntimeError("Deficiency must be persisted before ingestion is scheduled")
-        work = self.db.scalar(select(ContextIngestionWork).where(
-            ContextIngestionWork.deficiency_id == record.id
-        ).with_for_update())
+        work = self.db.scalar(
+            select(ContextIngestionWork)
+            .where(ContextIngestionWork.deficiency_id == record.id)
+            .with_for_update()
+        )
         if work and work.status not in TERMINAL_STATES:
             return self._reference(work)
         now = self.now()
         if work is None:
             dialect = self.db.get_bind().dialect.name
             factory = (
-                postgresql_insert if dialect == "postgresql"
-                else sqlite_insert if dialect == "sqlite"
+                postgresql_insert
+                if dialect == "postgresql"
+                else sqlite_insert
+                if dialect == "sqlite"
                 else None
             )
             if factory is not None:
                 work_id = str(uuid4())
                 inserted_id = self.db.scalar(
-                    factory(ContextIngestionWork).values(
+                    factory(ContextIngestionWork)
+                    .values(
                         id=work_id,
                         deficiency_id=record.id,
                         family=route.family or "",
@@ -111,15 +122,21 @@ class DatabaseIngestionCoordinator:
                         requested_at=now,
                         deadline_at=now + self._timeout(route),
                         updated_at=now,
-                    ).on_conflict_do_nothing(
-                        index_elements=[ContextIngestionWork.deficiency_id]
-                    ).returning(ContextIngestionWork.id)
+                    )
+                    .on_conflict_do_nothing(index_elements=[ContextIngestionWork.deficiency_id])
+                    .returning(ContextIngestionWork.id)
                 )
-                work = self.db.get(
-                    ContextIngestionWork, inserted_id or work_id, populate_existing=True
-                ) if inserted_id else self.db.scalar(select(ContextIngestionWork).where(
-                    ContextIngestionWork.deficiency_id == record.id
-                ).with_for_update())
+                work = (
+                    self.db.get(
+                        ContextIngestionWork, inserted_id or work_id, populate_existing=True
+                    )
+                    if inserted_id
+                    else self.db.scalar(
+                        select(ContextIngestionWork)
+                        .where(ContextIngestionWork.deficiency_id == record.id)
+                        .with_for_update()
+                    )
+                )
                 if inserted_id is None:
                     if work is None:
                         raise RuntimeError("Concurrent ingestion work could not be resolved")
@@ -169,7 +186,9 @@ class DatabaseIngestionCoordinator:
             return self._reference(work)
         if self.now() >= _utc(work.deadline_at):
             work.status = "timed_out"
-            work.error_message = "Linked ingestion did not reach a terminal state before its deadline."
+            work.error_message = (
+                "Linked ingestion did not reach a terminal state before its deadline."
+            )
             work.terminal_at = self.now()
             self.db.commit()
             return self._reference(work)
@@ -195,7 +214,9 @@ class DatabaseIngestionCoordinator:
         )
 
     def _instrument(self, deficiency: ContextDeficiency) -> Instrument:
-        row = self.db.scalar(select(Instrument).where(Instrument.symbol == deficiency.entity_key.upper()))
+        row = self.db.scalar(
+            select(Instrument).where(Instrument.symbol == deficiency.entity_key.upper())
+        )
         if row is None:
             raise RuntimeError("Deficiency instrument is no longer present")
         return row
@@ -205,24 +226,32 @@ class DatabaseIngestionCoordinator:
     ) -> list[dict[str, str]]:
         if route.family == "current_market":
             # The existing live scheduler polls independently. Link to its next durable run.
-            return [{
-                "kind": "scheduled_run",
-                "job_key": f"refresh:{settings.market_data_mode}",
-                "requested_after": now.isoformat(),
-            }]
+            return [
+                {
+                    "kind": "scheduled_run",
+                    "job_key": f"refresh:{settings.market_data_mode}",
+                    "requested_after": now.isoformat(),
+                }
+            ]
         instrument = self._instrument(deficiency)
         if route.family == "market_history":
             links = self._queue_history(instrument, now)
-            links.append({
-                "kind": "screening_snapshot",
-                "instrument_id": instrument.id,
-                "requested_after": now.isoformat(),
-            })
+            links.append(
+                {
+                    "kind": "screening_snapshot",
+                    "instrument_id": instrument.id,
+                    "requested_after": now.isoformat(),
+                }
+            )
             return links
         if route.family == "company_reports":
             return self._queue_company_reports(instrument, now)
         if route.family == "macro":
-            result = enqueue_due_macro_refreshes(self.db, now=now)
+            result = enqueue_due_macro_refreshes(
+                self.db,
+                now=now,
+                publish=None if self.publish else (lambda _series, _run: None),
+            )
             if result.status == "disabled":
                 return [{"kind": "disabled", "reason": "macro_ingestion_disabled"}]
             return [{"kind": "ingestion_run", "id": run_id} for run_id in result.run_ids]
@@ -237,22 +266,22 @@ class DatabaseIngestionCoordinator:
         for year, month in _month_keys(start, end):
             period_key = f"{year:04d}-{month:02d}"
             row = coverage(self.db, instrument.id, "price_history", period_key, "dps")
-            if is_queueable(row, now):
-                reserve_and_publish(self.db, row, dps_history, (instrument.symbol, year, month), now)
+            if self.publish and is_queueable(row, now):
+                reserve_and_publish(
+                    self.db, row, dps_history, (instrument.symbol, year, month), now
+                )
             links.append({"kind": "coverage", "id": row.id})
         return links
 
     def _queue_company_reports(self, instrument: Instrument, now: datetime) -> list[dict[str, str]]:
         links: list[dict[str, str]] = []
         broad = coverage(self.db, instrument.id, "standardized_fundamentals", "current", "dps")
-        if is_queueable(broad, now, refresh_after=timedelta(days=30)):
+        if self.publish and is_queueable(broad, now, refresh_after=timedelta(days=30)):
             reserve_and_publish(self.db, broad, broad_fundamentals, (instrument.symbol,), now)
         links.append({"kind": "coverage", "id": broad.id})
         key = incremental_catalog_dispatch_key(now)
-        catalog = coverage(
-            self.db, instrument.id, "report_catalog_dispatch", key, "psx_financials"
-        )
-        if is_queueable(catalog, now):
+        catalog = coverage(self.db, instrument.id, "report_catalog_dispatch", key, "psx_financials")
+        if self.publish and is_queueable(catalog, now):
             reserve_and_publish(
                 self.db,
                 catalog,
@@ -276,13 +305,13 @@ class DatabaseIngestionCoordinator:
         )
         self.db.add(request)
         self.db.commit()
+        if not self.publish:
+            return {"kind": "evidence_request", "id": request.id}
         request.status = "running"
         request.started_at = now
         self.db.commit()
         try:
-            targeted_refresh.apply_async(
-                args=(request.id,), queue="evidence_discovery", priority=0
-            )
+            targeted_refresh.apply_async(args=(request.id,), queue="evidence_discovery", priority=0)
         except Exception as exc:
             # The evidence scheduler reconstructs queued requests from Postgres.
             request.status = "queued"
@@ -307,21 +336,29 @@ class DatabaseIngestionCoordinator:
 
     def _work_instrument(self, work: ContextIngestionWork) -> Instrument | None:
         deficiency = self.db.get(ContextDeficiencyRecord, work.deficiency_id)
-        return self.db.scalar(select(Instrument).where(
-            Instrument.symbol == deficiency.entity_key.upper()
-        )) if deficiency else None
+        return (
+            self.db.scalar(
+                select(Instrument).where(Instrument.symbol == deficiency.entity_key.upper())
+            )
+            if deficiency
+            else None
+        )
 
     def _company_facts_available(self, work: ContextIngestionWork) -> bool:
         instrument = self._work_instrument(work)
         if instrument is None:
             return False
-        filing = self.db.scalar(select(FinancialFact.id).where(
-            FinancialFact.instrument_id == instrument.id
-        ).limit(1))
-        standardized = self.db.scalar(select(StandardizedFinancialFact.id).where(
-            StandardizedFinancialFact.instrument_id == instrument.id,
-            StandardizedFinancialFact.quality_status == "observed",
-        ).limit(1))
+        filing = self.db.scalar(
+            select(FinancialFact.id).where(FinancialFact.instrument_id == instrument.id).limit(1)
+        )
+        standardized = self.db.scalar(
+            select(StandardizedFinancialFact.id)
+            .where(
+                StandardizedFinancialFact.instrument_id == instrument.id,
+                StandardizedFinancialFact.quality_status == "observed",
+            )
+            .limit(1)
+        )
         return bool(filing or standardized)
 
     def _expand_linked_work(
@@ -333,19 +370,23 @@ class DatabaseIngestionCoordinator:
         if instrument is None:
             return links
         linked_ids = {item.get("id") for item in links}
-        for row in self.db.scalars(select(IngestionCoverage).where(
-            IngestionCoverage.instrument_id == instrument.id,
-            IngestionCoverage.dataset_type == "financial_report",
-            IngestionCoverage.attempted_at >= work.requested_at,
-        )):
+        for row in self.db.scalars(
+            select(IngestionCoverage).where(
+                IngestionCoverage.instrument_id == instrument.id,
+                IngestionCoverage.dataset_type == "financial_report",
+                IngestionCoverage.attempted_at >= work.requested_at,
+            )
+        ):
             if row.id not in linked_ids:
                 links.append({"kind": "coverage", "id": row.id})
                 linked_ids.add(row.id)
-        for document in self.db.scalars(select(Document).where(
-            Document.symbol == instrument.symbol,
-            Document.artifact_id.is_not(None),
-            Document.downloaded_at >= work.requested_at,
-        )):
+        for document in self.db.scalars(
+            select(Document).where(
+                Document.symbol == instrument.symbol,
+                Document.artifact_id.is_not(None),
+                Document.downloaded_at >= work.requested_at,
+            )
+        ):
             extraction = coverage(
                 self.db, instrument.id, "financial_extract", document.id, "psx_financials"
             )
@@ -393,10 +434,15 @@ class DatabaseIngestionCoordinator:
             return "running" if row.status in {"running", "processing"} else "queued"
         if kind == "scheduled_run":
             requested = datetime.fromisoformat(link["requested_after"])
-            row = self.db.scalar(select(IngestionRun).where(
-                IngestionRun.job_key == link["job_key"],
-                IngestionRun.started_at >= requested,
-            ).order_by(IngestionRun.started_at.desc()).limit(1))
+            row = self.db.scalar(
+                select(IngestionRun)
+                .where(
+                    IngestionRun.job_key == link["job_key"],
+                    IngestionRun.started_at >= requested,
+                )
+                .order_by(IngestionRun.started_at.desc())
+                .limit(1)
+            )
             if row is None:
                 return "queued"
             if row.status == "completed":
@@ -417,16 +463,21 @@ class DatabaseIngestionCoordinator:
             ]
             completed = [
                 _utc(row.completed_at)
-                for row in self.db.scalars(select(IngestionCoverage).where(
-                    IngestionCoverage.id.in_(coverage_ids)
-                ))
+                for row in self.db.scalars(
+                    select(IngestionCoverage).where(IngestionCoverage.id.in_(coverage_ids))
+                )
                 if row.completed_at is not None
             ]
             if completed:
                 requested = max(_utc(requested), max(completed))
-            row = self.db.scalar(select(CompanyScreeningSnapshot).where(
-                CompanyScreeningSnapshot.instrument_id == link["instrument_id"],
-                CompanyScreeningSnapshot.computed_at >= requested,
-            ).order_by(CompanyScreeningSnapshot.computed_at.desc()).limit(1))
+            row = self.db.scalar(
+                select(CompanyScreeningSnapshot)
+                .where(
+                    CompanyScreeningSnapshot.instrument_id == link["instrument_id"],
+                    CompanyScreeningSnapshot.computed_at >= requested,
+                )
+                .order_by(CompanyScreeningSnapshot.computed_at.desc())
+                .limit(1)
+            )
             return "succeeded" if row else "queued"
         return "failed"

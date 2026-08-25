@@ -7,16 +7,31 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.market import MarketPrice
-from app.models.workstation import Event, EventEntityLink, EventSource, IngestionRun, Instrument, InstrumentAlias, StandardizedFinancialFact
+from app.models.workstation import (
+    Event,
+    EventEntityLink,
+    EventSource,
+    IngestionRun,
+    Instrument,
+    InstrumentAlias,
+    StandardizedFinancialFact,
+)
 from app.services.company_event_service import relink_stored_news
+from app.services.event_intelligence_service import normalize_raw_event
 from app.services.data_health_service import company_completeness, source_health
-from app.services.ingestion_run_service import fail_ingestion_run, finish_ingestion_run, start_ingestion_run
+from app.services.ingestion_run_service import (
+    fail_ingestion_run,
+    finish_ingestion_run,
+    start_ingestion_run,
+)
 from app.services.ingestion_service import refresh_provider, run_due_ingestion_jobs
 from app.services.market_ingestion import generate_mock_market_data
 
 
 def _auth(client):
-    response = client.post("/auth/signup", json={"email": "health@example.com", "password": "password123"})
+    response = client.post(
+        "/auth/signup", json={"email": "health@example.com", "password": "password123"}
+    )
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
@@ -25,7 +40,16 @@ def test_run_accounting_supports_success_partial_and_failed():
         success, _ = start_ingestion_run(db, job_key="test:success", run_key="1", provider="sbp")
         success = finish_ingestion_run(db, success, {"attempted": 2, "accepted": 2})
         partial, _ = start_ingestion_run(db, job_key="test:partial", run_key="1", provider="mettis")
-        partial = finish_ingestion_run(db, partial, {"attempted": 3, "accepted": 2, "rejected": 1, "diagnostics": {"errors": ["one malformed row"]}})
+        partial = finish_ingestion_run(
+            db,
+            partial,
+            {
+                "attempted": 3,
+                "accepted": 2,
+                "rejected": 1,
+                "diagnostics": {"errors": ["one malformed row"]},
+            },
+        )
         failed, _ = start_ingestion_run(db, job_key="test:failed", run_key="1", provider="pbs")
         failed = fail_ingestion_run(db, failed.id, RuntimeError("workbook unavailable"))
 
@@ -38,7 +62,13 @@ def test_run_accounting_supports_success_partial_and_failed():
 def test_rejected_rows_are_retained_by_provider_refresh(monkeypatch):
     monkeypatch.setattr(
         "app.services.ingestion_service._refresh_scstrade",
-        lambda db: {"attempted": 4, "accepted": 3, "updated": 0, "rejected": 1, "diagnostics": {"errors": ["MEBL row 4: invalid close"]}},
+        lambda db: {
+            "attempted": 4,
+            "accepted": 3,
+            "updated": 0,
+            "rejected": 1,
+            "diagnostics": {"errors": ["MEBL row 4: invalid close"]},
+        },
     )
     with SessionLocal() as db:
         run = refresh_provider(db, "scstrade", "partial-test")
@@ -73,7 +103,16 @@ def test_freshness_derivation_is_honest_about_absence_and_age():
         generate_mock_market_data(db, days=2, end_date=today)
         price = db.scalar(select(MarketPrice).where(MarketPrice.trade_date == today))
         price.source = "dps"
-        run = IngestionRun(job_key="refresh:dps", run_key="today", provider="dps", status="success", attempted_count=1, accepted_count=1, started_at=now - timedelta(minutes=5), finished_at=now - timedelta(minutes=4))
+        run = IngestionRun(
+            job_key="refresh:dps",
+            run_key="today",
+            provider="dps",
+            status="success",
+            attempted_count=1,
+            accepted_count=1,
+            started_at=now - timedelta(minutes=5),
+            finished_at=now - timedelta(minutes=4),
+        )
         db.add(run)
         db.commit()
         health = source_health(db, now=now)
@@ -143,8 +182,22 @@ def test_company_completeness_counts_normalized_announcement_and_news_events():
             )
             db.add(event)
             db.flush()
-            db.add(EventEntityLink(event_id=event.id, entity_type="instrument", entity_key="MEBL", link_method="exact_alias", confidence=1))
-            db.add(EventSource(event_id=event.id, source_url=f"https://example.test/{suffix}", source_name="Observed Fixture"))
+            db.add(
+                EventEntityLink(
+                    event_id=event.id,
+                    entity_type="instrument",
+                    entity_key="MEBL",
+                    link_method="exact_alias",
+                    confidence=1,
+                )
+            )
+            db.add(
+                EventSource(
+                    event_id=event.id,
+                    source_url=f"https://example.test/{suffix}",
+                    source_name="Observed Fixture",
+                )
+            )
         db.commit()
 
         completeness = company_completeness(db, "MEBL")
@@ -214,7 +267,7 @@ def test_company_research_exposes_observed_standardized_fundamentals(client):
     assert fact["provenance"]["source_name"] == "DPS"
 
 
-def test_company_research_exposes_linked_event_publishers(client):
+def test_company_research_exposes_normalized_event_publishers(client):
     headers = _auth(client)
     with SessionLocal() as db:
         generate_mock_market_data(db, days=1, end_date=date(2026, 8, 13))
@@ -223,27 +276,42 @@ def test_company_research_exposes_linked_event_publishers(client):
         instrument_id = instrument.id
         event = Event(
             event_type="news",
-            title="Meezan Bank Limited stored publisher story",
+            title="MEBL declares 80 percent interim cash dividend",
             occurred_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
             details_json="{}",
         )
         db.add(event)
         db.flush()
-        db.add(EventEntityLink(event_id=event.id, entity_type="instrument", entity_key="mebl", link_method="exact_alias", confidence=1))
-        db.add(EventSource(event_id=event.id, source_url="https://publisher.test/mebl", source_name="Observed Publisher"))
+        db.add(
+            EventEntityLink(
+                event_id=event.id,
+                entity_type="instrument",
+                entity_key="mebl",
+                link_method="exact_alias",
+                confidence=1,
+            )
+        )
+        db.add(
+            EventSource(
+                event_id=event.id,
+                source_url="https://publisher.test/mebl",
+                source_name="Observed Publisher",
+            )
+        )
         db.commit()
+        normalize_raw_event(db, event.id)
 
     response = client.get(f"/companies/{instrument_id}/overview", headers=headers)
 
     assert response.status_code == 200
     event_row = response.json()["events"][0]
-    assert event_row["event_type"] == "news"
+    assert event_row["event_type"] == "dividend"
     assert event_row["sources"] == [
         {
             "source_name": "Observed Publisher",
             "source_url": "https://publisher.test/mebl",
             "published_at": None,
-            "selection_status": "legacy",
+            "selection_status": "normalized",
         }
     ]
 
@@ -261,14 +329,28 @@ def test_company_research_rejects_legacy_lowercase_word_news_links(client):
         db.add_all([instrument, event])
         db.flush()
         instrument_id = instrument.id
-        db.add(EventEntityLink(event_id=event.id, entity_type="instrument", entity_key="CASH", link_method="exact_alias", confidence=1))
-        db.add(EventSource(event_id=event.id, source_url="https://publisher.test/cash-squeeze", source_name="Observed Publisher"))
+        db.add(
+            EventEntityLink(
+                event_id=event.id,
+                entity_type="instrument",
+                entity_key="CASH",
+                link_method="exact_alias",
+                confidence=1,
+            )
+        )
+        db.add(
+            EventSource(
+                event_id=event.id,
+                source_url="https://publisher.test/cash-squeeze",
+                source_name="Observed Publisher",
+            )
+        )
         db.commit()
 
     overview = client.get(f"/companies/{instrument_id}/overview", headers=headers)
     completeness = client.get("/ingestion/companies/CASH/completeness", headers=headers)
 
-    assert overview.status_code == 200
+    assert overview.status_code == 200, overview.text
     assert overview.json()["events"] == []
     assert completeness.status_code == 200
     assert completeness.json()["news"]["available"] is False
@@ -284,20 +366,63 @@ def test_stored_news_relink_replaces_false_links_with_name_alias_and_ticker_matc
         ]
         db.add_all(instruments)
         db.flush()
-        db.add(InstrumentAlias(instrument_id=instruments[3].id, provider="fixture", alias="Alpha Finance"))
+        db.add(
+            InstrumentAlias(
+                instrument_id=instruments[3].id, provider="fixture", alias="Alpha Finance"
+            )
+        )
         events = [
-            Event(event_type="news", title="Households face a cash squeeze", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json='{"entity_keys":["CASH"]}'),
-            Event(event_type="news", title="Meezan Bank expands its branch network", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json="{}"),
-            Event(event_type="news", title="PSX:KEL files an operational update", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json="{}"),
-            Event(event_type="news", title="Alpha Finance announces a new service", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json="{}"),
-            Event(event_type="news", title="MEBL shares rise on PSX after financial results", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json="{}"),
+            Event(
+                event_type="news",
+                title="Households face a cash squeeze",
+                occurred_at=datetime(2026, 8, 13, tzinfo=UTC),
+                details_json='{"entity_keys":["CASH"]}',
+            ),
+            Event(
+                event_type="news",
+                title="Meezan Bank expands its branch network",
+                occurred_at=datetime(2026, 8, 13, tzinfo=UTC),
+                details_json="{}",
+            ),
+            Event(
+                event_type="news",
+                title="PSX:KEL files an operational update",
+                occurred_at=datetime(2026, 8, 13, tzinfo=UTC),
+                details_json="{}",
+            ),
+            Event(
+                event_type="news",
+                title="Alpha Finance announces a new service",
+                occurred_at=datetime(2026, 8, 13, tzinfo=UTC),
+                details_json="{}",
+            ),
+            Event(
+                event_type="news",
+                title="MEBL shares rise on PSX after financial results",
+                occurred_at=datetime(2026, 8, 13, tzinfo=UTC),
+                details_json="{}",
+            ),
         ]
         db.add_all(events)
         db.flush()
         event_ids = [event.id for event in events]
-        db.add(EventEntityLink(event_id=events[0].id, entity_type="instrument", entity_key="CASH", link_method="exact_alias", confidence=1))
+        db.add(
+            EventEntityLink(
+                event_id=events[0].id,
+                entity_type="instrument",
+                entity_key="CASH",
+                link_method="exact_alias",
+                confidence=1,
+            )
+        )
         for index, event in enumerate(events):
-            db.add(EventSource(event_id=event.id, source_url=f"https://publisher.test/{index}", source_name="Observed Publisher"))
+            db.add(
+                EventSource(
+                    event_id=event.id,
+                    source_url=f"https://publisher.test/{index}",
+                    source_name="Observed Publisher",
+                )
+            )
         db.commit()
 
         dry_run = relink_stored_news(db)
@@ -327,13 +452,29 @@ def test_research_events_can_filter_stored_news(client):
     with SessionLocal() as db:
         db.add_all(
             [
-                Event(event_type="announcement", title="Issuer notice", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json="{}"),
-                Event(event_type="news", title="Stored publisher story", occurred_at=datetime(2026, 8, 13, tzinfo=UTC), details_json="{}"),
+                Event(
+                    event_type="announcement",
+                    title="Issuer notice",
+                    occurred_at=datetime(2026, 8, 13, tzinfo=UTC),
+                    details_json="{}",
+                ),
+                Event(
+                    event_type="news",
+                    title="Stored publisher story",
+                    occurred_at=datetime(2026, 8, 13, tzinfo=UTC),
+                    details_json="{}",
+                ),
             ]
         )
         db.flush()
         news_event = db.scalar(select(Event).where(Event.event_type == "news"))
-        db.add(EventSource(event_id=news_event.id, source_url="https://publisher.test/story", source_name="Observed Publisher"))
+        db.add(
+            EventSource(
+                event_id=news_event.id,
+                source_url="https://publisher.test/story",
+                source_name="Observed Publisher",
+            )
+        )
         db.commit()
 
     response = client.get("/research/events?event_type=news&limit=30")
@@ -351,7 +492,10 @@ def test_health_and_completeness_apis_require_auth_and_return_missing_states(cli
 
     health = client.get("/ingestion/health", headers=headers)
     assert health.status_code == 200
-    assert any(row["source"] == "PSX Announcements" and row["status"] == "never_run" for row in health.json()["sources"])
+    assert any(
+        row["source"] == "PSX Announcements" and row["status"] == "never_run"
+        for row in health.json()["sources"]
+    )
 
     completeness = client.get("/ingestion/companies/MEBL/completeness", headers=headers)
     assert completeness.status_code == 200
