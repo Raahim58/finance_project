@@ -38,6 +38,31 @@ def upgrade() -> None:
     op.create_index("ix_context_deficiencies_status", "context_deficiencies", ["status"])
 
     op.create_table(
+        "context_ingestion_work",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column(
+            "deficiency_id",
+            sa.String(36),
+            sa.ForeignKey("context_deficiencies.id"),
+            nullable=False,
+        ),
+        sa.Column("family", sa.String(40), nullable=False),
+        sa.Column("mode", sa.String(40), nullable=False),
+        sa.Column("status", sa.String(30), nullable=False),
+        sa.Column("linked_work_json", sa.Text(), nullable=False),
+        sa.Column("attempt_count", sa.Integer(), nullable=False),
+        sa.Column("error_message", sa.Text()),
+        sa.Column("requested_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("deadline_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("terminal_at", sa.DateTime(timezone=True)),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.UniqueConstraint("deficiency_id", name="uq_context_ingestion_work_deficiency"),
+    )
+    op.create_index("ix_context_ingestion_work_deficiency_id", "context_ingestion_work", ["deficiency_id"])
+    op.create_index("ix_context_ingestion_work_family", "context_ingestion_work", ["family"])
+    op.create_index("ix_context_ingestion_work_status", "context_ingestion_work", ["status"])
+
+    op.create_table(
         "context_refresh_requests",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
@@ -72,8 +97,41 @@ def upgrade() -> None:
     op.create_index("ix_intelligence_context_receipts_context_id", "intelligence_context_receipts", ["context_id"])
     op.create_index("ix_intelligence_context_receipts_content_hash", "intelligence_context_receipts", ["content_hash"])
 
+    op.create_table(
+        "context_refresh_notifications",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column(
+            "refresh_request_id",
+            sa.String(36),
+            sa.ForeignKey("context_refresh_requests.id"),
+            nullable=False,
+        ),
+        sa.Column(
+            "receipt_id",
+            sa.String(36),
+            sa.ForeignKey("intelligence_context_receipts.id"),
+            nullable=False,
+        ),
+        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("context_id", sa.String(64), nullable=False),
+        sa.Column("status", sa.String(20), nullable=False),
+        sa.Column("payload_json", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("delivered_at", sa.DateTime(timezone=True)),
+        sa.UniqueConstraint(
+            "refresh_request_id", name="uq_context_refresh_notification_request"
+        ),
+    )
+    op.create_index("ix_context_refresh_notifications_refresh_request_id", "context_refresh_notifications", ["refresh_request_id"])
+    op.create_index("ix_context_refresh_notifications_receipt_id", "context_refresh_notifications", ["receipt_id"])
+    op.create_index("ix_context_refresh_notifications_user_id", "context_refresh_notifications", ["user_id"])
+    op.create_index("ix_context_refresh_notifications_context_id", "context_refresh_notifications", ["context_id"])
+    op.create_index("ix_context_refresh_notifications_status", "context_refresh_notifications", ["status"])
+
 
 def downgrade() -> None:
+    op.drop_table("context_refresh_notifications")
     op.drop_table("intelligence_context_receipts")
     op.drop_table("context_refresh_requests")
+    op.drop_table("context_ingestion_work")
     op.drop_table("context_deficiencies")

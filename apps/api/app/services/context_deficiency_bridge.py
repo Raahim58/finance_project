@@ -9,6 +9,9 @@ from typing import Callable, Mapping, Protocol
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.intelligence_context import (
@@ -49,9 +52,14 @@ class ContextIngestionRouter:
         "portfolio_valuation": ("current_market", "live"),
         "company_risk_metrics": ("market_history", "historical"),
         "financial_facts": ("company_reports", "incremental"),
+        "company_facts": ("company_reports", "incremental"),
         "macro_regime": ("macro", "release_cadence"),
+        "macro": ("macro", "release_cadence"),
         "relevant_events": ("evidence", "live"),
+        "events": ("evidence", "live"),
         "rag_evidence": ("evidence", "live"),
+        "market_risk": ("current_market", "live"),
+        "sector": ("current_market", "live"),
     }
 
     def decide(self, deficiency: ContextDeficiency) -> IngestionRoute:
@@ -110,9 +118,72 @@ def _json(value) -> str:
     return json.dumps(jsonable_encoder(value), sort_keys=True, separators=(",", ":"))
 
 
+def _upsert_deficiency(
+    db: Session, deficiency: ContextDeficiency, now: datetime
+) -> ContextDeficiencyRecord:
+    """Atomically count equivalent deficiencies under concurrent context requests."""
+
+    values = {
+        "fingerprint": deficiency.fingerprint,
+        "entity_type": deficiency.entity_type,
+        "entity_key": deficiency.entity_key,
+        "category": deficiency.category,
+        "payload_json": _json(deficiency),
+        "status": "open",
+        "occurrence_count": 1,
+        "first_seen_at": now,
+        "last_seen_at": now,
+    }
+    dialect = db.get_bind().dialect.name
+    factory = postgresql_insert if dialect == "postgresql" else sqlite_insert if dialect == "sqlite" else None
+    if factory is not None:
+        statement = factory(ContextDeficiencyRecord).values(**values)
+        statement = statement.on_conflict_do_update(
+            index_elements=[ContextDeficiencyRecord.fingerprint],
+            set_={
+                "occurrence_count": ContextDeficiencyRecord.occurrence_count + 1,
+                "last_seen_at": now,
+                "payload_json": values["payload_json"],
+                "status": "open",
+                "resolved_at": None,
+            },
+        ).returning(ContextDeficiencyRecord.id)
+        row_id = db.scalar(statement)
+        return db.get(ContextDeficiencyRecord, row_id, populate_existing=True)
+
+    row = db.scalar(select(ContextDeficiencyRecord).where(
+        ContextDeficiencyRecord.fingerprint == deficiency.fingerprint
+    ).with_for_update())
+    if row is None:
+        try:
+            with db.begin_nested():
+                row = ContextDeficiencyRecord(**values)
+                db.add(row)
+                db.flush()
+                return row
+        except IntegrityError:
+            row = db.scalar(select(ContextDeficiencyRecord).where(
+                ContextDeficiencyRecord.fingerprint == deficiency.fingerprint
+            ).with_for_update())
+            if row is None:
+                raise
+    row.occurrence_count += 1
+    row.last_seen_at = now
+    row.payload_json = values["payload_json"]
+    row.status = "open"
+    row.resolved_at = None
+    return row
+
+
 class ContextDeficiencyBridge:
     def __init__(self, coordinator: IngestionCoordinator) -> None:
         self.coordinator = coordinator
+
+    @classmethod
+    def production(cls, db: Session, user: User) -> "ContextDeficiencyBridge":
+        from app.services.context_ingestion_coordinator import DatabaseIngestionCoordinator
+
+        return cls(DatabaseIngestionCoordinator(db, user_id=user.id))
 
     def record_and_schedule(
         self,
@@ -133,24 +204,7 @@ class ContextDeficiencyBridge:
         now = datetime.now(UTC)
         records: list[ContextDeficiencyRecord] = []
         for deficiency in context.deficiencies:
-            row = db.scalar(select(ContextDeficiencyRecord).where(ContextDeficiencyRecord.fingerprint == deficiency.fingerprint))
-            if row is None:
-                row = ContextDeficiencyRecord(
-                    fingerprint=deficiency.fingerprint,
-                    entity_type=deficiency.entity_type,
-                    entity_key=deficiency.entity_key,
-                    category=deficiency.category,
-                    payload_json=_json(deficiency),
-                )
-                db.add(row)
-                db.flush()
-            else:
-                row.occurrence_count += 1
-                row.last_seen_at = now
-                row.payload_json = _json(deficiency)
-                if row.status == "resolved":
-                    row.status = "open"
-                    row.resolved_at = None
+            row = _upsert_deficiency(db, deficiency, now)
             records.append(row)
 
         existing_work = self._existing_work(db, {row.id for row in records})

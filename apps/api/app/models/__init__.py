@@ -8,7 +8,9 @@ from app.models.evidence import (
 from app.models.llm_key import LLMApiKey
 from app.models.intelligence_context import (
     ContextDeficiencyRecord,
+    ContextIngestionWork,
     ContextRefreshRequest,
+    ContextRefreshNotification,
     IntelligenceContextReceiptRecord,
 )
 from app.models.market import (
@@ -82,7 +84,9 @@ __all__ = [
     "MarketIngestionRun",
     "LLMApiKey",
     "ContextDeficiencyRecord",
+    "ContextIngestionWork",
     "ContextRefreshRequest",
+    "ContextRefreshNotification",
     "IntelligenceContextReceiptRecord",
     "MarketPrice",
     "MarketSnapshot",

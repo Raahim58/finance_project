@@ -37,6 +37,16 @@ selection to an ingestion coordinator; it never exposes queues or providers to t
 context caller. Linked work produces one rebuild after every job is terminal, or a
 lazy rebuild when the consumer is no longer active.
 
+The production coordinator links deficiencies to the existing five-minute market
+scheduler ledger, Phase 2 history/report coverage and Celery tasks, macro-series
+runs, and targeted evidence requests. PostgreSQL/SQLite conflict upserts make
+deficiency and work deduplication atomic. The Phase 2 scheduler reconciles linked
+terminal states, performs the single permitted active rebuild, persists a compact
+receipt and notification outbox item, and marks inactive requests for lazy rebuild.
+Section reuse checks cheap authoritative dependency versions before invoking the
+section provider, so a cache hit avoids calculations and narrative retrieval rather
+than merely comparing their outputs afterward.
+
 Global Evidence v1 is deliberately staged. Pass 0 established persistence and
 contracts. Pass 1 adds the first synchronous vertical slice: configured discovery
 through RSS/Atom, sitemaps, GDELT, verified listing pages, and the observed PSX

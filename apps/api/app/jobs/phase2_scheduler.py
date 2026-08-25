@@ -7,6 +7,7 @@ from redis import Redis
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.services.phase2_orchestration import enqueue_reconstructable_phase2_work
+from app.services.context_refresh_service import reconcile_pending_contexts
 
 
 QUEUE_TARGETS = {
@@ -25,11 +26,16 @@ def main() -> None:
                 queue: max(0, target - int(redis.llen(queue)))
                 for queue, target in QUEUE_TARGETS.items()
             }
+            with SessionLocal() as db:
+                queued = (
+                    enqueue_reconstructable_phase2_work(db, queue_limits=limits)
+                    if any(limits.values())
+                    else {name: 0 for name in limits}
+                )
+                refreshes = reconcile_pending_contexts(db)
             if any(limits.values()):
-                with SessionLocal() as db:
-                    queued = enqueue_reconstructable_phase2_work(db, queue_limits=limits)
                 print(f"Phase 2 queues replenished: {queued}", flush=True)
-                if not any(queued.values()):
+                if not any(queued.values()) and refreshes.checked == 0:
                     time.sleep(60)
                     continue
         except Exception as exc:

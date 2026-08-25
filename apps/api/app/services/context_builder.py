@@ -18,13 +18,19 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.portfolio import Portfolio
+from app.models.document import Document, DocumentChunk
+from app.models.market import MarketPrice, SectorDailyStats
+from app.models.portfolio import Portfolio, PortfolioHolding, PortfolioTransaction
 from app.models.user import User
 from app.models.workstation import (
     CompanyScreeningSnapshot,
     DataSource,
     FinancialFact,
     Instrument,
+    MacroObservation,
+    MarketObservation,
+    NormalizedEvent,
+    NormalizedEventSubject,
     PortfolioIPSVersion,
     SourceArtifact,
     StandardizedFinancialFact,
@@ -143,6 +149,7 @@ def _section(
 @dataclass
 class _CachedSection:
     section: ContextSection
+    deficiencies: list[ContextDeficiency]
     expires_at: datetime
 
 
@@ -153,14 +160,28 @@ class ContextSectionCache:
         self.ttl = ttl
         self._items: dict[tuple[str, ...], _CachedSection] = {}
 
-    def reuse(self, key: tuple[str, ...], candidate: ContextSection, now: datetime) -> ContextSection:
+    def get(
+        self, key: tuple[str, ...], dependency_hash: str, now: datetime
+    ) -> tuple[ContextSection, list[ContextDeficiency]] | None:
         cached = self._items.get(key)
-        if cached and cached.expires_at > now and cached.section.dependency_hash == candidate.dependency_hash:
+        if cached and cached.expires_at > now and cached.section.dependency_hash == dependency_hash:
             reused = cached.section.model_copy(deep=True)
             reused.reused = True
-            return reused
-        self._items[key] = _CachedSection(candidate.model_copy(deep=True), now + self.ttl)
-        return candidate
+            return reused, [item.model_copy(deep=True) for item in cached.deficiencies]
+        return None
+
+    def put(
+        self,
+        key: tuple[str, ...],
+        section: ContextSection,
+        deficiencies: list[ContextDeficiency],
+        now: datetime,
+    ) -> None:
+        self._items[key] = _CachedSection(
+            section.model_copy(deep=True),
+            [item.model_copy(deep=True) for item in deficiencies],
+            now + self.ttl,
+        )
 
 
 class ContextBuilder:
@@ -184,6 +205,26 @@ class ContextBuilder:
         section_durations: dict[str, float] = {}
         for name in request.resolved_sections():
             section_started = perf_counter()
+            cache_key = (
+                CONTEXT_CONTRACT_VERSION,
+                user.id,
+                instrument.id,
+                request.portfolio_id or "-",
+                name.value,
+                request.question or request.research_purpose.value if request.research_purpose else request.question or "-",
+            )
+            dependency_hash = self._dependency_hash(
+                db, user, request, instrument, portfolio, ips, name, built_at
+            )
+            cached = self.cache.get(cache_key, dependency_hash, built_at)
+            if cached is not None:
+                value, missing = cached
+                sections[name.value] = value
+                deficiencies.extend(missing)
+                section_durations[name.value] = round(
+                    (perf_counter() - section_started) * 1000, 3
+                )
+                continue
             try:
                 value, missing = self._build_section(db, user, request, instrument, portfolio, ips, name)
             except HTTPException:
@@ -204,15 +245,10 @@ class ContextBuilder:
                     "The authoritative section provider could not complete.",
                     {"provider": name.value, "retry": "coordinator_policy"},
                 )]
-            cache_key = (
-                CONTEXT_CONTRACT_VERSION,
-                user.id,
-                instrument.id,
-                request.portfolio_id or "-",
-                name.value,
-                request.question or request.research_purpose.value if request.research_purpose else request.question or "-",
-            )
-            sections[name.value] = self.cache.reuse(cache_key, value, built_at)
+            value.dependency_hash = dependency_hash
+            sections[name.value] = value
+            if not value.errors:
+                self.cache.put(cache_key, value, missing, built_at)
             section_durations[name.value] = round((perf_counter() - section_started) * 1000, 3)
             deficiencies.extend(missing)
 
@@ -256,6 +292,148 @@ class ContextBuilder:
             deficiencies=deficiencies,
             receipt=receipt,
         )
+
+    def _dependency_hash(
+        self,
+        db: Session,
+        user: User,
+        request: IntelligenceContextRequest,
+        instrument: Instrument,
+        portfolio: Portfolio | None,
+        ips: PortfolioIPSVersion | None,
+        name: ContextSectionName,
+        now: datetime,
+    ) -> str:
+        """Read cheap authoritative version keys before invoking a section provider."""
+
+        base = [CONTEXT_CONTRACT_VERSION, name.value, instrument.id]
+        if name == ContextSectionName.COMPANY_FACTS:
+            filing = [tuple(row) for row in db.execute(select(
+                FinancialFact.id,
+                FinancialFact.version,
+                FinancialFact.value,
+                FinancialFact.filing_date,
+                FinancialFact.period_end,
+            ).where(FinancialFact.instrument_id == instrument.id))]
+            standardized = [tuple(row) for row in db.execute(select(
+                StandardizedFinancialFact.id,
+                StandardizedFinancialFact.value,
+                StandardizedFinancialFact.retrieved_at,
+                StandardizedFinancialFact.quality_status,
+            ).where(StandardizedFinancialFact.instrument_id == instrument.id))]
+            return _hash(base, instrument.name, instrument.sector, filing, standardized)
+        if name == ContextSectionName.MARKET_RISK:
+            price = latest_price(db, instrument.symbol)
+            snapshot = db.scalar(select(CompanyScreeningSnapshot).where(
+                CompanyScreeningSnapshot.instrument_id == instrument.id
+            ).order_by(CompanyScreeningSnapshot.as_of_date.desc()).limit(1))
+            cadence_minutes = 5
+            if price and price.artifact_id:
+                artifact = db.get(SourceArtifact, price.artifact_id)
+                source = db.get(DataSource, artifact.data_source_id) if artifact else None
+                cadence_minutes = source.freshness_sla_minutes or cadence_minutes if source else cadence_minutes
+            cadence_bucket = int(now.timestamp() // max(60, cadence_minutes * 60))
+            price_key = None if price is None else (
+                price.artifact_id,
+                price.trade_date,
+                price.close,
+                price.previous_close,
+                price.volume,
+                price.observed_at,
+            )
+            snapshot_key = None if snapshot is None else (
+                snapshot.id, snapshot.computed_at, snapshot.metrics_json
+            )
+            return _hash(base, price_key, snapshot_key, cadence_bucket)
+        if name == ContextSectionName.SECTOR:
+            observations = [tuple(row) for row in db.execute(select(
+                MarketObservation.id,
+                MarketObservation.artifact_id,
+                MarketObservation.effective_at,
+            ).join(Instrument, Instrument.id == MarketObservation.instrument_id).where(
+                Instrument.sector == instrument.sector,
+                MarketObservation.is_selected.is_(True),
+            ).order_by(MarketObservation.effective_at.desc()).limit(200))]
+            fallback = [tuple(row) for row in db.execute(select(
+                SectorDailyStats.id,
+                SectorDailyStats.trade_date,
+                SectorDailyStats.total_value,
+                SectorDailyStats.average_change_percent,
+            ).where(SectorDailyStats.sector == instrument.sector).order_by(
+                SectorDailyStats.trade_date.desc()
+            ).limit(2))]
+            legacy = tuple(db.execute(select(
+                func.max(MarketPrice.trade_date), func.count(MarketPrice.id)
+            )).one())
+            return _hash(base, instrument.sector, observations, fallback, legacy)
+        if name == ContextSectionName.MACRO:
+            observations = [tuple(row) for row in db.execute(select(
+                MacroObservation.id,
+                MacroObservation.revision,
+                MacroObservation.value,
+                MacroObservation.release_at,
+                MacroObservation.retrieved_at,
+                MacroObservation.is_selected,
+            ).where(MacroObservation.is_selected.is_(True)))]
+            breadth = tuple(db.execute(select(
+                func.max(SectorDailyStats.trade_date), func.count(SectorDailyStats.id)
+            )).one())
+            return _hash(base, observations, breadth)
+        if name == ContextSectionName.EVENTS:
+            rows = [tuple(row) for row in db.execute(select(
+                NormalizedEvent.id,
+                NormalizedEvent.updated_at,
+                NormalizedEvent.materiality,
+                NormalizedEvent.freshness_status,
+            ).join(
+                NormalizedEventSubject,
+                NormalizedEventSubject.normalized_event_id == NormalizedEvent.id,
+            ).where(
+                NormalizedEventSubject.subject_type == "instrument",
+                func.upper(NormalizedEventSubject.subject_key) == instrument.symbol.upper(),
+            ))]
+            return _hash(base, request.event_limit, rows)
+        if name == ContextSectionName.RAG_EVIDENCE:
+            query = request.question or (
+                PURPOSE_QUERIES.get(request.research_purpose) if request.research_purpose else None
+            )
+            documents = [tuple(row) for row in db.execute(select(
+                Document.id, Document.content_hash, Document.status, Document.parsed_at
+            ).where(
+                Document.symbol == instrument.symbol,
+                (Document.visibility == "public") | (Document.owner_user_id == user.id),
+            ))]
+            chunk_count = db.scalar(select(func.count(DocumentChunk.id)).join(
+                Document, Document.id == DocumentChunk.document_id
+            ).where(
+                Document.symbol == instrument.symbol,
+                (Document.visibility == "public") | (Document.owner_user_id == user.id),
+            )) or 0
+            return _hash(base, query, request.rag_limit, documents, chunk_count)
+        if name == ContextSectionName.IPS:
+            return _hash(base, None if ips is None else (
+                ips.id, ips.version, ips.status, ips.constraints_json, ips.confirmed_at
+            ))
+        assert name == ContextSectionName.PORTFOLIO and portfolio is not None
+        holdings = [tuple(row) for row in db.execute(select(
+            PortfolioHolding.id,
+            PortfolioHolding.symbol,
+            PortfolioHolding.quantity,
+            PortfolioHolding.updated_at,
+        ).where(PortfolioHolding.portfolio_id == portfolio.id))]
+        transactions = tuple(db.execute(select(
+            func.count(PortfolioTransaction.id), func.max(PortfolioTransaction.created_at)
+        ).where(PortfolioTransaction.portfolio_id == portfolio.id)).one())
+        symbols = [row.symbol for row in holdings]
+        prices = [tuple(row) for row in db.execute(select(
+            MarketObservation.instrument_id,
+            func.max(MarketObservation.effective_at),
+            func.max(MarketObservation.artifact_id),
+        ).join(Instrument, Instrument.id == MarketObservation.instrument_id).where(
+            Instrument.symbol.in_(symbols),
+            MarketObservation.is_selected.is_(True),
+        ).group_by(MarketObservation.instrument_id))] if symbols else []
+        return _hash(base, portfolio.id, portfolio.updated_at, holdings, transactions, prices)
 
     @staticmethod
     def _validate_personalized_scope(
@@ -443,7 +621,9 @@ class ContextBuilder:
         evidence = []
         for dimension, observation in data.get("dimensions", {}).items():
             underlying = observation.get("artifact_id") or f"{observation.get('series_key')}:{observation.get('effective_date') or observation.get('trade_date')}"
-            evidence.append(_evidence("structured_fact", f"macro:{underlying}", observation.get("series_name") or observation.get("source") or "macro_observations", as_of=observation.get("release_at") or observation.get("effective_date") or observation.get("trade_date"), metadata={"dimension": dimension}))
+            source_value = observation.get("series_name") or observation.get("source") or "macro_observations"
+            source_name = ", ".join(str(item) for item in source_value) if isinstance(source_value, list) else str(source_value)
+            evidence.append(_evidence("structured_fact", f"macro:{underlying}", source_name, as_of=observation.get("release_at") or observation.get("effective_date") or observation.get("trade_date"), metadata={"dimension": dimension}))
         state = ContextState.NOT_EVALUATED if data.get("regime") == "not_evaluated" else ContextState.CURRENT
         missing = [] if state == ContextState.CURRENT else [_deficiency(instrument, "macro_regime", state, "Not enough selected structured observations exist to classify the regime.", {"minimum_evaluable_dimensions": 2, "cadence": "source_release"})]
         return _section(ContextSectionName.MACRO, state, data, evidence, provenance={"classification": "rule_based_v1", "observations_separate": True}), missing
@@ -477,3 +657,14 @@ class ContextBuilder:
         state = ContextState.CURRENT if chunks else ContextState.MISSING
         missing = [] if chunks else [_deficiency(instrument, "rag_evidence", state, "No admissible document passages matched the supplied purpose.", {"query_mode": "question" if request.question else "predefined_purpose", "purpose": request.research_purpose, "limit": request.rag_limit, "cadence": "event_driven"})]
         return _section(ContextSectionName.RAG_EVIDENCE, state, chunks, evidence, provenance={"query": query, "bounded_limit": request.rag_limit, "exact_values_allowed": False}), missing
+
+
+# Application-scoped reuse seam. Consumers should use this shared builder rather than
+# constructing a request-local cache; authoritative dependency hashes still govern reuse.
+canonical_context_builder = ContextBuilder()
+
+
+def build_intelligence_context(
+    db: Session, user: User, request: IntelligenceContextRequest
+) -> IntelligenceContext:
+    return canonical_context_builder.build(db, user, request)
