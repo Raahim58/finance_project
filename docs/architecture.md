@@ -20,6 +20,23 @@ Exact market prices, rankings, portfolio values, P&L, risk, optimizer weights, a
 
 Enabled ingestion follows `source -> immutable artifact -> versioned parser -> validation -> canonical observation/fact/event`. Conflicting observations are retained. A selected canonical observation is identified separately, with source priority and quality metadata. Development mock data is labeled and cannot create a synthetic live KSE-100 value.
 
+Phase 7A adds a versioned, request-scoped Canonical Intelligence Context above
+those stores. It deterministically assembles only the sections requested by Company
+Intelligence or a portfolio-specific consumer. Company Intelligence cannot include
+a portfolio or IPS; Portfolio Relevance uses exactly one selected, owned portfolio;
+Security Fit additionally requires that portfolio's confirmed IPS. Exact values
+remain structured queries and RAG remains bounded unstructured evidence. The
+builder performs no writes, ingestion, or LLM calls.
+
+Each section carries its own readiness, as-of value, authoritative freshness policy,
+stable evidence references, and dependency hash. Soft provider failures degrade one
+section; identity, scope, ownership, and Security Fit mandate failures abort. Full
+contexts are temporary. Only compact receipts and durable structured deficiencies
+may be persisted. A separate bridge deduplicates deficiencies and delegates worker
+selection to an ingestion coordinator; it never exposes queues or providers to the
+context caller. Linked work produces one rebuild after every job is terminal, or a
+lazy rebuild when the consumer is no longer active.
+
 Global Evidence v1 is deliberately staged. Pass 0 established persistence and
 contracts. Pass 1 adds the first synchronous vertical slice: configured discovery
 through RSS/Atom, sitemaps, GDELT, verified listing pages, and the observed PSX

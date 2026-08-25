@@ -6,6 +6,11 @@ from app.models.evidence import (
     EvidenceSourceState,
 )
 from app.models.llm_key import LLMApiKey
+from app.models.intelligence_context import (
+    ContextDeficiencyRecord,
+    ContextRefreshRequest,
+    IntelligenceContextReceiptRecord,
+)
 from app.models.market import (
     Company,
     Exchange,
@@ -76,6 +81,9 @@ __all__ = [
     "Exchange",
     "MarketIngestionRun",
     "LLMApiKey",
+    "ContextDeficiencyRecord",
+    "ContextRefreshRequest",
+    "IntelligenceContextReceiptRecord",
     "MarketPrice",
     "MarketSnapshot",
     "Portfolio",
