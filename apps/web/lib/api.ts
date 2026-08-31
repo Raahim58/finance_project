@@ -296,7 +296,7 @@ export type AssistantResult = {
   source_citations: Array<Record<string, unknown>>;
   freshness_warnings: string[];
   tool_trace: Array<Record<string, unknown>>;
-  synthesis: {mode:"llm_grounded"|"deterministic_fallback"|"recommendation_synthesis_unavailable";provider?:string|null;model?:string|null;reason?:string|null;recommendation?:"Buy/Add"|"Hold"|"Reduce"|"Avoid"|"Insufficient Evidence"|null;confidence?:"High"|"Medium"|"Low"|null;horizon?:{label:string;source:"ips"|"user"|"not_available"}|null;instrument_ids?:string[];evidence_ids?:string[];context_receipt_ids?:string[];repaired?:boolean;mode_scope?:"targeted"|"market_wide"};
+  synthesis: {mode:"llm_grounded"|"deterministic_fallback"|"recommendation_synthesis_unavailable";provider?:string|null;model?:string|null;reason?:string|null;recommendation?:"Buy/Add"|"Hold"|"Reduce"|"Avoid"|"Insufficient Evidence"|null;confidence?:"High"|"Medium"|"Low"|null;horizon?:{label:string;source:"ips"|"user"|"not_available"}|null;instrument_ids?:string[];evidence_ids?:string[];context_receipt_ids?:string[];repaired?:boolean;mode_scope?:"targeted"|"market_wide";token_usage?:{input_tokens:number;output_tokens:number;total_tokens:number;model_calls:number;reported_by_provider:boolean}};
   context_contract_version?:string|null;
   context_status?:string|null;
   context_receipt?:Record<string,unknown>|null;

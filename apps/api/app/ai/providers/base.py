@@ -8,6 +8,8 @@ class LLMProviderResult:
     content: str
     model: str
     provider: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class LLMProvider(ABC):

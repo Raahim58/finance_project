@@ -68,6 +68,28 @@ def test_question_without_portfolio_uses_the_global_selected_portfolio(client):
     assert conversations[0]["portfolio_id"] == portfolio_id
 
 
+def test_advice_for_named_holding_builds_portfolio_aware_security_fit_context(client):
+    headers = _auth(client, "assistant-security-fit@example.com")
+    portfolio_id = _portfolio_with_holdings(client, headers)
+
+    response = client.post(
+        "/assistant/messages",
+        headers=headers,
+        json={
+            "question": "Analyze my existing MEBL holding. Should I add, hold, or reduce it?"
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    context_step = next(
+        step
+        for step in response.json()["tool_trace"]
+        if step["tool"] == "intelligence.canonical_context"
+    )
+    assert context_step["arguments"]["scope"] == "security_fit"
+    assert context_step["arguments"]["portfolio_id"] == portfolio_id
+
+
 def test_compliance_question_reports_status_and_skips_narrative_search(client):
     headers = _auth(client)
     portfolio_id = _portfolio_with_holdings(client, headers)

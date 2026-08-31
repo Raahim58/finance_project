@@ -75,6 +75,10 @@ class ReasoningResult:
     status: Literal["grounded", "unavailable"]
     provider: str | None
     model: str | None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model_calls: int = 0
+    failure_reason: str | None = None
     validation_errors: list[str] = field(default_factory=list)
     repaired: bool = False
     trace: list[dict[str, object]] = field(default_factory=list)

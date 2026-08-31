@@ -150,6 +150,14 @@ the validator may accept the model's conclusion or reject the structurally inval
 response, but it never rewrites Buy as Hold or otherwise substitutes its own financial
 judgment.
 
+Provider adapters capture native input/output token counts when the provider returns
+them. `ReasoningEngine` accumulates those counts across sector discovery, candidate
+reduction, synthesis, and the optional repair call; the Assistant displays input,
+output, total, and model-call counts. Counts are labeled unavailable rather than
+estimated when a provider does not report usage. Provider and graph failures retain a
+sanitized reason in uncertainty and trace metadata instead of becoming an unexplained
+fallback.
+
 If the configured provider is unavailable or the response remains structurally invalid
 after the single repair attempt, the API returns the available deterministic factual
 summary and evidence cards without an advisory conclusion. The result is labeled

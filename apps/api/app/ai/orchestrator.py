@@ -759,11 +759,16 @@ async def run_assistant(
     if payload.instrument_id is None and len(mentioned_instruments) == 1:
         payload = payload.model_copy(update={"instrument_id": mentioned_instruments[0].id})
     if payload.instrument_id:
+        context_intent = (
+            "security_fit"
+            if payload.portfolio_id and ADVICE_RE.search(payload.question)
+            else intent
+        )
         canonical_request, canonical_context = build_assistant_context(
             db,
             user,
             payload.instrument_id,
-            intent=intent,
+            intent=context_intent,
             portfolio_id=payload.portfolio_id,
             question=payload.question,
         )
@@ -894,6 +899,13 @@ async def run_assistant(
         "provider": None,
         "model": None,
         "reason": "No active external LLM provider is configured.",
+        "token_usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "model_calls": 0,
+            "reported_by_provider": False,
+        },
     }
     deep_contexts: list[tuple[object, object]] = []
     if selected_provider and settings.phase8_reasoning_enabled:
@@ -953,16 +965,26 @@ async def run_assistant(
                 contexts: list[dict[str, object]] = []
                 deep_evidence: list[dict[str, object]] = []
                 for instrument_id in instrument_ids:
-                    if canonical_context is not None and instrument_id == payload.instrument_id:
+                    deep_intent = (
+                        "security_fit" if compliance is not None else "holding_evidence"
+                    )
+                    expected_scope = (
+                        "security_fit"
+                        if deep_intent == "security_fit"
+                        else "company_intelligence"
+                    )
+                    if (
+                        canonical_context is not None
+                        and instrument_id == payload.instrument_id
+                        and canonical_context.scope.value == expected_scope
+                    ):
                         request, context = canonical_request, canonical_context
                     else:
                         request, context = build_assistant_context(
                             db,
                             user,
                             instrument_id,
-                            intent="security_fit"
-                            if compliance is not None
-                            else "holding_evidence",
+                            intent=deep_intent,
                             portfolio_id=payload.portfolio_id,
                             question=payload.question,
                         )
@@ -1039,6 +1061,10 @@ async def run_assistant(
                     "Recommendation synthesis failed mechanical validation: "
                     + "; ".join(result.validation_errors)
                 )
+            elif result.failure_reason:
+                uncertainty.append(
+                    "Recommendation synthesis was unavailable: " + result.failure_reason
+                )
             synthesis = {
                 "mode": "llm_grounded"
                 if result.status == "grounded"
@@ -1047,7 +1073,7 @@ async def run_assistant(
                 "model": result.model,
                 "reason": None
                 if result.status == "grounded"
-                else "Phase 8 synthesis or validation failed",
+                else result.failure_reason,
                 "recommendation": result.recommendation,
                 "confidence": result.confidence,
                 "horizon": None if result.horizon is None else result.horizon.model_dump(),
@@ -1055,6 +1081,15 @@ async def run_assistant(
                 "evidence_ids": result.evidence_ids,
                 "repaired": result.repaired,
                 "mode_scope": mode,
+                "token_usage": {
+                    "input_tokens": result.input_tokens,
+                    "output_tokens": result.output_tokens,
+                    "total_tokens": result.input_tokens + result.output_tokens,
+                    "model_calls": result.model_calls,
+                    "reported_by_provider": bool(
+                        result.input_tokens or result.output_tokens
+                    ),
+                },
             }
         except Exception as exc:
             answer = "Recommendation Synthesis Unavailable\n\n" + answer
@@ -1066,6 +1101,13 @@ async def run_assistant(
                 "provider": selected_provider,
                 "model": payload.model,
                 "reason": f"{type(exc).__name__}",
+                "token_usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "model_calls": 0,
+                    "reported_by_provider": False,
+                },
             }
     assistant = AssistantMessage(conversation_id=conversation.id, role="assistant", content=answer)
     db.add(assistant)
@@ -1110,6 +1152,7 @@ async def run_assistant(
             "context_receipt_ids": [
                 item.receipt_record.id for item in context_consumptions
             ],
+            "synthesis": synthesis,
             "refresh_request_id": consumed.refresh_request.id
             if consumed and consumed.refresh_request
             else None,

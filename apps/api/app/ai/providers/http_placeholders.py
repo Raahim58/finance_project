@@ -65,7 +65,14 @@ class OpenAICompatibleProvider(HTTPProvider):
             raise RuntimeError(f"{self.name} API response did not contain assistant text") from exc
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError(f"{self.name} API returned an empty assistant response")
-        return LLMProviderResult(content=content, model=str(data.get("model") or selected_model), provider=self.name)
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        return LLMProviderResult(
+            content=content,
+            model=str(data.get("model") or selected_model),
+            provider=self.name,
+            input_tokens=usage.get("prompt_tokens"),
+            output_tokens=usage.get("completion_tokens"),
+        )
 
 
 class AnthropicProvider(HTTPProvider):
@@ -92,7 +99,14 @@ class AnthropicProvider(HTTPProvider):
         content = "\n".join(str(block.get("text")) for block in blocks if block.get("type") == "text" and block.get("text"))
         if not content.strip():
             raise RuntimeError("anthropic API response did not contain assistant text")
-        return LLMProviderResult(content=content, model=str(data.get("model") or selected_model), provider=self.name)
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        return LLMProviderResult(
+            content=content,
+            model=str(data.get("model") or selected_model),
+            provider=self.name,
+            input_tokens=usage.get("input_tokens"),
+            output_tokens=usage.get("output_tokens"),
+        )
 
 
 class OpenAIProvider(OpenAICompatibleProvider):
@@ -136,7 +150,18 @@ class GeminiProvider(HTTPProvider):
             raise RuntimeError("gemini API response did not contain assistant text") from exc
         if not content.strip():
             raise RuntimeError("gemini API returned an empty assistant response")
-        return LLMProviderResult(content=content, model=str(data.get("modelVersion") or selected_model), provider=self.name)
+        usage = (
+            data.get("usageMetadata")
+            if isinstance(data.get("usageMetadata"), dict)
+            else {}
+        )
+        return LLMProviderResult(
+            content=content,
+            model=str(data.get("modelVersion") or selected_model),
+            provider=self.name,
+            input_tokens=usage.get("promptTokenCount"),
+            output_tokens=usage.get("candidatesTokenCount"),
+        )
 
 
 class OpenRouterProvider(OpenAICompatibleProvider):

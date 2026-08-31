@@ -52,10 +52,14 @@ class ReasoningEngine:
         self.provider = provider
         self.api_key = api_key
         self.model = model
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.model_calls = 0
         self.graph = self._build_graph()
 
     async def _chat(self, system: str, payload: dict[str, object]):
-        return await self.provider.chat(
+        self.model_calls += 1
+        response = await self.provider.chat(
             self.api_key,
             [
                 {"role": "system", "content": system},
@@ -63,6 +67,9 @@ class ReasoningEngine:
             ],
             self.model,
         )
+        self.input_tokens += response.input_tokens or 0
+        self.output_tokens += response.output_tokens or 0
+        return response
 
     async def _discover_sector(
         self, sector: str, records: list[dict[str, object]], question: str
@@ -356,10 +363,11 @@ class ReasoningEngine:
         try:
             state = await self.graph.ainvoke({"request": request, "trace": []})
         except Exception as exc:
+            reason = f"provider_or_graph_error:{type(exc).__name__}: {exc}"
             state = {
-                "unavailable_reason": f"provider_or_graph_error:{type(exc).__name__}",
+                "unavailable_reason": reason,
                 "validation_errors": [],
-                "trace": [],
+                "trace": [{"node": "reasoning_error", "status": "unavailable", "reason": reason}],
             }
         parsed = state.get("parsed_answer")
         if parsed is not None and not state.get("validation_errors"):
@@ -373,6 +381,9 @@ class ReasoningEngine:
                 status="grounded",
                 provider=self.provider.name,
                 model=self.model or self.provider.default_model,
+                input_tokens=self.input_tokens,
+                output_tokens=self.output_tokens,
+                model_calls=self.model_calls,
                 repaired=bool(state.get("repaired")),
                 trace=state.get("trace", []),
             )
@@ -390,6 +401,14 @@ class ReasoningEngine:
             status="unavailable",
             provider=self.provider.name,
             model=self.model or self.provider.default_model,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            model_calls=self.model_calls,
+            failure_reason=str(
+                state.get("unavailable_reason")
+                or "; ".join(state.get("validation_errors", []))
+                or "unknown_reasoning_failure"
+            ),
             validation_errors=list(state.get("validation_errors", [])),
             repaired=bool(state.get("repaired")),
             trace=state.get("trace", []),

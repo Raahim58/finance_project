@@ -7,7 +7,7 @@ const sendAssistantMessage=vi.fn();
 vi.mock("@/lib/api",()=>({getPortfolios:(...args:unknown[])=>getPortfolios(...args),sendAssistantMessage:(...args:unknown[])=>sendAssistantMessage(...args)}));
 
 function result(answer:string){
-  return {conversation_id:"c1",message_id:"m1",answer,uncertainty:[],calculated_evidence:[],source_citations:[],freshness_warnings:[],tool_trace:[],created_at:new Date().toISOString()};
+  return {conversation_id:"c1",message_id:"m1",answer,uncertainty:[],calculated_evidence:[],source_citations:[],freshness_warnings:[],tool_trace:[],synthesis:{mode:"llm_grounded",provider:"anthropic",model:"claude-test",token_usage:{input_tokens:1234,output_tokens:321,total_tokens:1555,model_calls:1,reported_by_provider:true}},created_at:new Date().toISOString()};
 }
 
 describe("assistant scope and async correctness",()=>{
@@ -47,5 +47,15 @@ describe("assistant scope and async correctness",()=>{
     await new Promise(r=>setTimeout(r,0));
     expect(screen.queryByText("first answer (stale)")).not.toBeInTheDocument();
     expect(screen.getByText("second answer")).toBeInTheDocument();
+  });
+
+  it("shows provider-reported input and output token usage",async()=>{
+    getPortfolios.mockResolvedValue([{id:"p1",name:"Growth",is_default:true}]);
+    sendAssistantMessage.mockResolvedValue(result("token answer"));
+    const {container}=render(<AssistantPage/>);
+    fireEvent.change(screen.getByLabelText("Question"),{target:{value:"Analyze MEBL"}});
+    fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+
+    await waitFor(()=>expect(screen.getByText(/Input 1,234 · Output 321 · Total 1,555/)).toBeInTheDocument());
   });
 });

@@ -37,14 +37,24 @@ class SequenceProvider:
     name = "test"
     default_model = "test-model"
 
-    def __init__(self, responses):
+    def __init__(self, responses, *, input_tokens=0, output_tokens=0):
         self.responses = list(responses)
         self.calls = []
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
 
     async def chat(self, _api_key, messages, _model):
         self.calls.append(json.loads(messages[-1]["content"]))
         content = self.responses.pop(0)
-        return LLMProviderResult(content=content, provider=self.name, model=self.default_model)
+        if isinstance(content, Exception):
+            raise content
+        return LLMProviderResult(
+            content=content,
+            provider=self.name,
+            model=self.default_model,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+        )
 
 
 def _request(**updates):
@@ -88,13 +98,16 @@ def test_insufficient_evidence_can_report_a_missing_portfolio_or_horizon():
 
 @pytest.mark.asyncio
 async def test_phase8_accepts_one_model_authored_answer_without_duplicate_claims():
-    provider = SequenceProvider([_answer(instrument_ids=["i1"])])
+    provider = SequenceProvider(
+        [_answer(instrument_ids=["i1"])], input_tokens=120, output_tokens=35
+    )
 
     result = await ReasoningEngine(provider, "secret", None).run(_request())
 
     assert result.status == "grounded"
     assert result.answer == "Grounded answer."
     assert result.repaired is False
+    assert (result.input_tokens, result.output_tokens, result.model_calls) == (120, 35, 1)
     assert len(provider.calls) == 1
     assert "claims" not in provider.calls[0]
 
@@ -129,6 +142,20 @@ async def test_phase8_invalid_repair_returns_synthesis_unavailable_without_advis
 
 
 @pytest.mark.asyncio
+async def test_phase8_preserves_provider_failure_reason_and_attempted_call_count():
+    provider = SequenceProvider([RuntimeError("anthropic API request timed out")])
+
+    result = await ReasoningEngine(provider, "secret", None).run(_request())
+
+    assert result.status == "unavailable"
+    assert result.failure_reason == (
+        "provider_or_graph_error:RuntimeError: anthropic API request timed out"
+    )
+    assert result.model_calls == 1
+    assert result.trace[-1]["node"] == "reasoning_error"
+
+
+@pytest.mark.asyncio
 async def test_market_graph_maps_every_sector_then_reduces_and_deepens_selected_candidates():
     packets = {
         "Banking": [{"instrument_id": "bank1", "symbol": "BANK", "sector": "Banking"}],
@@ -140,7 +167,9 @@ async def test_market_graph_maps_every_sector_then_reduces_and_deepens_selected_
             json.dumps({"instrument_ids": ["tech1"]}),
             json.dumps({"instrument_ids": ["bank1", "tech1"]}),
             _answer(instrument_ids=["bank1", "tech1"]),
-        ]
+        ],
+        input_tokens=10,
+        output_tokens=5,
     )
     deepened = []
 
@@ -163,6 +192,7 @@ async def test_market_graph_maps_every_sector_then_reduces_and_deepens_selected_
     sector_calls = [call for call in provider.calls if "sector" in call]
     assert {call["sector"] for call in sector_calls} == {"Banking", "Technology"}
     assert sum(len(call["records"]) for call in sector_calls) == 2
+    assert (result.input_tokens, result.output_tokens, result.model_calls) == (40, 20, 4)
 
 
 def test_peer_group_assembler_keeps_complete_universe_and_unclassified_members():
