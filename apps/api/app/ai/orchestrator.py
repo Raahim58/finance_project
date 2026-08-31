@@ -1,5 +1,6 @@
 import json
 import re
+from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -10,8 +11,13 @@ from app.ai.evidence import gate_citations
 from app.ai.intent import NARRATIVE_TRIGGER_RE, detect_intent
 from app.core.config import settings
 from app.models.llm_key import LLMApiKey
+from app.models.portfolio import Portfolio
 from app.models.user import User
-from app.models.workstation import AssistantMessage, Conversation
+from app.models.workstation import AssistantMessage, Conversation, Instrument
+from app.reasoning import ReasoningEngine
+from app.reasoning.contracts import ReasoningRequest
+from app.reasoning.peer_groups import build_peer_group_packets, peer_packet_evidence
+from app.reasoning.validation import numeric_tokens_from_values
 from app.schemas.assistant import AssistantMessageCreate
 from app.services.llm_key_service import get_decrypted_key_for_call
 from app.services.context_consumer_service import (
@@ -26,8 +32,52 @@ from app.services.workstation_service import ips_compliance
 from app.tools import build_tool_registry
 
 
-NUMBER_RE = re.compile(r"(?<![A-Za-z])[-+]?\d+(?:\.\d+)?%?")
 ADVICE_RE = re.compile(r"\b(should|recommend|buy|sell|increase|reduce|rebalance)\b", re.I)
+MARKET_DISCOVERY_RE = re.compile(
+    r"market[- ]wide|which stocks?|what stocks?|stocks? to (?:buy|invest)|"
+    r"where (?:should|can) i invest|what should i buy",
+    re.I,
+)
+
+
+def _resolved_portfolio(
+    db: Session,
+    user: User,
+    conversation: Conversation,
+    requested_portfolio_id: str | None,
+) -> Portfolio | None:
+    """Resolve only trusted application state; never infer portfolio identity from prose."""
+
+    trusted_id = requested_portfolio_id or conversation.portfolio_id
+    if trusted_id:
+        portfolio = get_portfolio_or_404(db, user, trusted_id)
+        if portfolio.archived_at is not None:
+            raise HTTPException(status_code=409, detail="Archived portfolios cannot be analyzed")
+        return portfolio
+    return db.scalar(
+        select(Portfolio).where(
+            Portfolio.user_id == user.id,
+            Portfolio.is_default.is_(True),
+            Portfolio.archived_at.is_(None),
+        )
+    )
+
+
+def _mentioned_instruments(db: Session, question: str) -> list[Instrument]:
+    """Resolve exact catalog symbols/names; this never affects portfolio ownership scope."""
+
+    tokens = {token.upper() for token in re.findall(r"\b[A-Za-z][A-Za-z0-9.-]{1,14}\b", question)}
+    normalized_question = " ".join(question.casefold().split())
+    catalog = list(db.scalars(select(Instrument).order_by(Instrument.symbol)))
+    return [
+        instrument
+        for instrument in catalog
+        if instrument.symbol.upper() in tokens
+        or (
+            len(" ".join(instrument.name.casefold().split())) >= 4
+            and " ".join(instrument.name.casefold().split()) in normalized_question
+        )
+    ]
 
 
 def _base_portfolio_evidence(
@@ -618,23 +668,6 @@ def _deterministic_answer(
     return " ".join(lines), uncertainty, evidence, required_evidence_ids
 
 
-def _json_object(text: str) -> dict[str, object] | None:
-    candidate = text.strip()
-    if candidate.startswith("```"):
-        candidate = re.sub(r"^```(?:json)?\s*|\s*```$", "", candidate, flags=re.I)
-    try:
-        value = json.loads(candidate)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", candidate, re.S)
-        if not match:
-            return None
-        try:
-            value = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-    return value if isinstance(value, dict) else None
-
-
 def _history(db: Session, conversation_id: str, limit: int = 12) -> list[dict[str, str]]:
     rows = list(
         db.scalars(
@@ -702,101 +735,14 @@ def _invoke(trace, registry, name, db, user, arguments):
         return None
 
 
-async def _planned_tool_calls(
-    provider,
-    api_key: str,
-    model: str | None,
-    registry,
-    history,
-    portfolio_id: str | None,
-    tool_results: list[dict[str, object]],
-    maximum_calls: int,
-):
-    definitions = [
-        {
-            "name": item.name,
-            "description": item.description,
-            "input_schema": item.input_model.model_json_schema(),
-            "read_only": item.read_only,
-            "requires_confirmation": item.requires_confirmation,
-            "cost_class": item.cost_class,
-        }
-        for item in registry.definitions()
-        if not item.requires_confirmation
-        and (item.read_only or item.permission_scope == "research:refresh")
-    ]
-    prompt = {
-        "task": (
-            "Select the next safe tools needed to answer the latest user question. "
-            "Use research.instruments to resolve names before requesting company data. "
-            "Use research.refresh_company only when current cited documents are missing or insufficient, "
-            "then search or inspect the company again. Return no calls when the evidence is sufficient. Return JSON only."
-        ),
-        "portfolio_id_in_scope": portfolio_id,
-        "previous_tool_results": tool_results,
-        "tools": definitions,
-        "output_schema": {"tool_calls": [{"name": "tool.name", "arguments": {}}]},
-        "maximum_calls": maximum_calls,
-    }
-    response = await provider.chat(
-        api_key,
-        [
-            {
-                "role": "system",
-                "content": "You are a conservative tool planner. Never invent identifiers. Return a JSON object only.",
-            },
-            *history,
-            {"role": "user", "content": json.dumps(prompt, default=str)},
-        ],
-        model,
-    )
-    parsed = _json_object(response.content) or {}
-    calls = parsed.get("tool_calls")
-    return calls if isinstance(calls, list) else []
-
-
-def _validated_claim_answer(
-    candidate: str, context: str, evidence_ids: set[str], required_evidence_ids: set[str]
-) -> tuple[str | None, str | None]:
-    parsed = _json_object(candidate)
-    if (
-        not parsed
-        or not isinstance(parsed.get("answer"), str)
-        or not isinstance(parsed.get("claims"), list)
-    ):
-        return None, "The model draft did not use the required claim/evidence structure."
-    cited_all: set[str] = set()
-    for claim in parsed["claims"]:
-        if not isinstance(claim, dict) or not isinstance(claim.get("text"), str):
-            return None, "The model draft contained an invalid claim object."
-        cited = claim.get("evidence_ids")
-        valid_cited = (
-            {str(item) for item in cited if str(item) in evidence_ids}
-            if isinstance(cited, list)
-            else set()
-        )
-        if not valid_cited:
-            return None, "At least one model claim lacked a valid evidence ID."
-        cited_all.update(valid_cited)
-        if ADVICE_RE.search(claim["text"]) and not cited:
-            return None, "An advice-like model claim lacked supporting evidence."
-    if required_evidence_ids and not (cited_all & required_evidence_ids):
-        return (
-            None,
-            "The model draft did not address the structured facts required for this question's intent.",
-        )
-    ungrounded_numbers = [
-        token for token in NUMBER_RE.findall(parsed["answer"]) if token.rstrip("%") not in context
-    ]
-    if ungrounded_numbers:
-        return None, "The model draft failed numeric grounding validation."
-    return parsed["answer"], None
-
-
 async def run_assistant(
     db: Session, user: User, payload: AssistantMessageCreate, conversation_id: str | None = None
 ):
     conversation = _conversation(db, user, conversation_id, payload)
+    portfolio = _resolved_portfolio(db, user, conversation, payload.portfolio_id)
+    if portfolio is not None:
+        payload = payload.model_copy(update={"portfolio_id": portfolio.id})
+        conversation.portfolio_id = portfolio.id
     prior_history = _history(db, conversation.id)
     db.add(AssistantMessage(conversation_id=conversation.id, role="user", content=payload.question))
     registry = build_tool_registry()
@@ -809,6 +755,9 @@ async def run_assistant(
     canonical_context_payload = None
     canonical_request = None
     canonical_context = None
+    mentioned_instruments = _mentioned_instruments(db, payload.question)
+    if payload.instrument_id is None and len(mentioned_instruments) == 1:
+        payload = payload.model_copy(update={"instrument_id": mentioned_instruments[0].id})
     if payload.instrument_id:
         canonical_request, canonical_context = build_assistant_context(
             db,
@@ -946,58 +895,23 @@ async def run_assistant(
         "model": None,
         "reason": "No active external LLM provider is configured.",
     }
-    if selected_provider:
-        tool_results = []
+    deep_contexts: list[tuple[object, object]] = []
+    if selected_provider and settings.phase8_reasoning_enabled:
         try:
             api_key, key_row = get_decrypted_key_for_call(db, user, selected_provider)
             provider = get_provider(selected_provider)
             selected_model = payload.model or key_row.default_model
-            seen_calls: set[str] = set()
-            planner_history = [*prior_history, {"role": "user", "content": payload.question}]
-            for _round in range(3):
-                remaining = settings.assistant_max_tool_iterations - len(trace)
-                if remaining <= 0:
-                    break
-                calls = await _planned_tool_calls(
-                    provider,
-                    api_key,
-                    selected_model,
-                    registry,
-                    planner_history,
-                    payload.portfolio_id,
-                    tool_results,
-                    remaining,
-                )
-                executed = False
-                for call in calls[:remaining]:
-                    if (
-                        not isinstance(call, dict)
-                        or not isinstance(call.get("name"), str)
-                        or not isinstance(call.get("arguments"), dict)
-                    ):
-                        continue
-                    signature = json.dumps(
-                        {"name": call["name"], "arguments": call["arguments"]},
-                        sort_keys=True,
-                        default=str,
-                    )
-                    if signature in seen_calls:
-                        continue
-                    seen_calls.add(signature)
-                    result = _invoke(trace, registry, call["name"], db, user, call["arguments"])
-                    if result is not None:
-                        tool_results.append(
-                            {"tool": call["name"], "arguments": call["arguments"], "result": result}
-                        )
-                    executed = True
-                    if len(trace) >= settings.assistant_max_tool_iterations:
-                        break
-                if not executed:
-                    break
-            tool_evidence = [
-                {"evidence_id": f"tool:{item['tool']}:{index + 1}", **item}
-                for index, item in enumerate(tool_results)
-            ]
+            mode = (
+                "market_wide"
+                if payload.instrument_id is None and MARKET_DISCOVERY_RE.search(payload.question)
+                else "targeted"
+            )
+            peer_packets = (
+                build_peer_group_packets(db, payload.portfolio_id)
+                if mode == "market_wide"
+                else {}
+            )
+            discovery_evidence = peer_packet_evidence(peer_packets)
             canonical_evidence = context_evidence(canonical_context) if canonical_context else []
             citation_ids = {
                 str(item.get("metadata", {}).get("citation_id")): item["evidence_id"]
@@ -1014,66 +928,141 @@ async def run_assistant(
                 }
                 for item in citations
             ]
-            allowed_evidence_ids = sorted(
-                {str(item["evidence_id"]) for item in evidence}
-                | {str(item["evidence_id"]) for item in citation_evidence}
-                | {str(item["evidence_id"]) for item in tool_evidence}
-            )
-            grounded_context = json.dumps(
-                {
-                    "question": payload.question,
-                    "intent": intent,
-                    "conversation_history": prior_history,
-                    "canonical_context": canonical_context_payload,
-                    "calculated_evidence": evidence,
-                    "canonical_evidence": canonical_evidence,
-                    "source_citations": citation_evidence,
-                    "tool_evidence": tool_evidence,
-                    "uncertainty": uncertainty,
-                    "allowed_evidence_ids": allowed_evidence_ids,
+            allowed_evidence_ids = {
+                str(item["evidence_id"])
+                for item in [
+                    *evidence,
+                    *canonical_evidence,
+                    *citation_evidence,
+                    *discovery_evidence,
+                ]
+                if item.get("evidence_id")
+            }
+            allowed_instrument_ids = {
+                str(row["instrument_id"])
+                for rows in peer_packets.values()
+                for row in rows
+            } or {
+                instrument.id
+                for instrument in mentioned_instruments
+            }
+            if payload.instrument_id:
+                allowed_instrument_ids.add(payload.instrument_id)
+
+            async def deepen_candidates(instrument_ids: list[str]) -> dict[str, object]:
+                contexts: list[dict[str, object]] = []
+                deep_evidence: list[dict[str, object]] = []
+                for instrument_id in instrument_ids:
+                    if canonical_context is not None and instrument_id == payload.instrument_id:
+                        request, context = canonical_request, canonical_context
+                    else:
+                        request, context = build_assistant_context(
+                            db,
+                            user,
+                            instrument_id,
+                            intent="security_fit"
+                            if compliance is not None
+                            else "holding_evidence",
+                            portfolio_id=payload.portfolio_id,
+                            question=payload.question,
+                        )
+                        deep_contexts.append((request, context))
+                    contexts.append(context.model_dump(mode="json"))
+                    deep_evidence.extend(context_evidence(context))
+                return {
+                    "contexts": contexts,
+                    "evidence": deep_evidence,
+                    "allowed_evidence_ids": [
+                        str(item["evidence_id"])
+                        for item in deep_evidence
+                        if item.get("evidence_id")
+                    ],
+                    "allowed_numeric_tokens": list(
+                        numeric_tokens_from_values({"contexts": contexts, "evidence": deep_evidence})
+                    ),
+                }
+
+            grounded_context = {
+                "question": payload.question,
+                "intent": intent,
+                "canonical_context": canonical_context_payload,
+                "portfolio_and_ips": {
+                    "portfolio": None
+                    if portfolio is None
+                    else {"id": portfolio.id, "name": portfolio.name},
+                    "summary": summary,
+                    "compliance": compliance,
                 },
-                default=str,
+                "calculated_evidence": evidence,
+                "canonical_evidence": canonical_evidence,
+                "source_citations": citation_evidence,
+                "uncertainty": uncertainty,
+                "deterministic_fallback": answer,
+            }
+            engine = ReasoningEngine(provider, api_key, selected_model)
+            result = await engine.run(
+                ReasoningRequest(
+                    question=payload.question,
+                    mode=mode,
+                    portfolio_id=payload.portfolio_id,
+                    portfolio_name=None if portfolio is None else portfolio.name,
+                    history=prior_history,
+                    grounded_context=grounded_context,
+                    allowed_evidence_ids=allowed_evidence_ids,
+                    allowed_instrument_ids=allowed_instrument_ids,
+                    allowed_numeric_tokens=numeric_tokens_from_values(
+                        {"question": payload.question, "grounded_context": grounded_context}
+                    ),
+                    required_evidence_ids=required_evidence_ids,
+                    freshness_warnings=warnings,
+                    sector_packets=peer_packets,
+                    deepen_candidates=deepen_candidates,
+                )
             )
-            response = await provider.chat(
-                api_key,
-                [
-                    {
-                        "role": "system",
-                        "content": 'You are the synthesis layer of a portfolio intelligence application. Use only supplied canonical evidence; never calculate portfolio facts or introduce numbers. Deterministic evidence cards remain numerical authority. For personal fit, use only the selected portfolio and its confirmed IPS; never use application-level investor preferences. Distinguish observed facts, calculations, assumptions, and interpretation. If evidence is unavailable, say so. For security-fit questions, structure the answer with: Bottom line; Security and company evidence; Market, sector and macro backdrop; Portfolio and IPS fit; Evidence against the case; Decision boundary. Keep the answer under 700 words and use no more than 10 claims. Return one complete JSON object only, with no markdown fence or text outside it: {"answer":"sectioned prose with blank lines","claims":[{"text":"claim","evidence_ids":["id"]}]}. Copy evidence IDs exactly from allowed_evidence_ids. Every claim must include at least one applicable allowed ID.',
-                    },
-                    {"role": "user", "content": grounded_context},
-                ],
-                selected_model,
-            )
-            evidence_ids = set(allowed_evidence_ids)
-            validated, failure = _validated_claim_answer(
-                response.content,
-                grounded_context + payload.question,
-                evidence_ids,
-                required_evidence_ids,
-            )
-            if validated:
-                answer = validated
-                synthesis = {
-                    "mode": "llm_grounded",
-                    "provider": response.provider,
-                    "model": response.model,
-                    "reason": None,
-                }
-            elif failure:
-                uncertainty.append(f"{failure} Deterministic output was used.")
-                synthesis = {
-                    "mode": "deterministic_fallback",
-                    "provider": selected_provider,
-                    "model": selected_model,
-                    "reason": failure,
-                }
+            answer = result.answer
+            trace.extend({"tool": "reasoning.phase8", **item} for item in result.trace)
+            if deep_contexts and canonical_context is None:
+                canonical_request, canonical_context = deep_contexts[0]
+                canonical_context_payload = canonical_context.model_dump(mode="json")
+            for _request, deep_context in deep_contexts:
+                uncertainty = list(
+                    dict.fromkeys([*uncertainty, *context_uncertainty(deep_context)])
+                )
+                known_citation_ids = {str(item.get("id")) for item in citations}
+                citations.extend(
+                    item
+                    for item in context_citations(deep_context)
+                    if str(item.get("id")) not in known_citation_ids
+                )
+            if result.validation_errors:
+                uncertainty.append(
+                    "Recommendation synthesis failed mechanical validation: "
+                    + "; ".join(result.validation_errors)
+                )
+            synthesis = {
+                "mode": "llm_grounded"
+                if result.status == "grounded"
+                else "recommendation_synthesis_unavailable",
+                "provider": result.provider,
+                "model": result.model,
+                "reason": None
+                if result.status == "grounded"
+                else "Phase 8 synthesis or validation failed",
+                "recommendation": result.recommendation,
+                "confidence": result.confidence,
+                "horizon": None if result.horizon is None else result.horizon.model_dump(),
+                "instrument_ids": result.instrument_ids,
+                "evidence_ids": result.evidence_ids,
+                "repaired": result.repaired,
+                "mode_scope": mode,
+            }
         except Exception as exc:
+            answer = "Recommendation Synthesis Unavailable\n\n" + answer
             uncertainty.append(
-                f"LLM provider was unavailable ({type(exc).__name__}); deterministic output was used."
+                f"LLM provider was unavailable ({type(exc).__name__}); grounded facts were preserved."
             )
             synthesis = {
-                "mode": "deterministic_fallback",
+                "mode": "recommendation_synthesis_unavailable",
                 "provider": selected_provider,
                 "model": payload.model,
                 "reason": f"{type(exc).__name__}",
@@ -1082,16 +1071,30 @@ async def run_assistant(
     db.add(assistant)
     db.flush()
     consumed = None
+    context_consumptions = []
+    contexts_to_persist = []
     if canonical_context and canonical_request:
-        consumed = persist_built_assistant_context(
+        contexts_to_persist.append((canonical_request, canonical_context))
+    for request, context in deep_contexts:
+        if all(existing.receipt.content_hash != context.receipt.content_hash for _, existing in contexts_to_persist):
+            contexts_to_persist.append((request, context))
+    for index, (request, context) in enumerate(contexts_to_persist):
+        current = persist_built_assistant_context(
             db,
             user,
-            canonical_request,
-            canonical_context,
+            request,
+            context,
             conversation_id=conversation.id,
             message_id=assistant.id,
+            output_id=assistant.id if index == 0 else str(uuid4()),
         )
+        context_consumptions.append(current)
+    if context_consumptions:
+        consumed = context_consumptions[0]
         assistant.context_receipt_id = consumed.receipt_record.id
+        synthesis["context_receipt_ids"] = [
+            item.receipt_record.id for item in context_consumptions
+        ]
     assistant.evidence_json = json.dumps(
         {
             "calculated_evidence": evidence,
@@ -1104,6 +1107,9 @@ async def run_assistant(
             "context_receipt": canonical_context.receipt.model_dump(mode="json")
             if canonical_context
             else None,
+            "context_receipt_ids": [
+                item.receipt_record.id for item in context_consumptions
+            ],
             "refresh_request_id": consumed.refresh_request.id
             if consumed and consumed.refresh_request
             else None,

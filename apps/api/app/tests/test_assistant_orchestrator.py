@@ -48,6 +48,26 @@ def test_risk_concentration_question_identifies_top_contributors_and_skips_narra
     assert search_trace["status"] == "skipped"
 
 
+def test_question_without_portfolio_uses_the_global_selected_portfolio(client):
+    headers = _auth(client, "assistant-global@example.com")
+    portfolio_id = _portfolio_with_holdings(client, headers)
+
+    response = client.post(
+        "/assistant/messages",
+        headers=headers,
+        json={"question": "Where is the risk concentrated in my portfolio?"},
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert any(
+        item.get("metric") == "percentage_risk_contribution"
+        for item in body["calculated_evidence"]
+    )
+    conversations = client.get("/assistant/conversations", headers=headers).json()
+    assert conversations[0]["portfolio_id"] == portfolio_id
+
+
 def test_compliance_question_reports_status_and_skips_narrative_search(client):
     headers = _auth(client)
     portfolio_id = _portfolio_with_holdings(client, headers)

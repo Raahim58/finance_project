@@ -197,6 +197,7 @@ def persist_built_assistant_context(
     *,
     conversation_id: str,
     message_id: str,
+    output_id: str | None = None,
     active: bool = True,
 ) -> ConsumedContext:
     visible, refresh = ContextDeficiencyBridge.production(
@@ -210,12 +211,12 @@ def persist_built_assistant_context(
         consumer_type="assistant",
         consumer_key=conversation_id,
         source_message_id=message_id,
-        output_id=message_id,
+        output_id=output_id or message_id,
     )
     receipt = db.scalar(
         select(IntelligenceContextReceiptRecord).where(
             IntelligenceContextReceiptRecord.user_id == user.id,
-            IntelligenceContextReceiptRecord.output_id == message_id,
+            IntelligenceContextReceiptRecord.output_id == (output_id or message_id),
         )
     )
     if receipt is None:  # pragma: no cover - persistence invariant

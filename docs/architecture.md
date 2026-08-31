@@ -78,7 +78,7 @@ unchanged.
 
 ## Phase 8 reasoning boundary
 
-Phase 8 extracts final Assistant reasoning into a stateless module. Each execution
+Phase 8 is implemented as a stateless Assistant reasoning module. Each execution
 receives the current request, the globally selected active user-owned portfolio as the
 fallback portfolio context, any explicitly selected security, bounded conversation
 history, and a freshly assembled Canonical Intelligence Context. The selected
@@ -120,9 +120,9 @@ may be used only after its provider and provenance are verified. Unclassified se
 remain in an explicit unclassified packet and are never silently omitted. Each group
 receives compact, consistent-period structured evidence and group-appropriate metrics;
 securities are assessed primarily against their peers rather than through one raw
-cross-sector ranking. When all group packets fit, one discovery call preserves those
-boundaries. Otherwise LangGraph maps complete sector packets across parallel discovery
-calls. Discovery selects bounded candidates within each sector without issuing an
+cross-sector ranking. LangGraph maps every complete sector packet through parallel
+discovery calls, keeping classification boundaries and coverage accounting explicit
+regardless of total context size. Discovery selects bounded candidates within each sector without issuing an
 advisory conclusion. The application then builds deep Canonical Intelligence Context for
 the sector candidates, and a final model call performs portfolio/IPS-aware cross-sector
 comparison and writes the recommendation. This is read-only context expansion, not

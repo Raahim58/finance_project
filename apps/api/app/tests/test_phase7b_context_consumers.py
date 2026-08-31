@@ -4,7 +4,6 @@ from datetime import date
 from sqlalchemy import select
 
 from app.ai.providers.base import LLMProviderResult
-from app.ai.orchestrator import _validated_claim_answer
 from app.db.session import SessionLocal
 from app.models.intelligence_context import (
     ContextIngestionWork,
@@ -245,7 +244,7 @@ def test_assistant_fit_uses_canonical_evidence_receipt_and_excludes_user_prefere
         assert receipt.output_id == message.id
 
 
-def test_security_fit_performs_normal_llm_planning_round(client, monkeypatch):
+def test_security_fit_removes_the_phase7_llm_tool_planning_round(client, monkeypatch):
     headers = _auth(client, "phase7b-planner@example.com")
     instrument_id = _instrument_and_fact()
     portfolio_id = _portfolio(client, headers, "Planner mandate")
@@ -257,17 +256,13 @@ def test_security_fit_performs_normal_llm_planning_round(client, monkeypatch):
         ).status_code
         == 201
     )
-    calls = []
-
-    async def planned(*_args, **_kwargs):
-        calls.append("planned")
-        return []
-
     class Provider:
+        name = "test"
+        default_model = "test"
+
         async def chat(self, _api_key, _messages, _model):
             return LLMProviderResult(content="{}", provider="test", model="test")
 
-    monkeypatch.setattr("app.ai.orchestrator._planned_tool_calls", planned)
     monkeypatch.setattr("app.ai.orchestrator.get_provider", lambda _name: Provider())
 
     response = client.post(
@@ -282,8 +277,7 @@ def test_security_fit_performs_normal_llm_planning_round(client, monkeypatch):
     )
 
     assert response.status_code == 201, response.text
-    assert calls == ["planned"]
-    assert response.json()["synthesis"]["mode"] == "deterministic_fallback"
+    assert response.json()["synthesis"]["mode"] == "recommendation_synthesis_unavailable"
 
 
 def test_llm_synthesis_and_fallback_share_canonical_evidence_ids(client, monkeypatch):
@@ -299,30 +293,31 @@ def test_llm_synthesis_and_fallback_share_canonical_evidence_ids(client, monkeyp
         == 201
     )
 
-    async def planned(*_args, **_kwargs):
-        return []
-
     class Provider:
+        name = "test"
+        default_model = "test"
+
         async def chat(self, _api_key, messages, _model):
             grounded = json.loads(messages[-1]["content"])
-            evidence_id = grounded["allowed_evidence_ids"][0]
+            evidence_id = grounded["grounded_context"]["calculated_evidence"][0][
+                "evidence_id"
+            ]
             return LLMProviderResult(
                 content=json.dumps(
                     {
                         "answer": "The evidence supports a conditional fit.",
-                        "claims": [
-                            {
-                                "text": "The evidence supports a conditional fit.",
-                                "evidence_ids": [evidence_id],
-                            }
-                        ],
+                        "recommendation": None,
+                        "horizon": None,
+                        "portfolio_id": grounded["portfolio_id"],
+                        "instrument_ids": grounded["selected_instrument_ids"],
+                        "evidence_ids": [evidence_id],
+                        "freshness_acknowledgements": ["Freshness warnings acknowledged."],
                     }
                 ),
                 provider="test",
                 model="test",
             )
 
-    monkeypatch.setattr("app.ai.orchestrator._planned_tool_calls", planned)
     monkeypatch.setattr("app.ai.orchestrator.get_provider", lambda _name: Provider())
 
     response = client.post(
@@ -436,47 +431,3 @@ def test_returning_to_assistant_conversation_lazily_rebuilds_inactive_context(cl
         assert refresh.active is True
         assert refresh.needs_rebuild is False
         assert refresh.rebuild_count == 1
-
-
-def test_llm_claim_validation_rejects_unknown_ids_numbers_and_ungrounded_advice():
-    unknown, unknown_reason = _validated_claim_answer(
-        json.dumps(
-            {
-                "answer": "Grounded statement.",
-                "claims": [{"text": "Grounded statement.", "evidence_ids": ["ev_unknown"]}],
-            }
-        ),
-        "context",
-        {"ev_allowed"},
-        set(),
-    )
-    assert unknown is None
-    assert "valid evidence ID" in unknown_reason
-
-    numeric, numeric_reason = _validated_claim_answer(
-        json.dumps(
-            {
-                "answer": "The value is 99.",
-                "claims": [{"text": "The value is high.", "evidence_ids": ["ev_allowed"]}],
-            }
-        ),
-        "context without that number",
-        {"ev_allowed"},
-        set(),
-    )
-    assert numeric is None
-    assert "numeric grounding" in numeric_reason
-
-    advice, advice_reason = _validated_claim_answer(
-        json.dumps(
-            {
-                "answer": "Buy it.",
-                "claims": [{"text": "Buy it.", "evidence_ids": []}],
-            }
-        ),
-        "context",
-        {"ev_allowed"},
-        set(),
-    )
-    assert advice is None
-    assert "valid evidence ID" in advice_reason

@@ -14,14 +14,14 @@ describe("assistant scope and async correctness",()=>{
   beforeEach(()=>{getPortfolios.mockReset();sendAssistantMessage.mockReset()});
   afterEach(()=>cleanup());
 
-  it("does not switch a market-wide question to a portfolio scope once the portfolio list resolves",async()=>{
+  it("defaults to the globally selected portfolio once the portfolio list resolves",async()=>{
     let resolvePortfolios:(rows:unknown[])=>void=()=>{};
     getPortfolios.mockReturnValue(new Promise(resolve=>{resolvePortfolios=resolve}));
     render(<AssistantPage/>);
     expect(screen.getByLabelText("Portfolio scope")).toHaveValue("");
     resolvePortfolios([{id:"p1",name:"Growth",is_default:true}]);
     await waitFor(()=>expect(screen.getByRole("option",{name:"Growth"})).toBeInTheDocument());
-    expect(screen.getByLabelText("Portfolio scope")).toHaveValue("");
+    await waitFor(()=>expect(screen.getByLabelText("Portfolio scope")).toHaveValue("p1"));
   });
 
   it("does not let a slower earlier request overwrite the result of a newer one",async()=>{

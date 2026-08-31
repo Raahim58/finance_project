@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     assistant_max_tool_cost_units: int = 18
     assistant_max_retrieved_chunks: int = 8
     assistant_timeout_seconds: int = 30
+    phase8_reasoning_enabled: bool = True
+    phase8_market_deep_candidate_limit: int = Field(default=8, ge=1, le=20)
+    phase8_sector_candidate_limit: int = Field(default=3, ge=1, le=10)
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
     evidence_enabled: bool = False

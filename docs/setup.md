@@ -13,6 +13,13 @@ python -m app.core.keys
 
 Put the generated Fernet key in `ENCRYPTION_KEY`. User LLM keys are encrypted at rest, never returned after save, and decrypted server-side only for an LLM request.
 
+Phase 8 reasoning is enabled by default. `PHASE8_REASONING_ENABLED=false` restores the
+grounded deterministic Assistant path without enabling any executable action loop.
+`PHASE8_MARKET_DEEP_CANDIDATE_LIMIT` (default `8`) and
+`PHASE8_SECTOR_CANDIDATE_LIMIT` (default `3`) bound market-wide model work. LangGraph is
+compiled without a checkpoint store; no additional persistence service or migration is
+required.
+
 Start production-style dependencies and migrate:
 
 ```bash
