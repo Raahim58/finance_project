@@ -76,6 +76,87 @@ evaluation and proposal persistence remain separate deterministic workflows; the
 POST routes, portfolio comparisons, scenarios, IPS checks, and audit behavior are
 unchanged.
 
+## Phase 8 reasoning boundary
+
+Phase 8 extracts final Assistant reasoning into a stateless module. Each execution
+receives the current request, the globally selected active user-owned portfolio as the
+fallback portfolio context, any explicitly selected security, bounded conversation
+history, and a freshly assembled Canonical Intelligence Context. The selected
+portfolio's identifier and name are supplied to the model. Market-wide describes the
+candidate security universe, not the absence of portfolio context. Free-form text is
+not allowed to silently switch the portfolio; an explicitly selected portfolio is
+resolved and ownership-checked by the server, otherwise the global selection is used.
+
+`ReasoningEngine` remains the application-owned interface. Its initial orchestration
+implementation uses a LangGraph `StateGraph`, while canonical request, context,
+evidence, recommendation, and validation contracts remain framework-independent.
+Phase 8 compiles the graph without a persistent checkpointer and does not adopt the
+LangChain agent, retrieval, memory, or tool abstractions. Existing Conversation,
+AssistantMessage, context receipt, evidence, and trace records remain authoritative.
+PostgreSQL graph checkpoints and `conversation.id` thread identity are deferred until
+Phase 11 or future resumable analytical-tool execution creates a real pause/resume
+requirement.
+
+The current Phase 8 module reads and recommends but does not invoke portfolio tools,
+optimizers, screeners, or scenario engines and does not save proposals or modify
+portfolio or IPS state. It may interpret existing deterministic analysis results.
+Read-only analytical tool execution is a future extension behind the same reasoning
+boundary.
+
+The model writes the user-facing answer once. Its provider response contains that
+natural-language answer plus compact fields such as advisory conclusion, horizon, and
+confidence, with inline references to allowed evidence IDs. The API displays the
+model's answer without reconstructing or duplicating its prose. Explicit conclusions
+may be Buy/Add, Hold, Reduce, Avoid, or Insufficient Evidence and include the applicable
+horizon, thesis, portfolio/IPS fit where applicable, catalysts, risks, invalidation
+conditions, confidence, missing evidence, and citations.
+
+Holding analysis and user-named comparisons normally perform one model synthesis call.
+Market-wide recommendations are the deliberate exception. The complete eligible active
+universe is partitioned by authoritative available security classification. The current
+classification authority is the PSX sector observed from the PSX symbol universe; no
+sub-industry is inferred from names or narrative text. A separately sourced sub-industry
+may be used only after its provider and provenance are verified. Unclassified securities
+remain in an explicit unclassified packet and are never silently omitted. Each group
+receives compact, consistent-period structured evidence and group-appropriate metrics;
+securities are assessed primarily against their peers rather than through one raw
+cross-sector ranking. When all group packets fit, one discovery call preserves those
+boundaries. Otherwise LangGraph maps complete sector packets across parallel discovery
+calls. Discovery selects bounded candidates within each sector without issuing an
+advisory conclusion. The application then builds deep Canonical Intelligence Context for
+the sector candidates, and a final model call performs portfolio/IPS-aware cross-sector
+comparison and writes the recommendation. This is read-only context expansion, not
+optimizer or scenario execution. One additional model call is permitted only as the
+single constrained repair attempt after a mechanically invalid response. Phase 8 has no
+critic or semantic-judge model call.
+
+Blocking validation is restricted to mechanically provable invariants: response
+schema and enums; equality of returned instrument, portfolio, and scope identifiers
+with trusted request/context values; prior ownership resolution; evidence-ID
+membership in the canonical allowlist; exact numerical agreement with authoritative
+structured evidence and units; presence of a horizon source; and required disclosure
+of freshness states used by the answer. The validator never decides whether evidence
+is persuasive, whether sources are materially contradictory, whether a risk changes
+the thesis, which advisory conclusion is justified, or whether an outside security is
+a meaningful alternative. Those are semantic judgments made by the model and measured
+through evaluations.
+
+Semantic checks begin in non-blocking shadow mode. A labeled evaluation set measures
+false abstention, unsupported recommendations, incorrect portfolio scope, citation
+misuse, and conclusion consistency. Only checks demonstrated to be objective
+invariants may become blocking. Missing optional sections do not accumulate into a
+generic penalty score. A structural failure may receive one constrained repair attempt;
+the validator may accept the model's conclusion or reject the structurally invalid
+response, but it never rewrites Buy as Hold or otherwise substitutes its own financial
+judgment.
+
+If the configured provider is unavailable or the response remains structurally invalid
+after the single repair attempt, the API returns the available deterministic factual
+summary and evidence cards without an advisory conclusion. The result is labeled
+Recommendation Synthesis Unavailable rather than Insufficient Evidence because the
+failure belongs to model synthesis, not necessarily to the underlying evidence. A
+deterministic fallback never invents Buy/Add, Hold, Reduce, or Avoid.
+
 Global Evidence v1 is deliberately staged. Pass 0 established persistence and
 contracts. Pass 1 adds the first synchronous vertical slice: configured discovery
 through RSS/Atom, sitemaps, GDELT, verified listing pages, and the observed PSX
