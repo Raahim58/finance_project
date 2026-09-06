@@ -6,6 +6,7 @@ from app.models.evidence import (
     EvidenceSourceState,
 )
 from app.models.llm_key import LLMApiKey
+from app.models.llm_invocation import LLMInvocation
 from app.models.intelligence_context import (
     ContextDeficiencyRecord,
     ContextIngestionWork,
@@ -83,6 +84,7 @@ __all__ = [
     "Exchange",
     "MarketIngestionRun",
     "LLMApiKey",
+    "LLMInvocation",
     "ContextDeficiencyRecord",
     "ContextIngestionWork",
     "ContextRefreshRequest",

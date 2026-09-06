@@ -158,6 +158,15 @@ estimated when a provider does not report usage. Provider and graph failures ret
 sanitized reason in uncertainty and trace metadata instead of becoming an unexplained
 fallback.
 
+Each external model attempt also writes one bounded server-side `llm_invocations`
+diagnostic row linked to the user, conversation, and Assistant message. It stores the
+provider/model and graph operation, input byte count and hash, latency, provider token
+usage, safe HTTP status/error type/message, and provider request ID. API keys, headers,
+and full outgoing prompts are never stored. Successful answer text remains canonical in
+`AssistantMessage`; a response excerpt is retained only when the overall reasoning run
+is unavailable, capped at 12,000 characters. The Assistant response exposes only the
+diagnostic row IDs for correlation.
+
 If the configured provider is unavailable or the response remains structurally invalid
 after the single repair attempt, the API returns the available deterministic factual
 summary and evidence cards without an advisory conclusion. The result is labeled

@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-from app.ai.providers.base import LLMProvider, LLMProviderResult
+from app.ai.providers.base import LLMProvider, LLMProviderResult, ProviderRequestError
 from app.core.config import settings
 
 
@@ -42,7 +42,34 @@ class HTTPProvider(LLMProvider):
         except httpx.HTTPError as exc:
             raise RuntimeError(f"{self.name} API request failed") from exc
         if response.status_code >= 400:
-            raise RuntimeError(f"{self.name} API request failed with HTTP {response.status_code}")
+            error_type = None
+            provider_message = None
+            try:
+                error_payload = response.json()
+            except ValueError:
+                error_payload = None
+            if isinstance(error_payload, dict):
+                error = error_payload.get("error")
+                if isinstance(error, dict):
+                    if isinstance(error.get("type"), str):
+                        error_type = error["type"][:120]
+                    if isinstance(error.get("message"), str):
+                        provider_message = error["message"].strip()[:2000]
+                else:
+                    if isinstance(error_payload.get("type"), str):
+                        error_type = error_payload["type"][:120]
+                    if isinstance(error_payload.get("message"), str):
+                        provider_message = error_payload["message"].strip()[:2000]
+            request_id = response.headers.get("request-id") or response.headers.get(
+                "x-request-id"
+            )
+            raise ProviderRequestError(
+                provider=self.name,
+                status_code=response.status_code,
+                error_type=error_type,
+                provider_message=provider_message,
+                request_id=None if request_id is None else request_id[:255],
+            )
         try:
             return response.json()
         except ValueError as exc:
@@ -91,7 +118,11 @@ class AnthropicProvider(HTTPProvider):
         turns = [item for item in messages if item.get("role") in {"user", "assistant"}]
         # Grounded portfolio synthesis includes claim-level citations after the prose.
         # A 2K cap can truncate otherwise-valid JSON before the claims array closes.
-        payload: dict[str, Any] = {"model": selected_model, "max_tokens": 4096, "messages": turns, "temperature": 0}
+        payload: dict[str, Any] = {
+            "model": selected_model,
+            "max_tokens": 4096,
+            "messages": turns,
+        }
         if system:
             payload["system"] = system
         data = await self._post(self.chat_url, api_key, payload)

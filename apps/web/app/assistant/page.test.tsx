@@ -6,8 +6,8 @@ const getPortfolios=vi.fn();
 const sendAssistantMessage=vi.fn();
 vi.mock("@/lib/api",()=>({getPortfolios:(...args:unknown[])=>getPortfolios(...args),sendAssistantMessage:(...args:unknown[])=>sendAssistantMessage(...args)}));
 
-function result(answer:string){
-  return {conversation_id:"c1",message_id:"m1",answer,uncertainty:[],calculated_evidence:[],source_citations:[],freshness_warnings:[],tool_trace:[],synthesis:{mode:"llm_grounded",provider:"anthropic",model:"claude-test",token_usage:{input_tokens:1234,output_tokens:321,total_tokens:1555,model_calls:1,reported_by_provider:true}},created_at:new Date().toISOString()};
+function result(answer:string,diagnosticIds:string[]=[]){
+  return {conversation_id:"c1",message_id:"m1",answer,uncertainty:[],calculated_evidence:[],source_citations:[],freshness_warnings:[],tool_trace:[],synthesis:{mode:"llm_grounded",provider:"anthropic",model:"claude-test",diagnostic_ids:diagnosticIds,token_usage:{input_tokens:1234,output_tokens:321,total_tokens:1555,model_calls:1,reported_by_provider:true}},created_at:new Date().toISOString()};
 }
 
 describe("assistant scope and async correctness",()=>{
@@ -57,5 +57,15 @@ describe("assistant scope and async correctness",()=>{
     fireEvent.submit(container.querySelector("form") as HTMLFormElement);
 
     await waitFor(()=>expect(screen.getByText(/Input 1,234 · Output 321 · Total 1,555/)).toBeInTheDocument());
+  });
+
+  it("shows a short server-side diagnostic reference",async()=>{
+    getPortfolios.mockResolvedValue([{id:"p1",name:"Growth",is_default:true}]);
+    sendAssistantMessage.mockResolvedValue(result("failed answer",["12345678-abcd-efab-cdef-1234567890ab"]));
+    const {container}=render(<AssistantPage/>);
+    fireEvent.change(screen.getByLabelText("Question"),{target:{value:"Analyze MEBL"}});
+    fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+
+    await waitFor(()=>expect(screen.getByText("Diagnostic 12345678")).toBeInTheDocument());
   });
 });

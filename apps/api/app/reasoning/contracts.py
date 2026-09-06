@@ -65,6 +65,24 @@ class ReasoningRequest:
 
 
 @dataclass(frozen=True)
+class ReasoningInvocation:
+    operation: str
+    provider: str
+    model: str
+    status: Literal["success", "provider_error", "error"]
+    input_bytes: int
+    input_sha256: str
+    latency_ms: int
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    http_status: int | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+    provider_request_id: str | None = None
+    response_excerpt: str | None = None
+
+
+@dataclass(frozen=True)
 class ReasoningResult:
     answer: str
     recommendation: RecommendationLabel | None
@@ -82,3 +100,4 @@ class ReasoningResult:
     validation_errors: list[str] = field(default_factory=list)
     repaired: bool = False
     trace: list[dict[str, object]] = field(default_factory=list)
+    invocations: list[ReasoningInvocation] = field(default_factory=list)

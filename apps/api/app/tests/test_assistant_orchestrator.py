@@ -1,6 +1,13 @@
+import json
 from datetime import date
 
+from sqlalchemy import select
+
+from app.ai.providers.base import LLMProviderResult, ProviderRequestError
 from app.db.session import SessionLocal
+from app.models.llm_invocation import LLMInvocation
+from app.models.market import Company, Exchange
+from app.models.workstation import Instrument
 from app.services.market_ingestion import generate_mock_market_data
 
 
@@ -88,6 +95,150 @@ def test_advice_for_named_holding_builds_portfolio_aware_security_fit_context(cl
     )
     assert context_step["arguments"]["scope"] == "security_fit"
     assert context_step["arguments"]["portfolio_id"] == portfolio_id
+
+
+def test_psx_market_language_routes_to_market_wide_discovery(client, monkeypatch):
+    headers = _auth(client, "assistant-market-wide@example.com")
+    _portfolio_with_holdings(client, headers)
+    with SessionLocal() as db:
+        exchange = db.scalar(select(Exchange).where(Exchange.code == "PSX"))
+        company = Company(
+            symbol="PSX",
+            name="Pakistan Stock Exchange Limited",
+            sector="Investment Banks / Investment Companies / Securities Companies",
+            exchange_id=exchange.id,
+        )
+        db.add(company)
+        db.flush()
+        db.add(
+            Instrument(
+                company_id=company.id,
+                symbol="PSX",
+                name="Pakistan Stock Exchange Limited",
+                sector=company.sector,
+            )
+        )
+        db.commit()
+    key_response = client.post(
+        "/settings/llm-keys",
+        headers=headers,
+        json={"provider": "mock", "api_key": "mock-market-wide-key"},
+    )
+    assert key_response.status_code == 201
+
+    class MarketProvider:
+        name = "mock"
+        default_model = "market-test"
+
+        async def chat(self, _api_key, messages, _model):
+            payload = json.loads(messages[-1]["content"])
+            if "records" in payload:
+                instrument_ids = [payload["records"][0]["instrument_id"]]
+                content = {"instrument_ids": instrument_ids}
+            elif "candidate_instrument_ids" in payload:
+                instrument_ids = payload["candidate_instrument_ids"][:2]
+                content = {"instrument_ids": instrument_ids}
+            else:
+                content = {
+                    "answer": "Market-wide discovery completed.",
+                    "recommendation": None,
+                    "confidence": None,
+                    "horizon": None,
+                    "portfolio_id": payload["portfolio_id"],
+                    "instrument_ids": payload["selected_instrument_ids"],
+                    "evidence_ids": payload["allowed_evidence_ids"],
+                    "freshness_acknowledgements": ["Freshness warnings acknowledged."],
+                }
+            return LLMProviderResult(
+                content=json.dumps(content),
+                provider=self.name,
+                model=self.default_model,
+            )
+
+    monkeypatch.setattr(
+        "app.ai.orchestrator.get_provider", lambda _name: MarketProvider()
+    )
+
+    response = client.post(
+        "/assistant/messages",
+        headers=headers,
+        json={
+            "question": "What stocks should I consider investing in across the PSX market?",
+            "provider": "mock",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["synthesis"]["mode_scope"] == "market_wide"
+    assert any(step.get("node") == "peer_group_analysis" for step in body["tool_trace"])
+    assert not any(
+        step.get("tool") == "intelligence.canonical_context"
+        for step in body["tool_trace"]
+    )
+
+
+def test_provider_error_is_saved_with_diagnostic_id_and_safe_fields(client, monkeypatch):
+    headers = _auth(client, "assistant-provider-error@example.com")
+    _portfolio_with_holdings(client, headers)
+    key_response = client.post(
+        "/settings/llm-keys",
+        headers=headers,
+        json={"provider": "mock", "api_key": "mock-provider-error-key"},
+    )
+    assert key_response.status_code == 201
+
+    class FailingProvider:
+        name = "anthropic"
+        default_model = "claude-sonnet-5"
+
+        async def chat(self, _api_key, _messages, _model):
+            raise ProviderRequestError(
+                provider="anthropic",
+                status_code=400,
+                error_type="invalid_request_error",
+                provider_message="temperature is not supported for this model",
+                request_id="req_123",
+            )
+
+    monkeypatch.setattr(
+        "app.ai.orchestrator.get_provider", lambda _name: FailingProvider()
+    )
+
+    response = client.post(
+        "/assistant/messages",
+        headers=headers,
+        json={
+            "question": "Analyze my existing MEBL holding. Should I add, hold, or reduce it?",
+            "provider": "mock",
+            "model": "claude-sonnet-5",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    diagnostic_ids = body["synthesis"]["diagnostic_ids"]
+    assert len(diagnostic_ids) == 1
+
+    history = client.get(
+        f"/assistant/conversations/{body['conversation_id']}/messages", headers=headers
+    ).json()
+    assistant_message = next(row for row in history if row["id"] == body["message_id"])
+    assert assistant_message["evidence"]["synthesis"]["diagnostic_ids"] == diagnostic_ids
+
+    with SessionLocal() as db:
+        invocation = db.get(LLMInvocation, diagnostic_ids[0])
+        assert invocation is not None
+        assert invocation.assistant_message_id == body["message_id"]
+        assert invocation.provider == "anthropic"
+        assert invocation.model == "claude-sonnet-5"
+        assert invocation.operation == "synthesis"
+        assert invocation.status == "provider_error"
+        assert invocation.http_status == 400
+        assert invocation.error_type == "invalid_request_error"
+        assert invocation.error_message == "temperature is not supported for this model"
+        assert invocation.provider_request_id == "req_123"
+        assert invocation.response_excerpt is None
 
 
 def test_compliance_question_reports_status_and_skips_narrative_search(client):

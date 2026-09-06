@@ -4,7 +4,7 @@ from datetime import date
 import pytest
 from sqlalchemy import select
 
-from app.ai.providers.base import LLMProviderResult
+from app.ai.providers.base import LLMProviderResult, ProviderRequestError
 from app.db.session import SessionLocal
 from app.models.market import Company, Exchange, MarketPrice
 from app.models.intelligence_context import IntelligenceContextReceiptRecord
@@ -153,6 +153,37 @@ async def test_phase8_preserves_provider_failure_reason_and_attempted_call_count
     )
     assert result.model_calls == 1
     assert result.trace[-1]["node"] == "reasoning_error"
+
+
+@pytest.mark.asyncio
+async def test_phase8_returns_bounded_structured_diagnostics_for_provider_error():
+    provider = SequenceProvider(
+        [
+            ProviderRequestError(
+                provider="anthropic",
+                status_code=400,
+                error_type="invalid_request_error",
+                provider_message="temperature is not supported for this model",
+                request_id="req_123",
+            )
+        ]
+    )
+
+    result = await ReasoningEngine(provider, "secret", "claude-sonnet-5").run(
+        _request()
+    )
+
+    assert len(result.invocations) == 1
+    invocation = result.invocations[0]
+    assert invocation.operation == "synthesis"
+    assert invocation.status == "provider_error"
+    assert invocation.http_status == 400
+    assert invocation.error_type == "invalid_request_error"
+    assert invocation.error_message == "temperature is not supported for this model"
+    assert invocation.provider_request_id == "req_123"
+    assert invocation.input_bytes > 0
+    assert len(invocation.input_sha256) == 64
+    assert invocation.response_excerpt is None
 
 
 @pytest.mark.asyncio

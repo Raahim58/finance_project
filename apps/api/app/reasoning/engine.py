@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import time
 from dataclasses import replace
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from app.ai.providers.base import LLMProvider
+from app.ai.providers.base import LLMProvider, ProviderRequestError
 from app.core.config import settings
 from app.reasoning.contracts import (
     MarketCandidateSet,
     ModelAnswer,
     ReasoningRequest,
     ReasoningResult,
+    ReasoningInvocation,
     SectorCandidateSet,
 )
 from app.reasoning.validation import parse_model_answer, validate_model_answer
@@ -55,20 +58,68 @@ class ReasoningEngine:
         self.input_tokens = 0
         self.output_tokens = 0
         self.model_calls = 0
+        self.invocations: list[ReasoningInvocation] = []
         self.graph = self._build_graph()
 
-    async def _chat(self, system: str, payload: dict[str, object]):
+    async def _chat(
+        self, operation: str, system: str, payload: dict[str, object]
+    ):
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(payload, default=str)},
+        ]
+        serialized = json.dumps(messages, separators=(",", ":"), ensure_ascii=False)
+        input_bytes = len(serialized.encode("utf-8"))
+        input_sha256 = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        started = time.perf_counter()
         self.model_calls += 1
-        response = await self.provider.chat(
-            self.api_key,
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": json.dumps(payload, default=str)},
-            ],
-            self.model,
-        )
+        try:
+            response = await self.provider.chat(self.api_key, messages, self.model)
+        except Exception as exc:
+            provider_error = exc if isinstance(exc, ProviderRequestError) else None
+            safe_error_message = (
+                str(exc) if provider_error is None else provider_error.provider_message
+            )
+            self.invocations.append(
+                ReasoningInvocation(
+                    operation=operation,
+                    provider=self.provider.name,
+                    model=self.model or self.provider.default_model,
+                    status="provider_error" if provider_error else "error",
+                    input_bytes=input_bytes,
+                    input_sha256=input_sha256,
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                    http_status=None
+                    if provider_error is None
+                    else provider_error.status_code,
+                    error_type=type(exc).__name__
+                    if provider_error is None
+                    else provider_error.error_type,
+                    error_message=None
+                    if safe_error_message is None
+                    else safe_error_message[:2000],
+                    provider_request_id=None
+                    if provider_error is None
+                    else provider_error.request_id,
+                )
+            )
+            raise
         self.input_tokens += response.input_tokens or 0
         self.output_tokens += response.output_tokens or 0
+        self.invocations.append(
+            ReasoningInvocation(
+                operation=operation,
+                provider=response.provider,
+                model=response.model,
+                status="success",
+                input_bytes=input_bytes,
+                input_sha256=input_sha256,
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                response_excerpt=response.content[:12_000],
+            )
+        )
         return response
 
     async def _discover_sector(
@@ -76,6 +127,7 @@ class ReasoningEngine:
     ) -> tuple[str, list[str], str | None]:
         allowed = {str(row["instrument_id"]) for row in records}
         response = await self._chat(
+            "sector_discovery",
             "You perform CFA-style peer group analysis within exactly one supplied PSX "
             "sector. Compare only the supplied records, respect missing data, and select "
             "candidates for deeper research. Do not issue Buy, Hold, Reduce, Avoid, or any "
@@ -155,6 +207,7 @@ class ReasoningEngine:
         request = state["request"]
         candidates = state.get("sector_candidates", [])
         response = await self._chat(
+            "market_candidate_reduction",
             "Select the bounded cross-sector deep-research set from candidates already "
             "chosen by within-sector peer analysis. Consider the supplied portfolio and IPS "
             "context. Do not issue a final recommendation and do not add instruments. Return "
@@ -238,6 +291,7 @@ class ReasoningEngine:
         request = self._effective_request(state)
         selected = state.get("selected_candidates", [])
         response = await self._chat(
+            "synthesis",
             "You are the semantic investment reasoning layer. Write the complete natural "
             "user-facing answer once in `answer`; the server will display it unchanged. Use "
             "only supplied evidence and exact structured numbers. Focus on the requested "
@@ -293,6 +347,7 @@ class ReasoningEngine:
     async def _repair(self, state: _State) -> dict[str, object]:
         request = self._effective_request(state)
         response = await self._chat(
+            "mechanical_repair",
             "Repair only the mechanically invalid fields listed in validation_errors. "
             "Preserve the original answer and recommendation unless a listed mechanical error "
             "requires changing them. Do not introduce new facts or evidence. Return the same "
@@ -386,6 +441,7 @@ class ReasoningEngine:
                 model_calls=self.model_calls,
                 repaired=bool(state.get("repaired")),
                 trace=state.get("trace", []),
+                invocations=list(self.invocations),
             )
         fallback = str(
             request.grounded_context.get("deterministic_fallback")
@@ -412,4 +468,5 @@ class ReasoningEngine:
             validation_errors=list(state.get("validation_errors", [])),
             repaired=bool(state.get("repaired")),
             trace=state.get("trace", []),
+            invocations=list(self.invocations),
         )

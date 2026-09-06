@@ -13,6 +13,11 @@ deterministic refresh follow-ups. Existing Assistant messages are retained and
 receive the `answer` compatibility default. The migration stores no permanent full
 context object and seeds no financial data.
 
+Bounded per-call LLM diagnostics are added by
+`0027_llm_invocation_diagnostics`. The table links each provider attempt to its user,
+conversation, and Assistant message and stores safe operational/error metadata. It
+does not store API keys, authorization headers, or full outgoing prompts.
+
 Workstation checkpoints include `0006_domain_data` through `0012_audit_events`. Ingestion observability is migration `0013_ingestion_observability`. Phase 2 worker coverage, secondary standardized facts, persisted screening snapshots, and official-fact extraction provenance are migration `0014_phase2_ingestion_plane`. Global Evidence v1 source configuration/state, discovery candidates, and event-cluster/source-selection fields are migration `0015_global_evidence_v1`. Pass 2 targeted and historical refresh requests use the durable ledger added by `0016_evidence_refresh_requests`. Pass 3 resumable cursors, date bounds, budgets, counters, and continuous source-health timestamps are migration `0017_evidence_history`.
 
 ```bash

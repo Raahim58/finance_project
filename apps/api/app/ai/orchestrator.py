@@ -11,6 +11,7 @@ from app.ai.evidence import gate_citations
 from app.ai.intent import NARRATIVE_TRIGGER_RE, detect_intent
 from app.core.config import settings
 from app.models.llm_key import LLMApiKey
+from app.models.llm_invocation import LLMInvocation
 from app.models.portfolio import Portfolio
 from app.models.user import User
 from app.models.workstation import AssistantMessage, Conversation, Instrument
@@ -755,8 +756,15 @@ async def run_assistant(
     canonical_context_payload = None
     canonical_request = None
     canonical_context = None
+    market_wide_requested = payload.instrument_id is None and bool(
+        MARKET_DISCOVERY_RE.search(payload.question)
+    )
     mentioned_instruments = _mentioned_instruments(db, payload.question)
-    if payload.instrument_id is None and len(mentioned_instruments) == 1:
+    if (
+        payload.instrument_id is None
+        and not market_wide_requested
+        and len(mentioned_instruments) == 1
+    ):
         payload = payload.model_copy(update={"instrument_id": mentioned_instruments[0].id})
     if payload.instrument_id:
         context_intent = (
@@ -908,16 +916,14 @@ async def run_assistant(
         },
     }
     deep_contexts: list[tuple[object, object]] = []
+    reasoning_invocations = []
+    reasoning_status = None
     if selected_provider and settings.phase8_reasoning_enabled:
         try:
             api_key, key_row = get_decrypted_key_for_call(db, user, selected_provider)
             provider = get_provider(selected_provider)
             selected_model = payload.model or key_row.default_model
-            mode = (
-                "market_wide"
-                if payload.instrument_id is None and MARKET_DISCOVERY_RE.search(payload.question)
-                else "targeted"
-            )
+            mode = "market_wide" if market_wide_requested else "targeted"
             peer_packets = (
                 build_peer_group_packets(db, payload.portfolio_id)
                 if mode == "market_wide"
@@ -1041,6 +1047,8 @@ async def run_assistant(
                     deepen_candidates=deepen_candidates,
                 )
             )
+            reasoning_invocations = result.invocations
+            reasoning_status = result.status
             answer = result.answer
             trace.extend({"tool": "reasoning.phase8", **item} for item in result.trace)
             if deep_contexts and canonical_context is None:
@@ -1112,6 +1120,34 @@ async def run_assistant(
     assistant = AssistantMessage(conversation_id=conversation.id, role="assistant", content=answer)
     db.add(assistant)
     db.flush()
+    invocation_rows = []
+    for invocation in reasoning_invocations:
+        row = LLMInvocation(
+            user_id=user.id,
+            conversation_id=conversation.id,
+            assistant_message_id=assistant.id,
+            provider=invocation.provider,
+            model=invocation.model,
+            operation=invocation.operation,
+            status=invocation.status,
+            http_status=invocation.http_status,
+            error_type=invocation.error_type,
+            error_message=invocation.error_message,
+            provider_request_id=invocation.provider_request_id,
+            input_bytes=invocation.input_bytes,
+            input_sha256=invocation.input_sha256,
+            latency_ms=invocation.latency_ms,
+            input_tokens=invocation.input_tokens,
+            output_tokens=invocation.output_tokens,
+            response_excerpt=invocation.response_excerpt
+            if reasoning_status == "unavailable"
+            else None,
+        )
+        db.add(row)
+        invocation_rows.append(row)
+    if invocation_rows:
+        db.flush()
+        synthesis["diagnostic_ids"] = [row.id for row in invocation_rows]
     consumed = None
     context_consumptions = []
     contexts_to_persist = []
