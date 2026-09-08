@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     assistant_max_tool_cost_units: int = 18
     assistant_max_retrieved_chunks: int = 8
     assistant_timeout_seconds: int = 30
+    phase8_targeted_deadline_seconds: int = Field(default=120, ge=1)
+    phase8_sizing_deadline_seconds: int = Field(default=180, ge=1)
+    phase8_market_deadline_seconds: int = Field(default=300, ge=1)
+    phase8_diagnostic_payload_bytes: int = Field(default=1024 ** 3, ge=1024)
+    phase8_pricing_version: str | None = None
+    phase8_pricing_json: str = "{}"
     phase8_reasoning_enabled: bool = True
     phase8_market_deep_candidate_limit: int = Field(default=8, ge=1, le=20)
     phase8_sector_candidate_limit: int = Field(default=3, ge=1, le=10)

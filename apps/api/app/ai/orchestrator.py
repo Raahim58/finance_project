@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -10,6 +11,9 @@ from app.ai.providers.registry import get_provider
 from app.ai.evidence import gate_citations
 from app.ai.intent import NARRATIVE_TRIGGER_RE, detect_intent
 from app.core.config import settings
+from app.services.assistant_diagnostics import execution_id as current_execution_id
+from app.reasoning.grounding import registry as numerical_registry
+from app.services.allocation_verification import verify_allocation
 from app.models.llm_key import LLMApiKey
 from app.models.llm_invocation import LLMInvocation
 from app.models.portfolio import Portfolio
@@ -18,7 +22,6 @@ from app.models.workstation import AssistantMessage, Conversation, Instrument
 from app.reasoning import ReasoningEngine
 from app.reasoning.contracts import ReasoningRequest
 from app.reasoning.peer_groups import build_peer_group_packets, peer_packet_evidence
-from app.reasoning.validation import numeric_tokens_from_values
 from app.schemas.assistant import AssistantMessageCreate
 from app.services.llm_key_service import get_decrypted_key_for_call
 from app.services.context_consumer_service import (
@@ -707,6 +710,7 @@ def _invoke(trace, registry, name, db, user, arguments):
     if len(trace) >= settings.assistant_max_tool_iterations:
         raise HTTPException(status_code=422, detail="Assistant tool iteration budget exhausted")
     try:
+        started = time.perf_counter()
         result = registry.invoke(
             name, db, user, arguments, max_cost_units=settings.assistant_max_tool_cost_units
         )
@@ -726,18 +730,26 @@ def _invoke(trace, registry, name, db, user, arguments):
                 ),
                 "arguments": arguments,
                 "status": "completed",
+                "timing_kind": "retrieval" if name == "research.search" else "calculation",
+                "latency_ms": round((time.perf_counter() - started) * 1000),
             }
         )
         return result
     except Exception as exc:
         trace.append(
-            {"tool": name, "arguments": arguments, "status": "unavailable", "reason": str(exc)}
+            {
+                "tool": name,
+                "arguments": arguments,
+                "status": "unavailable",
+                "reason": type(exc).__name__,
+            }
         )
         return None
 
 
 async def run_assistant(
-    db: Session, user: User, payload: AssistantMessageCreate, conversation_id: str | None = None
+    db: Session, user: User, payload: AssistantMessageCreate, conversation_id: str | None = None,
+    *, accepted: bool = False
 ):
     conversation = _conversation(db, user, conversation_id, payload)
     portfolio = _resolved_portfolio(db, user, conversation, payload.portfolio_id)
@@ -745,7 +757,9 @@ async def run_assistant(
         payload = payload.model_copy(update={"portfolio_id": portfolio.id})
         conversation.portfolio_id = portfolio.id
     prior_history = _history(db, conversation.id)
-    db.add(AssistantMessage(conversation_id=conversation.id, role="user", content=payload.question))
+    if not accepted:
+        db.add(AssistantMessage(conversation_id=conversation.id, role="user", content=payload.question))
+        db.commit()
     registry = build_tool_registry()
     trace = []
     intent = detect_intent(payload.question)
@@ -806,11 +820,11 @@ async def run_assistant(
                 )
             )
         compliance = ips_compliance(db, user, payload.portfolio_id)
-        if intent in ("decision_request", "risk_concentration", "performance"):
+        if intent in ("decision_request", "risk_concentration", "performance", "security_fit"):
             quant = _invoke(
                 trace, registry, "quant.portfolio", db, user, {"portfolio_id": payload.portfolio_id}
             )
-        if intent in ("decision_request", "risk_concentration"):
+        if intent in ("decision_request", "risk_concentration", "security_fit"):
             risk_budget = _invoke(
                 trace,
                 registry,
@@ -1005,9 +1019,7 @@ async def run_assistant(
                         for item in deep_evidence
                         if item.get("evidence_id")
                     ],
-                    "allowed_numeric_tokens": list(
-                        numeric_tokens_from_values({"contexts": contexts, "evidence": deep_evidence})
-                    ),
+
                 }
 
             grounded_context = {
@@ -1027,6 +1039,7 @@ async def run_assistant(
                 "uncertainty": uncertainty,
                 "deterministic_fallback": answer,
             }
+            db.commit()
             engine = ReasoningEngine(provider, api_key, selected_model)
             result = await engine.run(
                 ReasoningRequest(
@@ -1038,12 +1051,22 @@ async def run_assistant(
                     grounded_context=grounded_context,
                     allowed_evidence_ids=allowed_evidence_ids,
                     allowed_instrument_ids=allowed_instrument_ids,
-                    allowed_numeric_tokens=numeric_tokens_from_values(
-                        {"question": payload.question, "grounded_context": grounded_context}
-                    ),
                     required_evidence_ids=required_evidence_ids,
                     freshness_warnings=warnings,
                     sector_packets=peer_packets,
+                    numerical_registry=numerical_registry(grounded_context),
+                    allocation_requested=bool(re.search(r"how much|\bbuy\b|\bsell\b|\bswitch\b|\bsize\b|\ballocat", payload.question, re.I)),
+                    verify_allocation=(
+                        lambda proposal, candidate_ids: verify_allocation(
+                            db,
+                            user,
+                            payload.portfolio_id,
+                            proposal,
+                            candidate_ids,
+                        )
+                    )
+                    if payload.portfolio_id
+                    else None,
                     deepen_candidates=deepen_candidates,
                 )
             )
@@ -1123,6 +1146,7 @@ async def run_assistant(
     invocation_rows = []
     for invocation in reasoning_invocations:
         row = LLMInvocation(
+            execution_id=current_execution_id.get(),
             user_id=user.id,
             conversation_id=conversation.id,
             assistant_message_id=assistant.id,
@@ -1139,9 +1163,7 @@ async def run_assistant(
             latency_ms=invocation.latency_ms,
             input_tokens=invocation.input_tokens,
             output_tokens=invocation.output_tokens,
-            response_excerpt=invocation.response_excerpt
-            if reasoning_status == "unavailable"
-            else None,
+            response_excerpt=None,
         )
         db.add(row)
         invocation_rows.append(row)

@@ -296,7 +296,7 @@ export type AssistantResult = {
   source_citations: Array<Record<string, unknown>>;
   freshness_warnings: string[];
   tool_trace: Array<Record<string, unknown>>;
-  synthesis: {mode:"llm_grounded"|"deterministic_fallback"|"recommendation_synthesis_unavailable";provider?:string|null;model?:string|null;reason?:string|null;recommendation?:"Buy/Add"|"Hold"|"Reduce"|"Avoid"|"Insufficient Evidence"|null;confidence?:"High"|"Medium"|"Low"|null;horizon?:{label:string;source:"ips"|"user"|"not_available"}|null;instrument_ids?:string[];evidence_ids?:string[];context_receipt_ids?:string[];diagnostic_ids?:string[];repaired?:boolean;mode_scope?:"targeted"|"market_wide";token_usage?:{input_tokens:number;output_tokens:number;total_tokens:number;model_calls:number;reported_by_provider:boolean}};
+  synthesis: {execution_id?:string;mode:"llm_grounded"|"deterministic_fallback"|"recommendation_synthesis_unavailable";provider?:string|null;model?:string|null;reason?:string|null;recommendation?:"Buy/Add"|"Hold"|"Reduce"|"Avoid"|"Insufficient Evidence"|null;confidence?:"High"|"Medium"|"Low"|null;horizon?:{label:string;source:"ips"|"user"|"not_available"}|null;instrument_ids?:string[];evidence_ids?:string[];context_receipt_ids?:string[];diagnostic_ids?:string[];repaired?:boolean;mode_scope?:"targeted"|"market_wide";token_usage?:{input_tokens:number;output_tokens:number;total_tokens:number;model_calls:number;reported_by_provider:boolean}};
   context_contract_version?:string|null;
   context_status?:string|null;
   context_receipt?:Record<string,unknown>|null;
@@ -481,8 +481,38 @@ export type MacroRegime={regime:string;method:string;method_note:string;dimensio
 export function getMacroRegime(portfolioId?:string){return request<MacroRegime>(`/macro/regime${portfolioId?`?portfolio_id=${encodeURIComponent(portfolioId)}`:""}`);}
 export function runHistoricalReplay(portfolioId:string,startDate:string,endDate:string,useCurrentHoldings=true){return request<HistoricalReplay>(`/portfolios/${encodeURIComponent(portfolioId)}/scenarios/historical-replay`,{method:"POST",body:JSON.stringify({start_date:startDate,end_date:endDate,use_current_holdings:useCurrentHoldings})});}
 
-export function sendAssistantMessage(question: string, portfolioId?: string, instrumentId?: string) {
-  return request<AssistantResult>("/assistant/messages", { method: "POST", body: JSON.stringify({ question, portfolio_id: portfolioId || null, instrument_id: instrumentId || null }) });
+export type AssistantRun = {execution_id:string;status:string;error_code?:string;response?:AssistantResult|null};
+const ACTIVE_ASSISTANT_RUN = "assistant.activeExecution";
+const PENDING_ASSISTANT_REQUEST = "assistant.pendingRequest";
+export function activeAssistantExecution(){return sessionStorage.getItem(ACTIVE_ASSISTANT_RUN)??(sessionStorage.getItem(PENDING_ASSISTANT_REQUEST)?"pending":null);}
+export async function resumeAssistantExecution(executionId:string):Promise<AssistantResult>{
+  if(executionId==="pending"){
+    const body=sessionStorage.getItem(PENDING_ASSISTANT_REQUEST);
+    if(!body)throw new Error("Pending assistant request is unavailable");
+    const run=await request<AssistantRun>("/assistant/runs",{method:"POST",body});
+    executionId=run.execution_id;
+    sessionStorage.setItem(ACTIVE_ASSISTANT_RUN,executionId);
+    sessionStorage.removeItem(PENDING_ASSISTANT_REQUEST);
+  }
+  for (;;) {
+    const run=await request<AssistantRun>(`/assistant/runs/${encodeURIComponent(executionId)}`);
+    if(run.response){
+      if(sessionStorage.getItem(ACTIVE_ASSISTANT_RUN)===executionId) sessionStorage.removeItem(ACTIVE_ASSISTANT_RUN);
+      return run.response;
+    }
+    if(run.status==="failed"){
+      if(sessionStorage.getItem(ACTIVE_ASSISTANT_RUN)===executionId) sessionStorage.removeItem(ACTIVE_ASSISTANT_RUN);
+      throw new Error(`Assistant execution failed (${run.error_code??"unknown"}).`);
+    }
+    await new Promise(resolve=>setTimeout(resolve,1000));
+  }
+}
+export function acknowledgeAssistantExecution(executionId:string){
+  return request<void>(`/assistant/runs/${encodeURIComponent(executionId)}/receipt`,{method:"POST"});
+}
+export async function sendAssistantMessage(question: string, portfolioId?: string, instrumentId?: string) {
+  sessionStorage.setItem(PENDING_ASSISTANT_REQUEST,JSON.stringify({client_request_id:crypto.randomUUID(),question, portfolio_id: portfolioId || null, instrument_id: instrumentId || null}));
+  return resumeAssistantExecution("pending");
 }
 
 export type AlertStatus = "active" | "acknowledged" | "resolved" | "all";

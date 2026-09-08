@@ -37,6 +37,11 @@ class LLMProviderResult:
     provider: str
     input_tokens: int | None = None
     output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    finish_reason: str | None = None
+    request_id: str | None = None
 
 
 class LLMProvider(ABC):
@@ -59,6 +64,19 @@ class LLMProvider(ABC):
     ) -> LLMProviderResult:
         raise NotImplementedError
 
+    async def chat_with_options(self, api_key, messages, model=None, *, options):
+        import asyncio
+        token = call_options.set(options)
+        try:
+            async with asyncio.timeout(options.deadline_seconds):
+                return await self.chat(api_key, messages, model)
+        finally:
+            call_options.reset(token)
+
+    @property
+    def capabilities(self):
+        return ProviderCapabilities(structured_output=self.name == "gemini")
+
     async def stream_chat(
         self,
         api_key: str,
@@ -67,3 +85,21 @@ class LLMProvider(ABC):
     ) -> AsyncIterator[str]:
         result = await self.chat(api_key=api_key, messages=messages, model=model)
         yield result.content
+
+
+@dataclass(frozen=True)
+class ProviderCallOptions:
+    response_schema: dict | None = None
+    max_output_tokens: int = 4096
+    deadline_seconds: float = 120
+
+
+@dataclass(frozen=True)
+class ProviderCapabilities:
+    structured_output: bool = False
+    schema_in_prompt: bool = True
+    usage_breakdown: bool = True
+
+
+from contextvars import ContextVar
+call_options: ContextVar[ProviderCallOptions] = ContextVar("provider_call_options", default=ProviderCallOptions())

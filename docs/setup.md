@@ -16,9 +16,17 @@ Put the generated Fernet key in `ENCRYPTION_KEY`. User LLM keys are encrypted at
 Phase 8 reasoning is enabled by default. `PHASE8_REASONING_ENABLED=false` restores the
 grounded deterministic Assistant path without enabling any executable action loop.
 `PHASE8_MARKET_DEEP_CANDIDATE_LIMIT` (default `8`) and
-`PHASE8_SECTOR_CANDIDATE_LIMIT` (default `3`) bound market-wide model work. LangGraph is
-compiled without a checkpoint store; no additional persistence service or migration is
-required.
+`PHASE8_SECTOR_CANDIDATE_LIMIT` (default `3`) bound market-wide model work. Assistant
+requests are owned by the API process and persisted in PostgreSQL; no Assistant Celery
+worker is used. Apply migration `0028_assistant_executions` before starting the API.
+
+The initial inference ceilings are 20k tokens per targeted/sizing call and 40k per
+comparison or market-wide call. Execution ceilings are 48k, 80k, 160k, and 200k tokens
+respectively. Recovery packets are limited to 8k. These are conservative offline token
+estimates; provider-reported usage is stored separately. Deadlines default to 120 seconds
+for targeted questions, 180 seconds for sizing/comparisons, and 300 seconds for
+market-wide analysis. Override them with `PHASE8_TARGETED_DEADLINE_SECONDS`,
+`PHASE8_SIZING_DEADLINE_SECONDS`, and `PHASE8_MARKET_DEADLINE_SECONDS`.
 
 Start production-style dependencies and migrate:
 
@@ -33,6 +41,54 @@ SQLite can be used without Docker:
 
 ```bash
 DATABASE_URL=sqlite+pysqlite:///./psx_ai_local.db alembic upgrade head
+```
+
+The API reconciles queued and abandoned Assistant runs at startup and every 20 seconds.
+It runs at most two local executions concurrently. A sent provider attempt without a
+recorded outcome is marked uncertain and consumes the execution's one retry allowance.
+Retry, repair, revision, and input counters remain in the execution row across restarts.
+
+Inspect redacted diagnostics through the owner-scoped API or CLI:
+
+```bash
+ASSISTANT_ACCESS_TOKEN='<local-access-token>' python -m app.jobs.assistant_diagnostics --aggregate
+ASSISTANT_ACCESS_TOKEN='<local-access-token>' \
+  python -m app.jobs.assistant_diagnostics --execution-id '<execution-uuid>'
+```
+
+Captured payloads remain internal. An operator with database and encryption-key access
+may replay retained attempts through the local mock provider; the command prints only
+structural counts and statuses:
+
+```bash
+python -m app.jobs.replay_assistant_diagnostic '<execution-uuid>'
+```
+
+Metadata and attempt accounting are retained for one year. Encrypted captured payloads
+are retained for failed executions and a deterministic 10% success sample for 14 days,
+subject to `PHASE8_DIAGNOSTIC_PAYLOAD_BYTES` (default 1 GiB). Exports exclude prompts,
+response bodies, holdings, allocation amounts, documents, and credentials.
+
+Run the offline Phase 8 quality cases and focused conformance suites without provider
+credentials:
+
+```bash
+python -m app.jobs.evaluate_phase8
+pytest app/tests/test_phase7a_canonical_context.py \
+  app/tests/test_phase7b_context_consumers.py \
+  app/tests/test_phase8_reasoning.py app/tests/test_phase8_revamp.py \
+  app/tests/test_assistant_orchestrator.py app/tests/test_quant_domain.py \
+  app/tests/test_intelligence_v1.py app/tests/test_providers.py \
+  app/tests/test_llm_provider_usage.py -q
+```
+
+Live benchmark commands are intentionally disabled because they can incur provider cost:
+
+```bash
+ALLOW_PAID_PHASE8_BENCHMARKS=false PHASE8_BENCHMARK_PROVIDER=gemini \
+  python -m app.jobs.evaluate_phase8 --live
+ALLOW_PAID_PHASE8_BENCHMARKS=false PHASE8_BENCHMARK_PROVIDER=anthropic \
+  python -m app.jobs.evaluate_phase8 --live
 ```
 
 Seed the demo investor state (demo user, ledger-backed holdings and cash,

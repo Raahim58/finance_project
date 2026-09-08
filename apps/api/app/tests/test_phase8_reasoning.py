@@ -57,6 +57,37 @@ class SequenceProvider:
         )
 
 
+class DiscoveryProvider:
+    name = "test"
+    default_model = "test-model"
+
+    def __init__(self):
+        self.calls = []
+
+    async def chat(self, _api_key, messages, _model):
+        payload = json.loads(messages[-1]["content"])
+        self.calls.append(payload)
+        if "records" in payload:
+            if any(row["instrument_id"] == "i29" for row in payload["records"]):
+                raise RuntimeError("offline partial failure")
+            content = {"instrument_ids": [payload["records"][0]["instrument_id"]]}
+        elif "candidate_records" in payload:
+            assert payload["candidate_records"]
+            assert all("symbol" in row and "sector" in row for row in payload["candidate_records"])
+            content = {"instrument_ids": payload["candidate_instrument_ids"]}
+        else:
+            content = {
+                "answer": "Coverage was incomplete and is disclosed.",
+                "portfolio_id": payload["portfolio_id"],
+                "instrument_ids": payload["selected_instrument_ids"],
+                "evidence_ids": ["ev:1"],
+                "freshness_acknowledgements": payload["coverage_warnings"],
+            }
+        return LLMProviderResult(
+            content=json.dumps(content), provider=self.name, model=self.default_model
+        )
+
+
 def _request(**updates):
     values = {
         "question": "Analyze this holding",
@@ -72,17 +103,17 @@ def _request(**updates):
     return ReasoningRequest(**values)
 
 
-def test_phase8_numeric_validation_rejects_only_numbers_outside_structured_context():
-    request = _request(allowed_numeric_tokens={"12.5", "12.5%"})
-    valid = ModelAnswer(
-        answer="Observed return was 12.5%.", portfolio_id="p1", evidence_ids=["ev:1"]
-    )
-    invalid = ModelAnswer(
-        answer="Observed return was 99%.", portfolio_id="p1", evidence_ids=["ev:1"]
-    )
-
+def test_phase8_numeric_validation_requires_scoped_references():
+    from app.reasoning.grounding import registry, NumericalReference
+    records = registry({"symbol": "MEBL", "metric": "return", "value": "12.5", "unit": "%"})
+    key, source = next(iter(records.items()))
+    reference = NumericalReference(reference_id=key,
+        **{k:v for k,v in source.items() if k != "source_id"}, text="12.5%")
+    request = _request(numerical_registry=records)
+    valid = ModelAnswer(answer="Observed return was 12.5%.", portfolio_id="p1", evidence_ids=["ev:1"], numerical_references=[reference])
+    invalid = valid.model_copy(update={"answer":"Observed return was 88%."})
     assert validate_model_answer(valid, request) == []
-    assert "99%" in validate_model_answer(invalid, request)[0]
+    assert validate_model_answer(invalid, request)
 
 
 def test_insufficient_evidence_can_report_a_missing_portfolio_or_horizon():
@@ -149,7 +180,7 @@ async def test_phase8_preserves_provider_failure_reason_and_attempted_call_count
 
     assert result.status == "unavailable"
     assert result.failure_reason == (
-        "provider_or_graph_error:RuntimeError: anthropic API request timed out"
+        "provider_or_graph_error:RuntimeError"
     )
     assert result.model_calls == 1
     assert result.trace[-1]["node"] == "reasoning_error"
@@ -179,7 +210,7 @@ async def test_phase8_returns_bounded_structured_diagnostics_for_provider_error(
     assert invocation.status == "provider_error"
     assert invocation.http_status == 400
     assert invocation.error_type == "invalid_request_error"
-    assert invocation.error_message == "temperature is not supported for this model"
+    assert invocation.error_message == "ProviderRequestError"
     assert invocation.provider_request_id == "req_123"
     assert invocation.input_bytes > 0
     assert len(invocation.input_sha256) == 64
@@ -224,6 +255,42 @@ async def test_market_graph_maps_every_sector_then_reduces_and_deepens_selected_
     assert {call["sector"] for call in sector_calls} == {"Banking", "Technology"}
     assert sum(len(call["records"]) for call in sector_calls) == 2
     assert (result.input_tokens, result.output_tokens, result.model_calls) == (40, 20, 4)
+
+
+@pytest.mark.asyncio
+async def test_large_sector_batches_are_order_stable_and_partial_coverage_is_disclosed():
+    records = [
+        {"instrument_id": f"i{index:02d}", "symbol": f"S{index:02d}", "sector": "Large"}
+        for index in range(30)
+    ]
+
+    async def run(packet):
+        provider = DiscoveryProvider()
+        result = await ReasoningEngine(provider, "secret", None).run(
+            _request(
+                question="What should I buy market-wide?",
+                mode="market_wide",
+                sector_packets={"Large": packet},
+                allowed_instrument_ids={row["instrument_id"] for row in records},
+            )
+        )
+        return result, provider
+
+    forward, forward_provider = await run(records)
+    reverse, reverse_provider = await run(list(reversed(records)))
+
+    assert forward.status == reverse.status == "grounded"
+    assert forward.instrument_ids == reverse.instrument_ids == ["i00"]
+    coverage = [row for row in forward.trace if row.get("node") == "market_universe_coverage"]
+    assert coverage == [{
+        "node": "market_universe_coverage",
+        "eligible_count": 30,
+        "represented_count": 25,
+        "complete": False,
+    }]
+    assert any("25 of 30" in warning for warning in forward_provider.calls[-1]["coverage_warnings"])
+    assert len([call for call in forward_provider.calls if "records" in call]) == 2
+    assert len([call for call in reverse_provider.calls if "records" in call]) == 2
 
 
 def test_peer_group_assembler_keeps_complete_universe_and_unclassified_members():

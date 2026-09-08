@@ -143,3 +143,5 @@ __all__ = [
     "SourceArtifact",
     "StandardizedFinancialFact",
 ]
+
+from app.models.assistant_execution import AssistantExecution, AssistantAttempt

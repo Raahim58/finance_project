@@ -1,16 +1,19 @@
 import json
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException
+from uuid import uuid4
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.ai.orchestrator import run_assistant
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
 from app.models.intelligence_context import ContextRefreshRequest
 from app.models.workstation import AssistantMessage, Conversation
-from app.schemas.assistant import AssistantMessageCreate, AssistantResponse, ConversationCreate
+from app.schemas.assistant import AssistantMessageCreate, AssistantResponse, ConversationCreate, AssistantRunCreate
+from app.services import assistant_execution as execution_service
+from app.services.assistant_diagnostics import inspect_execution
+from app.models.assistant_execution import AssistantExecution, now as execution_now
 from app.services.portfolio_service import get_portfolio_or_404
 from app.services.context_refresh_service import reconcile_pending_contexts
 
@@ -113,7 +116,7 @@ async def message(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return await run_assistant(db, current_user, payload)
+    return await compatible_message(db, current_user, payload)
 
 
 @router.post(
@@ -127,4 +130,94 @@ async def conversation_message(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return await run_assistant(db, current_user, payload, conversation_id)
+    return await compatible_message(db, current_user, payload, conversation_id)
+
+
+@router.post("/assistant/runs", status_code=202)
+async def create_run(
+    payload: AssistantRunCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = execution_service.accept(db, current_user,
+        AssistantMessageCreate.model_validate(payload.model_dump()),
+        payload.client_request_id, payload.conversation_id)
+    if row.status == "queued":
+        execution_service.schedule(row.id)
+    return {"execution_id": row.id, "status": row.status}
+
+
+@router.get("/assistant/runs/{execution_id}")
+def run_status(execution_id: str, current_user: User = Depends(get_current_user),
+               db: Session = Depends(get_db)):
+    row = execution_service.owned(db, current_user.id, execution_id)
+    return {"execution_id": row.id, "status": row.status, "error_code": row.error_code,
+            "response": json.loads(row.response_json) if row.response_json else None}
+
+
+@router.post("/assistant/runs/{execution_id}/receipt", status_code=204)
+def receipt(execution_id: str, current_user: User = Depends(get_current_user),
+            db: Session = Depends(get_db)):
+    row = execution_service.owned(db, current_user.id, execution_id)
+    if row.response_json and row.received_at is None:
+        row.received_at = execution_now()
+        db.commit()
+
+
+@router.get("/assistant/diagnostics")
+def diagnostic_list(status: str | None = None, current_user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    statement = select(AssistantExecution).where(AssistantExecution.user_id == current_user.id)
+    if status:
+        statement = statement.where(AssistantExecution.status == status)
+    rows = db.scalars(statement.order_by(AssistantExecution.created_at.desc()).limit(100))
+    return [inspect_execution(db, row) for row in rows]
+
+
+@router.get("/assistant/diagnostics-aggregate")
+def diagnostic_aggregate(current_user: User = Depends(get_current_user),
+                         db: Session = Depends(get_db)):
+    rows = db.execute(
+        select(AssistantExecution.status, func.count(AssistantExecution.id))
+        .where(AssistantExecution.user_id == current_user.id)
+        .group_by(AssistantExecution.status)
+    )
+    counts = {status: count for status, count in rows}
+    return {"execution_count": sum(counts.values()), "outcomes": counts}
+
+
+@router.get("/assistant/diagnostics/{execution_id}")
+@router.get("/assistant/diagnostics/{execution_id}/export")
+def diagnostic(execution_id: str, compare_to: str | None = None,
+               current_user: User = Depends(get_current_user),
+               db: Session = Depends(get_db)):
+    current = inspect_execution(db, execution_service.owned(db, current_user.id, execution_id))
+    if not compare_to:
+        return current
+    other = inspect_execution(db, execution_service.owned(db, current_user.id, compare_to))
+    return {
+        "current": current,
+        "comparison": other,
+        "delta": {
+            "reserved_input_tokens": current["reserved_input_tokens"]
+            - other["reserved_input_tokens"],
+            "attempt_count": len(current["attempts"]) - len(other["attempts"]),
+            "queue_ms": None if current["queue_ms"] is None or other["queue_ms"] is None
+            else current["queue_ms"] - other["queue_ms"],
+        },
+    }
+
+
+async def compatible_message(db, user, payload, conversation_id=None):
+    row = execution_service.accept(db, user, payload, str(uuid4()), conversation_id)
+    identifier = row.id
+    # Compatibility callers await delivery; the independent task survives disconnects.
+    execution_service.schedule(identifier)
+    import asyncio
+    await asyncio.shield(execution_service._tasks[identifier])
+    db.expire_all()
+    row = execution_service.owned(db, user.id, identifier)
+    if row.response_json:
+        return json.loads(row.response_json)
+    status_code = int(row.error_code.split("_")[1]) if row.error_code and row.error_code.startswith("http_") else 503
+    raise HTTPException(status_code, {"execution_id": identifier, "error_code": row.error_code})

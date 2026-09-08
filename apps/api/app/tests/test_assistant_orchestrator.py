@@ -236,7 +236,7 @@ def test_provider_error_is_saved_with_diagnostic_id_and_safe_fields(client, monk
         assert invocation.status == "provider_error"
         assert invocation.http_status == 400
         assert invocation.error_type == "invalid_request_error"
-        assert invocation.error_message == "temperature is not supported for this model"
+        assert invocation.error_message == "ProviderRequestError"
         assert invocation.provider_request_id == "req_123"
         assert invocation.response_excerpt is None
 

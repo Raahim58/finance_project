@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -13,7 +14,14 @@ from app.db.session import Base, engine
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     if settings.auto_create_tables:
         Base.metadata.create_all(bind=engine)
-    yield
+    from app.services.assistant_execution import maintenance, shutdown
+    task = asyncio.create_task(maintenance())
+    try:
+        yield
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await shutdown()
 
 
 def create_app() -> FastAPI:

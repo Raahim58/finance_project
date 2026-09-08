@@ -17,6 +17,9 @@ class LLMInvocation(Base):
     __tablename__ = "llm_invocations"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    execution_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assistant_executions.id"), index=True
+    )
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     conversation_id: Mapped[str] = mapped_column(
         ForeignKey("assistant_conversations.id"), nullable=False, index=True

@@ -7,7 +7,8 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.market import Company, MarketPrice
+from app.models.market import Company
+from app.services.canonical_market_service import latest_price
 from app.models.portfolio import PortfolioHolding
 from app.models.workstation import CompanyScreeningSnapshot, Instrument
 
@@ -38,17 +39,7 @@ def build_peer_group_packets(
         return {}
 
     ids = [row.id for row in instruments]
-    symbols = [row.symbol for row in instruments]
-    price_rows = list(
-        db.scalars(
-            select(MarketPrice)
-            .where(MarketPrice.symbol.in_(symbols))
-            .order_by(MarketPrice.symbol, MarketPrice.trade_date.desc())
-        )
-    )
-    prices: dict[str, MarketPrice] = {}
-    for row in price_rows:
-        prices.setdefault(row.symbol, row)
+    prices = {row.symbol: latest_price(db, row.symbol) for row in instruments}
 
     snapshots = list(
         db.scalars(

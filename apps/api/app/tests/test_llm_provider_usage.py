@@ -1,7 +1,7 @@
 import pytest
 import httpx
 
-from app.ai.providers.base import ProviderRequestError
+from app.ai.providers.base import ProviderCallOptions, ProviderRequestError
 from app.ai.providers.http_placeholders import (
     AnthropicProvider,
     GeminiProvider,
@@ -87,6 +87,81 @@ async def test_anthropic_sonnet_5_request_omits_sampling_parameters(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_gemini_uses_native_schema_and_preserves_usage_breakdown(monkeypatch):
+    provider = GeminiProvider()
+    captured_payload = None
+
+    async def fake_post(_url, _api_key, payload):
+        nonlocal captured_payload
+        captured_payload = payload
+        return {
+            "responseId": "gemini-request",
+            "modelVersion": "gemini-test",
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {"parts": [
+                    {"thought": True, "text": "private reasoning"},
+                    {"text": '{"answer":"ok"}'},
+                ]},
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 30,
+                "candidatesTokenCount": 5,
+                "cachedContentTokenCount": 7,
+                "thoughtsTokenCount": 11,
+            },
+        }
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    result = await provider.chat_with_options(
+        "secret",
+        [{"role": "user", "content": "question"}],
+        "gemini-test",
+        options=ProviderCallOptions(
+            response_schema={"type": "object", "properties": {"answer": {"type": "string"}}},
+            max_output_tokens=2048,
+        ),
+    )
+
+    assert captured_payload["generationConfig"] == {
+        "temperature": 0,
+        "maxOutputTokens": 2048,
+        "responseMimeType": "application/json",
+        "responseJsonSchema": {
+            "type": "object", "properties": {"answer": {"type": "string"}}
+        },
+    }
+    assert result.content == '{"answer":"ok"}'
+    assert (result.cache_read_tokens, result.reasoning_tokens) == (7, 11)
+    assert (result.finish_reason, result.request_id) == ("STOP", "gemini-request")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_preserves_cache_and_finish_metadata(monkeypatch):
+    provider = AnthropicProvider()
+
+    async def fake_post(_url, _api_key, _payload):
+        return {
+            "id": "anthropic-request",
+            "model": "claude-test",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "answer"}],
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 4,
+                "cache_read_input_tokens": 6,
+                "cache_creation_input_tokens": 8,
+            },
+        }
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    result = await provider.chat("secret", [{"role": "user", "content": "question"}])
+
+    assert (result.cache_read_tokens, result.cache_write_tokens) == (6, 8)
+    assert (result.finish_reason, result.request_id) == ("end_turn", "anthropic-request")
+
+
+@pytest.mark.asyncio
 async def test_anthropic_error_preserves_safe_provider_diagnostics(monkeypatch):
     provider = AnthropicProvider()
 
@@ -121,6 +196,6 @@ async def test_anthropic_error_preserves_safe_provider_diagnostics(monkeypatch):
 
     assert raised.value.status_code == 400
     assert raised.value.error_type == "invalid_request_error"
-    assert raised.value.provider_message == "temperature is not supported for this model"
+    assert raised.value.provider_message is None
     assert raised.value.request_id == "req_123"
     assert "secret" not in str(raised.value)

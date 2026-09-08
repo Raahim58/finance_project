@@ -31,3 +31,8 @@ class AssistantResponse(BaseModel):
     context_receipt: dict[str, object] | None = None
     refresh_request_id: str | None = None
     created_at: datetime
+
+
+class AssistantRunCreate(AssistantMessageCreate):
+    client_request_id: str = Field(min_length=1, max_length=100)
+    conversation_id: str | None = None

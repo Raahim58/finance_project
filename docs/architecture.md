@@ -78,7 +78,7 @@ unchanged.
 
 ## Phase 8 reasoning boundary
 
-Phase 8 is implemented as a stateless Assistant reasoning module. Each execution
+Phase 8 uses a stateless reasoning module inside a durable API-owned execution. Each execution
 receives the current request, the globally selected active user-owned portfolio as the
 fallback portfolio context, any explicitly selected security, bounded conversation
 history, and a freshly assembled Canonical Intelligence Context. The selected
@@ -90,18 +90,18 @@ resolved and ownership-checked by the server, otherwise the global selection is 
 `ReasoningEngine` remains the application-owned interface. Its initial orchestration
 implementation uses a LangGraph `StateGraph`, while canonical request, context,
 evidence, recommendation, and validation contracts remain framework-independent.
-Phase 8 compiles the graph without a persistent checkpointer and does not adopt the
-LangChain agent, retrieval, memory, or tool abstractions. Existing Conversation,
-AssistantMessage, context receipt, evidence, and trace records remain authoritative.
-PostgreSQL graph checkpoints and `conversation.id` thread identity are deferred until
-Phase 11 or future resumable analytical-tool execution creates a real pause/resume
-requirement.
+Phase 8 compiles the graph without a framework checkpointer and does not adopt the
+LangChain agent, retrieval, memory, or tool abstractions. PostgreSQL execution, stage,
+and attempt records provide recovery, retry accounting, heartbeats, diagnostics, and
+delivery acknowledgement. Existing Conversation, AssistantMessage, context receipt,
+evidence, and trace records remain authoritative.
 
-The current Phase 8 module reads and recommends but does not invoke portfolio tools,
-optimizers, screeners, or scenario engines and does not save proposals or modify
-portfolio or IPS state. It may interpret existing deterministic analysis results.
-Read-only analytical tool execution is a future extension behind the same reasoning
-boundary.
+The current Phase 8 module may produce an LLM-proposed allocation and invoke deterministic
+read-only verification. Verification derives gross quantities and funding from database
+prices and stored holdings, compares current and proposed portfolio analytics, and checks
+the confirmed IPS. It never saves a proposal, changes holdings or cash, modifies the IPS,
+or places a trade. A failed verification may trigger one focused allocation revision; if
+no proposal passes, the final state is Recommendation Synthesis Unavailable.
 
 The model writes the user-facing answer once. Its provider response contains that
 natural-language answer plus compact fields such as advisory conclusion, horizon, and
@@ -120,21 +120,21 @@ may be used only after its provider and provenance are verified. Unclassified se
 remain in an explicit unclassified packet and are never silently omitted. Each group
 receives compact, consistent-period structured evidence and group-appropriate metrics;
 securities are assessed primarily against their peers rather than through one raw
-cross-sector ranking. LangGraph maps every complete sector packet through parallel
-discovery calls, keeping classification boundaries and coverage accounting explicit
-regardless of total context size. Discovery selects bounded candidates within each sector without issuing an
+cross-sector ranking. LangGraph batches large sectors and maps their records through no
+more than four concurrent discovery calls, keeping classification boundaries and
+coverage accounting explicit. Discovery selects bounded candidates within each sector without issuing an
 advisory conclusion. The application then builds deep Canonical Intelligence Context for
 the sector candidates, and a final model call performs portfolio/IPS-aware cross-sector
-comparison and writes the recommendation. This is read-only context expansion, not
-optimizer or scenario execution. One additional model call is permitted only as the
-single constrained repair attempt after a mechanically invalid response. Phase 8 has no
-critic or semantic-judge model call.
+comparison and writes the recommendation. This is read-only context expansion. One
+focused format repair and one allocation revision are the only bounded correction paths.
+Phase 8 has no critic or unrestricted agent loop.
 
 Blocking validation is restricted to mechanically provable invariants: response
 schema and enums; equality of returned instrument, portfolio, and scope identifiers
-with trusted request/context values; prior ownership resolution; evidence-ID
-membership in the canonical allowlist; exact numerical agreement with authoritative
-structured evidence and units; presence of a horizon source; and required disclosure
+with trusted request/context values; prior ownership resolution; evidence-ID membership
+in the canonical registry; entity/metric/value/unit/period/basis agreement for numerical
+references; equality between verified and final allocation metadata; presence of a
+horizon source; and required disclosure
 of freshness states used by the answer. The validator never decides whether evidence
 is persuasive, whether sources are materially contradictory, whether a risk changes
 the thesis, which advisory conclusion is justified, or whether an outside security is

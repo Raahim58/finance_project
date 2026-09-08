@@ -4,7 +4,7 @@ import { FormEvent,Suspense,useEffect,useRef,useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { TermHelp } from "@/components/TermHelp";
-import { AssistantResult,Portfolio,deactivateContextRefresh,getPortfolios,sendAssistantMessage } from "@/lib/api";
+import { AssistantResult,Portfolio,deactivateContextRefresh,getPortfolios,sendAssistantMessage,activeAssistantExecution,resumeAssistantExecution,acknowledgeAssistantExecution } from "@/lib/api";
 
 export default function AssistantPage(){return <Suspense fallback={<div className="page-wrap"><div className="panel h-96 skeleton"/></div>}><AssistantContent/></Suspense>}
 function AssistantContent(){
@@ -13,6 +13,16 @@ function AssistantContent(){
   // an asynchronous list response must not replace that choice.
   const requestSeq=useRef(0);
   const scopeTouched=useRef(false);
+  useEffect(()=>{const id=result?.synthesis.execution_id;if(id)void acknowledgeAssistantExecution(id).catch(()=>undefined)},[result]);
+  useEffect(()=>{
+    const active=activeAssistantExecution();if(!active)return;
+    const id=++requestSeq.current;let mounted=true;
+    setLoading(true);
+    void resumeAssistantExecution(active).then(response=>{if(mounted&&id===requestSeq.current)setResult(response)})
+      .catch((err:unknown)=>{if(mounted)setError(err instanceof Error?err.message:"Assistant recovery failed")})
+      .finally(()=>{if(mounted&&id===requestSeq.current)setLoading(false)});
+    return()=>{mounted=false};
+  },[]);
   useEffect(()=>{void getPortfolios().then(rows=>{setPortfolios(rows);if(!params?.get("portfolio_id")&&!scopeTouched.current){setPortfolioId(rows.find(row=>row.is_default)?.id??"")}}).catch((reason:unknown)=>setError(reason instanceof Error?`Portfolio scope request failed: ${reason.message}`:"Portfolio scope request failed"))},[params]);
   useEffect(()=>{const refreshId=result?.refresh_request_id;if(!refreshId)return;return()=>{void deactivateContextRefresh(refreshId).catch(()=>undefined)}},[result?.refresh_request_id]);
   async function ask(e:FormEvent){

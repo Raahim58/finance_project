@@ -5,6 +5,7 @@ from enum import StrEnum
 from typing import Awaitable, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.reasoning.grounding import NumericalReference
 
 
 class RecommendationLabel(StrEnum):
@@ -32,6 +33,9 @@ class ModelAnswer(BaseModel):
     portfolio_id: str | None = None
     instrument_ids: list[str] = Field(default_factory=list, max_length=20)
     evidence_ids: list[str] = Field(default_factory=list, max_length=200)
+    numerical_references: list[NumericalReference] = Field(default_factory=list, max_length=100)
+    allocation_verification_id: str | None = None
+    allocation_legs: list[dict[str, str]] = Field(default_factory=list, max_length=20)
     freshness_acknowledgements: list[str] = Field(default_factory=list, max_length=20)
 
 
@@ -57,10 +61,12 @@ class ReasoningRequest:
     grounded_context: dict[str, object]
     allowed_evidence_ids: set[str]
     allowed_instrument_ids: set[str]
-    allowed_numeric_tokens: set[str] = field(default_factory=set)
     required_evidence_ids: set[str] = field(default_factory=set)
     freshness_warnings: list[str] = field(default_factory=list)
     sector_packets: dict[str, list[dict[str, object]]] = field(default_factory=dict)
+    numerical_registry: dict[str, dict] = field(default_factory=dict)
+    allocation_requested: bool = False
+    verify_allocation: Callable[[object, set[str]], dict[str, object]] | None = None
     deepen_candidates: Callable[[list[str]], Awaitable[dict[str, object]]] | None = None
 
 

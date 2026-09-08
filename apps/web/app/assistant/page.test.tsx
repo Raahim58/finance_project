@@ -4,7 +4,7 @@ import AssistantPage from "./page";
 
 const getPortfolios=vi.fn();
 const sendAssistantMessage=vi.fn();
-vi.mock("@/lib/api",()=>({getPortfolios:(...args:unknown[])=>getPortfolios(...args),sendAssistantMessage:(...args:unknown[])=>sendAssistantMessage(...args)}));
+vi.mock("@/lib/api",()=>({activeAssistantExecution:()=>null,acknowledgeAssistantExecution:vi.fn(),resumeAssistantExecution:vi.fn(),getPortfolios:(...args:unknown[])=>getPortfolios(...args),sendAssistantMessage:(...args:unknown[])=>sendAssistantMessage(...args)}));
 
 function result(answer:string,diagnosticIds:string[]=[]){
   return {conversation_id:"c1",message_id:"m1",answer,uncertainty:[],calculated_evidence:[],source_citations:[],freshness_warnings:[],tool_trace:[],synthesis:{mode:"llm_grounded",provider:"anthropic",model:"claude-test",diagnostic_ids:diagnosticIds,token_usage:{input_tokens:1234,output_tokens:321,total_tokens:1555,model_calls:1,reported_by_provider:true}},created_at:new Date().toISOString()};

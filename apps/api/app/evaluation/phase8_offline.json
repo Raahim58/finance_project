@@ -1,0 +1,40 @@
+[
+  {
+    "id": "supported_cash_purchase",
+    "labels": ["analytical_completeness", "supported_recommendation", "sizing_validity"],
+    "expected": {"accepted": true, "proposed_cash": "100"},
+    "proposal": {"legs": [{"instrument_id": "MEBL", "side": "buy", "gross_amount": "950"}]},
+    "positions": {},
+    "cash": "1000",
+    "instruments": {"MEBL": {"symbol": "MEBL", "price": "100", "currency": "PKR"}}
+  },
+  {
+    "id": "supported_funded_switch",
+    "labels": ["supported_recommendation", "false_abstention", "sizing_validity"],
+    "expected": {"accepted": true, "proposed_cash": "0"},
+    "proposal": {"legs": [
+      {"instrument_id": "MEBL", "side": "sell", "gross_amount": "1000"},
+      {"instrument_id": "SYS", "side": "buy", "gross_amount": "1000"}
+    ]},
+    "positions": {"MEBL": "10"},
+    "cash": "0",
+    "instruments": {
+      "MEBL": {"symbol": "MEBL", "price": "100", "currency": "PKR"},
+      "SYS": {"symbol": "SYS", "price": "50", "currency": "PKR"}
+    }
+  },
+  {
+    "id": "reject_overselling",
+    "labels": ["supported_recommendation", "sizing_validity"],
+    "expected": {"accepted": false, "error": "overselling"},
+    "proposal": {"legs": [{"instrument_id": "MEBL", "side": "sell", "gross_amount": "1000"}]},
+    "positions": {"MEBL": "1"},
+    "cash": "0",
+    "instruments": {"MEBL": {"symbol": "MEBL", "price": "100", "currency": "PKR"}}
+  },
+  {
+    "id": "diagnostic_redaction_contract",
+    "labels": ["diagnostic_usefulness"],
+    "expected": {"safe_fields_exclude": ["messages", "response", "holdings", "amounts", "credentials"]}
+  }
+]

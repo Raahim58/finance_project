@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-from app.ai.providers.base import LLMProvider, LLMProviderResult, ProviderRequestError
+from app.ai.providers.base import LLMProvider, LLMProviderResult, ProviderRequestError, call_options
 from app.core.config import settings
 
 
@@ -35,7 +35,7 @@ class HTTPProvider(LLMProvider):
 
     async def _post(self, url: str, api_key: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            async with httpx.AsyncClient(timeout=settings.assistant_timeout_seconds) as client:
+            async with httpx.AsyncClient(timeout=min(settings.assistant_timeout_seconds, call_options.get().deadline_seconds)) as client:
                 response = await client.post(url, headers=self._headers(api_key), json=payload)
         except httpx.TimeoutException as exc:
             raise RuntimeError(f"{self.name} API request timed out") from exc
@@ -67,7 +67,7 @@ class HTTPProvider(LLMProvider):
                 provider=self.name,
                 status_code=response.status_code,
                 error_type=error_type,
-                provider_message=provider_message,
+                provider_message=None,
                 request_id=None if request_id is None else request_id[:255],
             )
         try:
@@ -104,6 +104,7 @@ class OpenAICompatibleProvider(HTTPProvider):
 
 class AnthropicProvider(HTTPProvider):
     name = "anthropic"
+    max_context_tokens = 200_000
     supports_tool_calling = True
     default_model = "claude-sonnet-4-6"
     models_url = "https://api.anthropic.com/v1/models"
@@ -120,7 +121,7 @@ class AnthropicProvider(HTTPProvider):
         # A 2K cap can truncate otherwise-valid JSON before the claims array closes.
         payload: dict[str, Any] = {
             "model": selected_model,
-            "max_tokens": 4096,
+            "max_tokens": call_options.get().max_output_tokens,
             "messages": turns,
         }
         if system:
@@ -137,6 +138,10 @@ class AnthropicProvider(HTTPProvider):
             provider=self.name,
             input_tokens=usage.get("input_tokens"),
             output_tokens=usage.get("output_tokens"),
+            cache_read_tokens=usage.get("cache_read_input_tokens"),
+            cache_write_tokens=usage.get("cache_creation_input_tokens"),
+            finish_reason=data.get("stop_reason"),
+            request_id=data.get("id"),
         )
 
 
@@ -151,6 +156,7 @@ class OpenAIProvider(OpenAICompatibleProvider):
 
 class GeminiProvider(HTTPProvider):
     name = "gemini"
+    max_context_tokens = 1_000_000
     supports_tool_calling = True
     supports_json_mode = True
     default_model = "gemini-2.5-flash"
@@ -166,7 +172,9 @@ class GeminiProvider(HTTPProvider):
             {"role": "model" if item.get("role") == "assistant" else "user", "parts": [{"text": item["content"]}]}
             for item in messages if item.get("role") in {"user", "assistant"}
         ]
-        payload: dict[str, Any] = {"contents": contents, "generationConfig": {"temperature": 0}}
+        payload: dict[str, Any] = {"contents": contents, "generationConfig": {"temperature": 0, "maxOutputTokens": call_options.get().max_output_tokens}}
+        if call_options.get().response_schema:
+            payload["generationConfig"].update(responseMimeType="application/json", responseJsonSchema=call_options.get().response_schema)
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
         data = await self._post(
@@ -176,7 +184,7 @@ class GeminiProvider(HTTPProvider):
         )
         try:
             parts = data["candidates"][0]["content"]["parts"]
-            content = "\n".join(str(part["text"]) for part in parts if part.get("text"))
+            content = "\n".join(str(part["text"]) for part in parts if part.get("text") and not part.get("thought"))
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError("gemini API response did not contain assistant text") from exc
         if not content.strip():
@@ -192,6 +200,10 @@ class GeminiProvider(HTTPProvider):
             provider=self.name,
             input_tokens=usage.get("promptTokenCount"),
             output_tokens=usage.get("candidatesTokenCount"),
+            cache_read_tokens=usage.get("cachedContentTokenCount"),
+            reasoning_tokens=usage.get("thoughtsTokenCount"),
+            finish_reason=(data.get("candidates") or [{}])[0].get("finishReason"),
+            request_id=data.get("responseId"),
         )
 
 

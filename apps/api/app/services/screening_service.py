@@ -7,15 +7,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.market import Company, MarketPrice
+from app.services.canonical_market_service import latest_price as canonical_latest_price
+from app.services.financial_comparability import comparable_series, growth, margin as comparable_margin
+from app.models.market import Company
 from app.models.portfolio import Portfolio, PortfolioHolding
 from app.models.workstation import CompanyScreeningSnapshot, Instrument, StandardizedFinancialFact
-
-
-def _growth(current: Decimal, previous: Decimal) -> Decimal | None:
-    if previous == 0:
-        return None
-    return (current - previous) / abs(previous)
 
 
 def compute_screening_snapshots(db: Session, as_of: date | None = None) -> list[CompanyScreeningSnapshot]:
@@ -26,19 +22,15 @@ def compute_screening_snapshots(db: Session, as_of: date | None = None) -> list[
         rows = list(db.scalars(select(StandardizedFinancialFact).where(
             StandardizedFinancialFact.instrument_id == instrument.id,
             StandardizedFinancialFact.period_type == "annual",
+            StandardizedFinancialFact.period_end <= snapshot_date,
         ).order_by(StandardizedFinancialFact.period_end.desc())))
-        by_metric: dict[str, list[StandardizedFinancialFact]] = defaultdict(list)
-        for row in rows:
-            by_metric[row.metric].append(row)
         income_key = "total_income" if "BANK" in (instrument.sector or "").upper() else "revenue"
-        income = by_metric[income_key]
-        pat = by_metric["net_income"]
-        eps = by_metric["earnings_per_share"]
-        income_growth = _growth(income[0].value, income[1].value) if len(income) > 1 else None
-        pat_growth = _growth(pat[0].value, pat[1].value) if len(pat) > 1 else None
-        eps_growth = _growth(eps[0].value, eps[1].value) if len(eps) > 1 else None
-        margin = (pat[0].value / income[0].value) if income and pat and income[0].value else None
-        latest_price = db.scalar(select(MarketPrice).where(MarketPrice.symbol == instrument.symbol).order_by(MarketPrice.trade_date.desc()).limit(1))
+        income = comparable_series(rows, income_key)
+        pat = comparable_series(rows, "net_income")
+        eps = comparable_series(rows, "earnings_per_share")
+        income_growth, pat_growth, eps_growth = growth(income), growth(pat), growth(eps)
+        margin = comparable_margin(pat, income)
+        latest_price = canonical_latest_price(db, instrument.symbol, snapshot_date)
         liquidity = Decimal(str(min(1, max(0, (latest_price.volume if latest_price else 0) / 1_000_000)))) if latest_price else None
         dimensions = [income_growth, pat_growth, eps_growth, margin, liquidity]
         available = [value for value in dimensions if value is not None]

@@ -299,9 +299,16 @@ def test_llm_synthesis_and_fallback_share_canonical_evidence_ids(client, monkeyp
 
         async def chat(self, _api_key, messages, _model):
             grounded = json.loads(messages[-1]["content"])
-            evidence_id = grounded["grounded_context"]["calculated_evidence"][0][
-                "evidence_id"
-            ]
+            projection = grounded["evidence_projection"]
+            def expand(value):
+                if isinstance(value, dict):
+                    if set(value) == {"$ref"}:
+                        return expand(projection["records"][value["$ref"]])
+                    return {key: expand(child) for key, child in value.items()}
+                if isinstance(value, list):
+                    return [expand(child) for child in value]
+                return value
+            evidence_id = expand(projection["root"])["context"]["calculated_evidence"][0]["evidence_id"]
             return LLMProviderResult(
                 content=json.dumps(
                     {
@@ -333,7 +340,7 @@ def test_llm_synthesis_and_fallback_share_canonical_evidence_ids(client, monkeyp
 
     assert response.status_code == 201, response.text
     body = response.json()
-    assert body["synthesis"]["mode"] == "llm_grounded"
+    assert body["synthesis"]["mode"] == "llm_grounded", body["synthesis"].get("reason")
     calculated_ids = {row["evidence_id"] for row in body["calculated_evidence"]}
     assert calculated_ids <= set(body["context_receipt"]["evidence_ids"])
 

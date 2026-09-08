@@ -18,6 +18,7 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.services.company_risk import company_risk
 from app.models.document import Document, DocumentChunk
 from app.models.market import MarketPrice, SectorDailyStats
 from app.models.portfolio import Portfolio, PortfolioHolding, PortfolioTransaction
@@ -698,10 +699,20 @@ class ContextBuilder:
                 .limit(100)
             )
         )
+        # Keep the latest version within a comparable source/period/basis group;
+        # retain conflicting sources and consolidated/standalone observations.
+        comparable = {}
+        for row in filing:
+            key = (row.taxonomy_key, row.period_type, row.period_start, row.period_end,
+                   row.consolidated, row.unit, row.currency, row.source_label)
+            comparable.setdefault(key, row)
+        filing = list(comparable.values())
         facts = [
             {
                 "id": row.id,
                 "metric": row.taxonomy_key,
+                "accounting_basis": "consolidated" if row.consolidated else "standalone",
+                "source": row.source_label,
                 "period_type": row.period_type,
                 "period_end": row.period_end,
                 "filing_date": row.filing_date,
@@ -716,6 +727,8 @@ class ContextBuilder:
             {
                 "id": row.id,
                 "metric": row.metric,
+                "accounting_basis": None,
+                "source": row.source,
                 "period_type": row.period_type,
                 "period_end": row.period_end,
                 "value": row.value,
@@ -829,6 +842,7 @@ class ContextBuilder:
         )
         if intervening_sessions or (price.trade_date == now.date() and outside_source_sla):
             state = ContextState.STALE
+        observed_risk = company_risk(db, instrument.symbol, price.trade_date)
         data = {
             "price": {
                 "trade_date": price.trade_date,
@@ -840,8 +854,11 @@ class ContextBuilder:
                 "adjustment_state": price.adjustment_state,
                 "quality_status": price.quality_status,
             },
-            "risk_metrics": json.loads(snapshot.metrics_json) if snapshot else None,
-            "risk_calculation_as_of": snapshot.as_of_date if snapshot else None,
+            "risk_metrics": observed_risk["metrics"] if observed_risk else None,
+            "risk_calculation_as_of": observed_risk["as_of"] if observed_risk else None,
+            "risk_method": observed_risk["method"] if observed_risk else None,
+            "screening_metrics": json.loads(snapshot.metrics_json) if snapshot else None,
+            "screening_as_of": snapshot.as_of_date if snapshot else None,
         }
         market_version = (
             price.artifact_id
@@ -881,7 +898,7 @@ class ContextBuilder:
                 )
             ]
         )
-        if snapshot is None:
+        if observed_risk is None:
             missing.append(
                 _deficiency(
                     instrument,
