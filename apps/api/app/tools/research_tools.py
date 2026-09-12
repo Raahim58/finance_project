@@ -1,15 +1,18 @@
+import json
+
 from pydantic import BaseModel, Field
 
 from app.schemas.rag import RagSearchRequest
-from app.schemas.intelligence_context import ResearchPurpose
-from app.services.context_consumer_service import (
-    company_research_response,
-    consume_company_research,
+from app.models.workstation import Instrument
+from app.schemas.intelligence_context import (
+    ContextScope,
+    ContextSectionName,
+    IntelligenceContextRequest,
 )
+from app.services.context_builder import build_intelligence_context
 from app.services.rag_service import search_rag
 from app.services.research_service import list_events, search_instruments
-from app.services.ingestion_service import refresh_company_research
-from app.tools.registry import ToolDefinition, ToolRegistry
+from app.tools.registry import ToolDefinition, ToolRegistry, tool_result
 
 
 class ResearchInput(BaseModel):
@@ -19,11 +22,9 @@ class ResearchInput(BaseModel):
     limit: int = Field(default=5, ge=1, le=10)
 
 
-class CompanyInput(BaseModel):
+class CompanySectionsInput(BaseModel):
     instrument_id: str
-    portfolio_id: str | None = None
-    research_purpose: ResearchPurpose | None = None
-    question: str | None = Field(default=None, min_length=1, max_length=2000)
+    sections: list[ContextSectionName] = Field(min_length=1, max_length=5)
 
 
 class EventInput(BaseModel):
@@ -36,44 +37,112 @@ class InstrumentSearchInput(BaseModel):
     limit: int = Field(default=10, ge=1, le=20)
 
 
-class CompanyRefreshInput(BaseModel):
-    instrument_id: str
-    report_limit: int = Field(default=5, ge=1, le=20)
-
-
 def _search(db, user, payload: ResearchInput):
     result = search_rag(db, user, RagSearchRequest(**payload.model_dump()))
-    return result.model_dump(mode="json")
+    body = result.model_dump(mode="json")
+    sources = [item.model_dump(mode="json") for item in result.citations]
+    chunks = []
+    for item in body["chunks"]:
+        chunk = dict(item)
+        citation = chunk.pop("citation")
+        chunk.pop("source_url", None)
+        chunk["source_ref"] = citation["id"]
+        chunks.append(chunk)
+    return tool_result(
+        "ok" if result.chunks else "missing",
+        {
+            "chunks": chunks,
+            "audit": body["audit"],
+            "disambiguation": body["disambiguation"],
+        },
+        sources=sources,
+        returned=len(result.chunks),
+        remaining=None,
+    )
 
 
-def _company(db, user, payload: CompanyInput):
-    return company_research_response(
-        consume_company_research(
-            db,
-            user,
-            payload.instrument_id,
-            portfolio_id=payload.portfolio_id,
-            research_purpose=payload.research_purpose,
-            question=payload.question,
+def _company_sections(db, user, payload: CompanySectionsInput):
+    allowed = {
+        ContextSectionName.COMPANY_FACTS,
+        ContextSectionName.MARKET_RISK,
+        ContextSectionName.SECTOR,
+        ContextSectionName.MACRO,
+        ContextSectionName.EVENTS,
+    }
+    requested = tuple(dict.fromkeys(payload.sections))
+    if set(requested) - allowed:
+        return tool_result(
+            "invalid_arguments",
+            error={"code": "unsupported_company_section", "fields": ["sections"]},
         )
+    instrument = db.get(Instrument, payload.instrument_id)
+    if instrument is None:
+        return tool_result("missing", error={"code": "instrument_not_found"})
+    context = build_intelligence_context(
+        db,
+        user,
+        IntelligenceContextRequest(
+            symbol=instrument.symbol,
+            scope=ContextScope.COMPANY_INTELLIGENCE,
+            sections=requested,
+        ),
+    )
+    sections = [context.sections[name.value].model_dump(mode="json") for name in requested]
+    measurements = []
+    for section in sections:
+        encoded = json.dumps(section, separators=(",", ":"), default=str).encode()
+        measurements.append(
+            {
+                "section": section["name"],
+                "serialized_bytes": len(encoded),
+                "estimated_tokens": (len(encoded) + 3) // 4,
+                "size_kind": "estimate",
+                "elapsed_ms": context.receipt.section_duration_ms[section["name"]],
+            }
+        )
+    sources = []
+    seen = set()
+    for section in sections:
+        for source in section["evidence"]:
+            if source["evidence_id"] not in seen:
+                seen.add(source["evidence_id"])
+                sources.append(source)
+    returned = sum(section["state"] not in {"missing", "not_evaluated"} for section in sections)
+    return tool_result(
+        "ok" if returned else "missing",
+        {
+            "instrument_id": instrument.id,
+            "symbol": instrument.symbol,
+            "sections": sections,
+            "measurements": measurements,
+        },
+        sources=sources,
+        returned=returned,
+        remaining=len(sections) - returned,
     )
 
 
 def _events(db, _user, payload: EventInput):
-    return {"events": list_events(db, entity_key=payload.entity_key, limit=payload.limit)}
+    events = list_events(db, entity_key=payload.entity_key, limit=payload.limit)
+    return tool_result(
+        "ok" if events else "missing",
+        {"events": events},
+        returned=len(events),
+        remaining=None,
+    )
 
 
 def _instruments(db, _user, payload: InstrumentSearchInput):
-    return {
-        "instruments": [
-            item.model_dump(mode="json")
-            for item in search_instruments(db, payload.query, limit=payload.limit)
-        ]
-    }
-
-
-def _refresh_company(db, _user, payload: CompanyRefreshInput):
-    return refresh_company_research(db, payload.instrument_id, payload.report_limit)
+    rows = [
+        item.model_dump(mode="json")
+        for item in search_instruments(db, payload.query, limit=payload.limit)
+    ]
+    return tool_result(
+        "ok" if rows else "missing",
+        {"instruments": rows},
+        returned=len(rows),
+        remaining=None,
+    )
 
 
 def register_research_tools(registry: ToolRegistry) -> None:
@@ -93,16 +162,16 @@ def register_research_tools(registry: ToolRegistry) -> None:
     )
     registry.register(
         ToolDefinition(
-            "research.company",
+            "research.company_sections",
             "1.0",
-            "Company market, fundamental, filing, event, and portfolio context",
-            CompanyInput,
+            "Explicit company financial, market-risk, sector, macro, or event sections",
+            CompanySectionsInput,
             "research:read",
             True,
             False,
             12,
             "medium",
-            _company,
+            _company_sections,
         )
     )
     registry.register(
@@ -131,19 +200,5 @@ def register_research_tools(registry: ToolRegistry) -> None:
             5,
             "low",
             _instruments,
-        )
-    )
-    registry.register(
-        ToolDefinition(
-            "research.refresh_company",
-            "1.0",
-            "Acquire and index newly observed official PSX company reports before retrieval",
-            CompanyRefreshInput,
-            "research:refresh",
-            False,
-            False,
-            30,
-            "high",
-            _refresh_company,
         )
     )

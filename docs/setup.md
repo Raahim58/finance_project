@@ -82,6 +82,13 @@ pytest app/tests/test_phase7a_canonical_context.py \
   app/tests/test_llm_provider_usage.py -q
 ```
 
+Run the Phase 8 Phase 1 read-tool fidelity suite separately while iterating on evidence
+contracts (it performs no network, ingestion, broker, or model calls):
+
+```bash
+pytest app/tests/test_phase8_phase1_read_tools.py -q
+```
+
 Live benchmark commands are intentionally disabled because they can incur provider cost:
 
 ```bash

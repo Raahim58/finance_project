@@ -34,6 +34,7 @@ from app.services.context_consumer_service import (
 from app.services.portfolio_service import get_portfolio_or_404
 from app.services.workstation_service import ips_compliance
 from app.tools import build_tool_registry
+from app.tools.registry import expand_model_data
 
 
 ADVICE_RE = re.compile(r"\b(should|recommend|buy|sell|increase|reduce|rebalance)\b", re.I)
@@ -714,13 +715,25 @@ def _invoke(trace, registry, name, db, user, arguments):
         result = registry.invoke(
             name, db, user, arguments, max_cost_units=settings.assistant_max_tool_cost_units
         )
-        if name == "research.search" and isinstance(result, dict):
+        envelope_status = result.get("status") if isinstance(result, dict) else None
+        data = expand_model_data(result.get("data")) if envelope_status else result
+        if name == "research.search" and isinstance(data, dict):
+            sources = {
+                item.get("id"): item
+                for item in (result.get("sources") or [])
+                if isinstance(item, dict)
+            }
+            chunks = [
+                {**item, "citation": sources.get(item.get("source_ref"), {})}
+                for item in data.get("chunks", [])
+            ]
             # Every citation, whether from the deterministic search below or a
             # later LLM-planned tool call, is re-gated here so none can bypass
             # the symbol/entity and relevance floor.
-            result = {
-                **result,
-                "citations": gate_citations(result.get("chunks", []), arguments.get("symbols")),
+            data = {
+                **data,
+                "chunks": chunks,
+                "citations": gate_citations(chunks, arguments.get("symbols")),
             }
         trace.append(
             {
@@ -730,11 +743,12 @@ def _invoke(trace, registry, name, db, user, arguments):
                 ),
                 "arguments": arguments,
                 "status": "completed",
+                "result_status": envelope_status,
                 "timing_kind": "retrieval" if name == "research.search" else "calculation",
                 "latency_ms": round((time.perf_counter() - started) * 1000),
             }
         )
-        return result
+        return data
     except Exception as exc:
         trace.append(
             {
