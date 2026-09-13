@@ -78,101 +78,45 @@ unchanged.
 
 ## Phase 8 reasoning boundary
 
-Phase 8 uses a stateless reasoning module inside a durable API-owned execution. Each execution
-receives the current request, the globally selected active user-owned portfolio as the
-fallback portfolio context, any explicitly selected security, bounded conversation
-history, and a freshly assembled Canonical Intelligence Context. The selected
-portfolio's identifier and name are supplied to the model. Market-wide describes the
-candidate security universe, not the absence of portfolio context. Free-form text is
-not allowed to silently switch the portfolio; an explicitly selected portfolio is
-resolved and ownership-checked by the server, otherwise the global selection is used.
+Phase 8 uses one explicit model-directed loop inside a durable API-owned execution.
+The initial provider turn contains the current question, bounded conversation history,
+server-resolved portfolio and instrument identity, and the allowlisted read-tool
+descriptions. The server resolves portfolio ownership before acceptance and again on
+resume. Free-form text cannot switch the trusted portfolio. Conversation history is
+context, not current market evidence, and the Assistant does not prefetch a Canonical
+Intelligence Context or run a separate intent-classification call.
 
-`ReasoningEngine` remains the application-owned interface. Its initial orchestration
-implementation uses a LangGraph `StateGraph`, while canonical request, context,
-evidence, recommendation, and validation contracts remain framework-independent.
-Phase 8 compiles the graph without a framework checkpointer and does not adopt the
-LangChain agent, retrieval, memory, or tool abstractions. PostgreSQL execution, stage,
-and attempt records provide recovery, retry accounting, heartbeats, diagnostics, and
-delivery acknowledgement. Existing Conversation, AssistantMessage, context receipt,
-evidence, and trace records remain authoritative.
+Anthropic and Gemini adapters preserve native text, tool-call, tool-result, and image
+blocks. Provider IDs and opaque continuation fields remain attached to their turns.
+Independent tool calls run through at most four workers, each with its own database
+session, and their results are returned in provider call order. Tool allowances are
+reserved centrally. All registered Assistant tools are read-only; allocation proposals
+are verified against database prices, holdings, cash, and the confirmed IPS without
+saving an allocation, changing financial state, or placing a trade.
 
-The current Phase 8 module may produce an LLM-proposed allocation and invoke deterministic
-read-only verification. Verification derives gross quantities and funding from database
-prices and stored holdings, compares current and proposed portfolio analytics, and checks
-the confirmed IPS. It never saves a proposal, changes holdings or cash, modifies the IPS,
-or places a trade. A failed verification may trigger one focused allocation revision; if
-no proposal passes, the final state is Recommendation Synthesis Unavailable.
+Every outbound provider attempt is durably recorded before sending. Completed provider
+turns and tool-result turns are stored in an encrypted execution checkpoint so restart
+recovery resumes the transcript. A sent attempt without an outcome is marked uncertain
+and uses the one durable retry allowance instead of being silently repeated. The
+selected provider/model remains fixed for the execution. One 300-second outer deadline
+covers the run, and cumulative estimated input accounts for the full serialized
+transcript, tool schemas, and images before each provider turn. Provider-reported
+input, output, cache, and reasoning usage is stored separately.
 
-The model writes the user-facing answer once. Its provider response contains that
-natural-language answer plus compact fields such as advisory conclusion, horizon, and
-confidence, with inline references to allowed evidence IDs. The API displays the
-model's answer without reconstructing or duplicating its prose. Explicit conclusions
-may be Buy/Add, Hold, Reduce, Avoid, or Insufficient Evidence and include the applicable
-horizon, thesis, portfolio/IPS fit where applicable, catalysts, risks, invalidation
-conditions, confidence, missing evidence, and citations.
+Final provider text is accepted directly. The server only unwraps valid raw or fenced
+legacy JSON containing a string `answer`; it makes no paid formatting-repair call.
+Citation markers such as `[[E7]]` resolve to server-owned source metadata delivered in
+that execution. Unknown markers and absent citations are reported explicitly, and
+citation resolution never claims semantic proof or whole-answer grounding. Exact-match
+numerical prose validation is not part of the Assistant path. Verified allocation
+quantities are appended from deterministic server calculations.
 
-Holding analysis and user-named comparisons normally perform one model synthesis call.
-Market-wide recommendations are the deliberate exception. The complete eligible active
-universe is partitioned by authoritative available security classification. The current
-classification authority is the PSX sector observed from the PSX symbol universe; no
-sub-industry is inferred from names or narrative text. A separately sourced sub-industry
-may be used only after its provider and provenance are verified. Unclassified securities
-remain in an explicit unclassified packet and are never silently omitted. Each group
-receives compact, consistent-period structured evidence and group-appropriate metrics;
-securities are assessed primarily against their peers rather than through one raw
-cross-sector ranking. LangGraph batches large sectors and maps their records through no
-more than four concurrent discovery calls, keeping classification boundaries and
-coverage accounting explicit. Discovery selects bounded candidates within each sector without issuing an
-advisory conclusion. The application then builds deep Canonical Intelligence Context for
-the sector candidates, and a final model call performs portfolio/IPS-aware cross-sector
-comparison and writes the recommendation. This is read-only context expansion. One
-focused format repair and one allocation revision are the only bounded correction paths.
-Phase 8 has no critic or unrestricted agent loop.
-
-Blocking validation is restricted to mechanically provable invariants: response
-schema and enums; equality of returned instrument, portfolio, and scope identifiers
-with trusted request/context values; prior ownership resolution; evidence-ID membership
-in the canonical registry; entity/metric/value/unit/period/basis agreement for numerical
-references; equality between verified and final allocation metadata; presence of a
-horizon source; and required disclosure
-of freshness states used by the answer. The validator never decides whether evidence
-is persuasive, whether sources are materially contradictory, whether a risk changes
-the thesis, which advisory conclusion is justified, or whether an outside security is
-a meaningful alternative. Those are semantic judgments made by the model and measured
-through evaluations.
-
-Semantic checks begin in non-blocking shadow mode. A labeled evaluation set measures
-false abstention, unsupported recommendations, incorrect portfolio scope, citation
-misuse, and conclusion consistency. Only checks demonstrated to be objective
-invariants may become blocking. Missing optional sections do not accumulate into a
-generic penalty score. A structural failure may receive one constrained repair attempt;
-the validator may accept the model's conclusion or reject the structurally invalid
-response, but it never rewrites Buy as Hold or otherwise substitutes its own financial
-judgment.
-
-Provider adapters capture native input/output token counts when the provider returns
-them. `ReasoningEngine` accumulates those counts across sector discovery, candidate
-reduction, synthesis, and the optional repair call; the Assistant displays input,
-output, total, and model-call counts. Counts are labeled unavailable rather than
-estimated when a provider does not report usage. Provider and graph failures retain a
-sanitized reason in uncertainty and trace metadata instead of becoming an unexplained
-fallback.
-
-Each external model attempt also writes one bounded server-side `llm_invocations`
-diagnostic row linked to the user, conversation, and Assistant message. It stores the
-provider/model and graph operation, input byte count and hash, latency, provider token
-usage, safe HTTP status/error type/message, and provider request ID. API keys, headers,
-and full outgoing prompts are never stored. Successful answer text remains canonical in
-`AssistantMessage`; a response excerpt is retained only when the overall reasoning run
-is unavailable, capped at 12,000 characters. The Assistant response exposes only the
-diagnostic row IDs for correlation.
-
-If the configured provider is unavailable or the response remains structurally invalid
-after the single repair attempt, the API returns the available deterministic factual
-summary and evidence cards without an advisory conclusion. The result is labeled
-Recommendation Synthesis Unavailable rather than Insufficient Evidence because the
-failure belongs to model synthesis, not necessarily to the underlying evidence. A
-deterministic fallback never invents Buy/Add, Hold, Reduce, or Avoid.
+PostgreSQL execution, stage, and attempt records retain recovery, retry accounting,
+heartbeats, diagnostics, and delivery acknowledgement. Existing Conversation and
+AssistantMessage records remain the user-facing history. Failures preserve distinct
+terminal codes for provider transport/status, provider timeout, context/input limits,
+tool protocol/timeout, output truncation, checkpoint persistence, and final response
+persistence. Phase 3 streaming is not part of this boundary.
 
 Global Evidence v1 is deliberately staged. Pass 0 established persistence and
 contracts. Pass 1 adds the first synchronous vertical slice: configured discovery

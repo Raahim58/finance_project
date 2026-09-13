@@ -73,3 +73,71 @@ Remaining work is intentionally outside Phase 1: provider-native tool turns, the
 model-directed loop, durable transcript continuation, citation-marker resolution, and
 streaming belong to Phases 2 and 3. Live-model answer quality remains a handoff gate and
 is not claimed by these offline checks.
+
+## Phase 2 acceptance report
+
+Phase 2 replaces the Assistant's fixed planning/classification/recovery graph with one
+explicit provider loop. Initial input contains the question, bounded conversation
+history, server-resolved portfolio/instrument identity, and the current read-tool
+catalog. It performs no evidence prefetch and no paid formatting-repair call.
+
+Anthropic and Gemini adapters now transport typed text, tool-call, tool-result, and image
+blocks in their native request formats. Tool-only and parallel calls remain valid, IDs
+remain associated with their results, and Gemini provider parts preserve opaque thought
+signatures. These contracts were checked against the official
+[Anthropic tool-use documentation](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use)
+and [Gemini function-calling documentation](https://ai.google.dev/gemini-api/docs/function-calling).
+
+Provider turns and tool-result turns are encrypted and checkpointed separately. Resume
+rechecks user, conversation, and portfolio ownership, keeps the originally selected
+provider/model, reuses byte-identical completed attempts, and applies the existing
+uncertain-paid-attempt retry policy. Independent calls run concurrently with a maximum
+of four workers; every database worker creates its own session. PostgreSQL workers set a
+transaction-local statement timeout, while the orchestration timeout ignores any late
+worker result.
+
+Final provider prose is accepted directly. Valid raw or fenced legacy JSON is locally
+unwrapped only when it contains a string `answer`. Citation markers resolve solely from
+sources delivered during that execution; unknown and absent citations are explicit, and
+the result always states that semantic verification was not performed. Structured
+allocation quantities still come from the deterministic verifier and never mutate
+financial state.
+
+Removed paths:
+
+- `app/reasoning/engine.py`, `planning.py`, `validation.py`, `contracts.py`,
+  `peer_groups.py`, and `grounding.py`
+- superseded deterministic Assistant orchestrator/graph tests; shared allocation,
+  projection, research, portfolio, market, and compliance services remain
+
+Focused offline acceptance command:
+
+```bash
+cd apps/api
+.venv/bin/pytest app/tests/test_phase8_phase2_tool_loop.py \
+  app/tests/test_llm_provider_usage.py app/tests/test_phase8_revamp.py \
+  app/tests/test_tool_registry.py -q
+```
+
+The scripted cases cross real provider adapters, the allowlisted registry, database
+services, encrypted attempts/checkpoints, and final persistence. They cover ambiguous
+company discovery, two-company/portfolio comparison, universe continuation, missing
+data, malformed and forbidden calls, duplicate IDs, ordered parallel results,
+tool-only turns, allocation sizing, overselling, IPS breaches, truncation, provider
+errors, restart, and checkpoint/final-message persistence failures. Fixtures seed their
+own database setup, but Assistant-dispatched tools perform no ingestion, broker, or
+financial-write operation; the suite performs no network or paid model call.
+
+Observed Phase 2 boundary results on 2026-09-13:
+
+- focused native-loop/provider/registry suite: 38 passed in 7.67 seconds
+- complete backend suite after the final relevant change: 358 passed in 152.77 seconds
+- fresh SQLite migration: upgraded from base through `0029_assistant_tool_loop` in
+  2.93 seconds; `assistant_executions.transcript_encrypted` was present and nullable
+- Python bytecode compilation and `git diff --check`: passed
+- Ruff was not installed in the project virtual environment, so no Ruff result is
+  claimed; the repository test suite and syntax/diff checks are the recorded gates
+
+Phase 3 streaming and its browser delivery checks remain unimplemented. Live-model
+selection and answer quality also remain an explicit later gate; Phase 2 makes no live
+quality claim.

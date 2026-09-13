@@ -1,8 +1,6 @@
 from datetime import date
 from decimal import Decimal
 
-import pytest
-
 from app.db.session import SessionLocal
 from app.models.user import User
 from app.models.portfolio import Portfolio, PortfolioTransaction
@@ -11,7 +9,6 @@ from app.models.market import MarketPrice
 from app.models.workstation import AllocationSet, FinancialFact, Instrument, InvestorFinancialProfileVersion, MacroObservation, MonitoringRule, MonitoringRun, OptimizerRun, PortfolioIPSVersion, Recommendation, ScenarioRun
 from app.seed.demo import seed_workstation
 from app.services.market_ingestion import generate_mock_market_data
-from app.tools import build_tool_registry
 
 
 def auth(client, email="extended@example.com"):
@@ -81,20 +78,6 @@ def test_monitoring_warning_recommendation_and_linked_sandbox_agree(client):
     assert updated["linked_allocation"]["id"] == sandbox.json()["id"]
     resolved = client.patch(f"/recommendations/{recommendation['id']}?decision=resolved", headers=headers)
     assert resolved.json() == {"id": recommendation["id"], "status": "resolved", "holdings_mutated": False}
-
-
-def test_assistant_is_grounded_and_tool_registry_is_allowlisted(client):
-    headers = auth(client, "assistant@example.com"); portfolio_id = portfolio(client, headers)
-    response = client.post("/assistant/messages", headers=headers, json={"question": "What is my portfolio value and should I rebalance?", "portfolio_id": portfolio_id})
-    assert response.status_code == 201
-    body = response.json()
-    assert body["calculated_evidence"]
-    assert {row["tool"] for row in body["tool_trace"]} >= {"market.freshness", "portfolio.summary", "research.search"}
-    assert "cannot provide a grounded" in body["answer"]
-    with SessionLocal() as db:
-        user = db.query(User).filter(User.email == "assistant@example.com").one()
-        with pytest.raises(KeyError, match="not allowlisted"):
-            build_tool_registry().invoke("sql.execute", db, user, {})
 
 
 def test_demo_seed_is_idempotent_and_populates_the_decision_workflow(monkeypatch):

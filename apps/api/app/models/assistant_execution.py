@@ -1,4 +1,5 @@
 """Durable API execution and separately committed attempt accounting."""
+
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ class AssistantExecution(Base):
     client_request_id: Mapped[str] = mapped_column(String(100))
     request_hash: Mapped[str] = mapped_column(String(64))
     request_encrypted: Mapped[str] = mapped_column(Text)
+    transcript_encrypted: Mapped[str | None] = mapped_column(Text)
     conversation_id: Mapped[str] = mapped_column(ForeignKey("assistant_conversations.id"))
     status: Mapped[str] = mapped_column(String(30), default="queued", index=True)
     response_json: Mapped[str | None] = mapped_column(Text)

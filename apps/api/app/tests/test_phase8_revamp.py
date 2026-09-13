@@ -13,10 +13,9 @@ from app.db.session import SessionLocal
 from app.models.user import User
 from app.models.workstation import AssistantMessage
 from app.models.assistant_execution import AssistantExecution, AssistantAttempt, now
+from app.ai.tool_loop import unwrap_final_text
 from app.reasoning.allocation import AllocationProposal, calculate_allocation
-from app.reasoning.projection import project, encode, InferenceBudget, BudgetExceeded
-from app.reasoning.grounding import NumericalReference, registry, validate_references
-from app.reasoning.validation import parse_model_answer
+from app.reasoning.projection import project, encode
 from app.services.assistant_execution import accept, reconcile, owned
 from app.services import assistant_diagnostics as diagnostics
 from app.schemas.assistant import AssistantMessageCreate
@@ -44,35 +43,9 @@ def test_mebl_233_subjects_224_references_have_one_prompt_copy():
     assert projected["counts"]["duplicate_records_removed"] >= 1
 
 
-def test_budget_reserves_recovery_and_rejects_without_spending():
-    budget = InferenceBudget(per_call=50, execution=100, output_reserve=10, recovery_reserve=20)
-    with pytest.raises(BudgetExceeded):
-        budget.reserve("x" * 1000, recovery=False, provider_limit=60)
-    assert budget.spent == 0
-    budget.reserve("hello", recovery=False, provider_limit=60)
-    assert budget.spent > 0
-
-
-@pytest.mark.parametrize("raw", ['```json\n{"analysis":"Observed evidence."}\n```', '{"answer":"Observed evidence."}'])
-def test_safe_transport_repairs(raw):
-    answer, errors = parse_model_answer(raw)
-    assert not errors
-    assert answer.answer == "Observed evidence."
-
-
-def test_ambiguous_alias_is_not_silently_rewritten():
-    answer, errors = parse_model_answer('{"answer":"Buy","analysis":"Sell"}')
-    assert answer is None and errors
-
-
-def test_signed_scoped_numerical_references():
-    records = registry({"symbol": "MEBL", "metric": "return", "value": "-12.5", "unit": "%", "period_end": "2025", "accounting_basis": "consolidated"})
-    key, record = next(iter(records.items()))
-    ref = NumericalReference(reference_id=key, **{k:v for k,v in record.items() if k != "source_id"}, text="-12.5%")
-    assert validate_references("MEBL return -12.5%", [ref], records) == []
-    assert validate_references("MEBL return 12.5%", [ref.model_copy(update={"text":"12.5%"})], records)
-    for field, value in (("unit","PKR"), ("entity","SYS"), ("period","2024"), ("accounting_basis","standalone")):
-        assert validate_references("MEBL return -12.5%", [ref.model_copy(update={field:value})], records)
+@pytest.mark.parametrize("raw", ['```json\n{"answer":"Observed evidence."}\n```', '{"answer":"Observed evidence."}'])
+def test_safe_transport_unwraps_without_a_repair_call(raw):
+    assert unwrap_final_text(raw) == "Observed evidence."
 
 
 def calculate(legs, cash="1000", holdings=None, lot=None):

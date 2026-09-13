@@ -1,7 +1,13 @@
 import pytest
 import httpx
 
-from app.ai.providers.base import ProviderCallOptions, ProviderRequestError
+from app.ai.providers.base import (
+    ContentBlock,
+    ProviderCallOptions,
+    ProviderRequestError,
+    ProviderTool,
+    ProviderTurn,
+)
 from app.ai.providers.http_placeholders import (
     AnthropicProvider,
     GeminiProvider,
@@ -51,9 +57,7 @@ async def test_provider_usage_is_preserved(provider, response, expected, monkeyp
 
     monkeypatch.setattr(provider, "_post", fake_post)
 
-    result = await provider.chat(
-        "secret", [{"role": "user", "content": "question"}], "test-model"
-    )
+    result = await provider.chat("secret", [{"role": "user", "content": "question"}], "test-model")
 
     assert (result.input_tokens, result.output_tokens) == expected
 
@@ -97,13 +101,17 @@ async def test_gemini_uses_native_schema_and_preserves_usage_breakdown(monkeypat
         return {
             "responseId": "gemini-request",
             "modelVersion": "gemini-test",
-            "candidates": [{
-                "finishReason": "STOP",
-                "content": {"parts": [
-                    {"thought": True, "text": "private reasoning"},
-                    {"text": '{"answer":"ok"}'},
-                ]},
-            }],
+            "candidates": [
+                {
+                    "finishReason": "STOP",
+                    "content": {
+                        "parts": [
+                            {"thought": True, "text": "private reasoning"},
+                            {"text": '{"answer":"ok"}'},
+                        ]
+                    },
+                }
+            ],
             "usageMetadata": {
                 "promptTokenCount": 30,
                 "candidatesTokenCount": 5,
@@ -127,9 +135,7 @@ async def test_gemini_uses_native_schema_and_preserves_usage_breakdown(monkeypat
         "temperature": 0,
         "maxOutputTokens": 2048,
         "responseMimeType": "application/json",
-        "responseJsonSchema": {
-            "type": "object", "properties": {"answer": {"type": "string"}}
-        },
+        "responseJsonSchema": {"type": "object", "properties": {"answer": {"type": "string"}}},
     }
     assert result.content == '{"answer":"ok"}'
     assert (result.cache_read_tokens, result.reasoning_tokens) == (7, 11)
@@ -199,3 +205,144 @@ async def test_anthropic_error_preserves_safe_provider_diagnostics(monkeypatch):
     assert raised.value.provider_message is None
     assert raised.value.request_id == "req_123"
     assert "secret" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_native_tools_preserve_parallel_call_ids_and_results(monkeypatch):
+    provider = AnthropicProvider()
+    captured = []
+    responses = [
+        {
+            "id": "msg-tools",
+            "model": "claude-test",
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "tool_use", "id": "call-1", "name": "market__freshness", "input": {}},
+                {
+                    "type": "tool_use",
+                    "id": "call-2",
+                    "name": "research__instruments",
+                    "input": {"query": "Meezan"},
+                },
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 4},
+        },
+        {
+            "id": "msg-final",
+            "model": "claude-test",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "Readable answer."}],
+            "usage": {"input_tokens": 20, "output_tokens": 3},
+        },
+    ]
+
+    async def fake_post(_url, _key, payload):
+        captured.append(payload)
+        return responses.pop(0)
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    tools = [
+        ProviderTool("market.freshness", "Freshness", {"type": "object", "properties": {}}),
+        ProviderTool(
+            "research.instruments",
+            "Resolve instruments",
+            {"type": "object", "properties": {"query": {"type": "string"}}},
+        ),
+    ]
+    turns = [ProviderTurn("user", [ContentBlock("text", text="Inspect MEBL")])]
+    first = await provider.tool_chat("secret", turns, tools, "claude-test")
+
+    assert first.content == ""
+    assert first.finish_reason == "tool_use"
+    assert [(block.id, block.name) for block in first.turn.content] == [
+        ("call-1", "market.freshness"),
+        ("call-2", "research.instruments"),
+    ]
+    assert captured[0]["tools"][0]["input_schema"] == tools[0].input_schema
+
+    result_turn = ProviderTurn(
+        "user",
+        [
+            ContentBlock(
+                "tool_result", id="call-1", name="market.freshness", result={"status": "ok"}
+            ),
+            ContentBlock(
+                "tool_result",
+                id="call-2",
+                name="research.instruments",
+                result={"status": "missing"},
+            ),
+        ],
+    )
+    final = await provider.tool_chat(
+        "secret", [*turns, first.turn, result_turn], tools, "claude-test"
+    )
+
+    returned = captured[1]["messages"][-1]["content"]
+    assert [block["tool_use_id"] for block in returned] == ["call-1", "call-2"]
+    assert final.content == "Readable answer."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-2.5-flash-lite"])
+async def test_gemini_native_tools_preserve_signature_and_function_response(model, monkeypatch):
+    provider = GeminiProvider()
+    captured = []
+    signed_part = {
+        "functionCall": {"name": "market__freshness", "args": {}},
+        "thoughtSignature": "opaque-signature",
+    }
+    responses = [
+        {
+            "responseId": "gemini-tools",
+            "modelVersion": model,
+            "candidates": [
+                {
+                    "finishReason": "STOP",
+                    "content": {"role": "model", "parts": [signed_part]},
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 2},
+        },
+        {
+            "responseId": "gemini-final",
+            "modelVersion": model,
+            "candidates": [
+                {
+                    "finishReason": "STOP",
+                    "content": {"role": "model", "parts": [{"text": "Final text."}]},
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 20, "candidatesTokenCount": 3},
+        },
+    ]
+
+    async def fake_post(_url, _key, payload):
+        captured.append(payload)
+        return responses.pop(0)
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    tools = [ProviderTool("market.freshness", "Freshness", {"type": "object"})]
+    turns = [ProviderTurn("user", [ContentBlock("text", text="Freshness?")])]
+    first = await provider.tool_chat("secret", turns, tools, model)
+    call = first.turn.content[0]
+    result = ProviderTurn(
+        "user",
+        [
+            ContentBlock(
+                "tool_result",
+                id=call.id,
+                name=call.name,
+                result={"status": "ok"},
+                opaque={"include_id": False},
+            )
+        ],
+    )
+    final = await provider.tool_chat("secret", [*turns, first.turn, result], tools, model)
+
+    assert first.content == ""
+    assert captured[1]["contents"][1]["parts"][0] == signed_part
+    function_response = captured[1]["contents"][2]["parts"][0]["functionResponse"]
+    assert function_response["name"] == "market__freshness"
+    assert "id" not in function_response
+    assert final.content == "Final text."

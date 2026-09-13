@@ -13,20 +13,19 @@ python -m app.core.keys
 
 Put the generated Fernet key in `ENCRYPTION_KEY`. User LLM keys are encrypted at rest, never returned after save, and decrypted server-side only for an LLM request.
 
-Phase 8 reasoning is enabled by default. `PHASE8_REASONING_ENABLED=false` restores the
-grounded deterministic Assistant path without enabling any executable action loop.
-`PHASE8_MARKET_DEEP_CANDIDATE_LIMIT` (default `8`) and
-`PHASE8_SECTOR_CANDIDATE_LIMIT` (default `3`) bound market-wide model work. Assistant
+The Phase 8 Assistant uses one model-directed, read-only native tool loop. Assistant
 requests are owned by the API process and persisted in PostgreSQL; no Assistant Celery
-worker is used. Apply migration `0028_assistant_executions` before starting the API.
+worker is used. Apply migrations through `0029_assistant_tool_loop` before starting the
+API. The migration adds the encrypted transcript checkpoint used for restart recovery.
 
-The initial inference ceilings are 20k tokens per targeted/sizing call and 40k per
-comparison or market-wide call. Execution ceilings are 48k, 80k, 160k, and 200k tokens
-respectively. Recovery packets are limited to 8k. These are conservative offline token
-estimates; provider-reported usage is stored separately. Deadlines default to 120 seconds
-for targeted questions, 180 seconds for sizing/comparisons, and 300 seconds for
-market-wide analysis. Override them with `PHASE8_TARGETED_DEADLINE_SECONDS`,
-`PHASE8_SIZING_DEADLINE_SECONDS`, and `PHASE8_MARKET_DEADLINE_SECONDS`.
+`ASSISTANT_EXECUTION_DEADLINE_SECONDS` defaults to one 300-second outer deadline for
+every Assistant request. `ASSISTANT_EXECUTION_INPUT_TOKEN_LIMIT` defaults to 200,000
+cumulative estimated input tokens. Before every provider turn the estimate includes the
+entire serialized transcript, native tool schemas, and images; provider-reported
+input/output/cache/reasoning usage remains separate. `ASSISTANT_MAX_TOOL_ITERATIONS` and
+`ASSISTANT_MAX_TOOL_COST_UNITS` retain the operator-configured call and cost safeguards.
+The older `PHASE8_*_DEADLINE_SECONDS` settings remain for non-Assistant compatibility
+consumers and do not select budgets in the new Assistant path.
 
 Start production-style dependencies and migrate:
 
@@ -46,7 +45,9 @@ DATABASE_URL=sqlite+pysqlite:///./psx_ai_local.db alembic upgrade head
 The API reconciles queued and abandoned Assistant runs at startup and every 20 seconds.
 It runs at most two local executions concurrently. A sent provider attempt without a
 recorded outcome is marked uncertain and consumes the execution's one retry allowance.
-Retry, repair, revision, and input counters remain in the execution row across restarts.
+Retry and input counters remain in the execution row across restarts. Persisted provider
+turns and associated tool results resume from the encrypted transcript; provider/model
+selection cannot change mid-execution.
 
 Inspect redacted diagnostics through the owner-scoped API or CLI:
 
@@ -76,8 +77,8 @@ credentials:
 python -m app.jobs.evaluate_phase8
 pytest app/tests/test_phase7a_canonical_context.py \
   app/tests/test_phase7b_context_consumers.py \
-  app/tests/test_phase8_reasoning.py app/tests/test_phase8_revamp.py \
-  app/tests/test_assistant_orchestrator.py app/tests/test_quant_domain.py \
+  app/tests/test_phase8_revamp.py app/tests/test_phase8_phase2_tool_loop.py \
+  app/tests/test_tool_registry.py app/tests/test_quant_domain.py \
   app/tests/test_intelligence_v1.py app/tests/test_providers.py \
   app/tests/test_llm_provider_usage.py -q
 ```
@@ -87,6 +88,14 @@ contracts (it performs no network, ingestion, broker, or model calls):
 
 ```bash
 pytest app/tests/test_phase8_phase1_read_tools.py -q
+```
+
+Run the Phase 2 native-provider and durable-loop acceptance suite without network or
+paid model calls:
+
+```bash
+pytest app/tests/test_phase8_phase2_tool_loop.py \
+  app/tests/test_llm_provider_usage.py app/tests/test_tool_registry.py -q
 ```
 
 Live benchmark commands are intentionally disabled because they can incur provider cost:

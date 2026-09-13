@@ -56,10 +56,12 @@ class Settings(BaseSettings):
     assistant_max_tool_cost_units: int = 18
     assistant_max_retrieved_chunks: int = 8
     assistant_timeout_seconds: int = 30
+    assistant_execution_deadline_seconds: int = Field(default=300, ge=1)
+    assistant_execution_input_token_limit: int = Field(default=200_000, ge=1)
     phase8_targeted_deadline_seconds: int = Field(default=120, ge=1)
     phase8_sizing_deadline_seconds: int = Field(default=180, ge=1)
     phase8_market_deadline_seconds: int = Field(default=300, ge=1)
-    phase8_diagnostic_payload_bytes: int = Field(default=1024 ** 3, ge=1024)
+    phase8_diagnostic_payload_bytes: int = Field(default=1024**3, ge=1024)
     phase8_pricing_version: str | None = None
     phase8_pricing_json: str = "{}"
     phase8_reasoning_enabled: bool = True
@@ -118,7 +120,9 @@ class Settings(BaseSettings):
     def validate_market_data_mode(cls, value: str) -> str:
         normalized = value.lower().strip()
         if normalized not in {"mock", "psxdata", "yahoo", "auto", "dps", "vendor"}:
-            raise ValueError("MARKET_DATA_MODE must be one of: mock, psxdata, yahoo, auto, dps, vendor")
+            raise ValueError(
+                "MARKET_DATA_MODE must be one of: mock, psxdata, yahoo, auto, dps, vendor"
+            )
         return normalized
 
     @field_validator("embedding_backend")
@@ -133,7 +137,11 @@ class Settings(BaseSettings):
     def guard_mock_data_in_production(self) -> "Settings":
         if self.app_env.lower().strip() in PRODUCTION_APP_ENVS and self.bcrypt_rounds < 12:
             raise ValueError("BCRYPT_ROUNDS must be at least 12 in production")
-        if self.app_env.lower().strip() in PRODUCTION_APP_ENVS and self.market_data_mode == "mock" and not self.allow_mock_in_production:
+        if (
+            self.app_env.lower().strip() in PRODUCTION_APP_ENVS
+            and self.market_data_mode == "mock"
+            and not self.allow_mock_in_production
+        ):
             raise ValueError(
                 "Refusing to start with APP_ENV=production and MARKET_DATA_MODE=mock: this would silently serve "
                 "synthetic/demo market data as if it were observed. Set MARKET_DATA_MODE to a live provider, or set "

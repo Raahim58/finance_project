@@ -159,10 +159,6 @@ class ToolRegistry:
         except Exception:
             return tool_result("unavailable", error={"code": "handler_unavailable"})
         elapsed = monotonic() - started
-        if elapsed > definition.timeout_seconds:
-            raise TimeoutError(
-                f"Tool {name} exceeded its {definition.timeout_seconds}s execution limit"
-            )
         self._cost_units_spent += units
         if isinstance(result, dict) and set(result) == {"status", "data", "sources", "coverage"}:
             encoded = json.dumps(result, default=str, separators=(",", ":")).encode()

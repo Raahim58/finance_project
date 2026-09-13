@@ -35,11 +35,10 @@ def test_tool_registry_enforces_cost_and_confirmation_budgets():
         registry.invoke("test.confirm", None, None, {}, confirmed=False)
 
 
-def test_tool_registry_enforces_elapsed_timeout(monkeypatch):
+def test_sync_registry_does_not_claim_post_return_timeout_cancellation(monkeypatch):
     ticks = iter([10.0, 12.0])
     monkeypatch.setattr("app.tools.registry.monotonic", lambda: next(ticks))
     registry = ToolRegistry()
     registry.register(_definition(timeout=1))
 
-    with pytest.raises(TimeoutError, match="execution limit"):
-        registry.invoke("test.tool", None, None, {})
+    assert registry.invoke("test.tool", None, None, {}) == {"ok": True}

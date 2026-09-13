@@ -10,7 +10,15 @@ from typing import Any
 
 import httpx
 
-from app.ai.providers.base import LLMProvider, LLMProviderResult, ProviderRequestError, call_options
+from app.ai.providers.base import (
+    ContentBlock,
+    LLMProvider,
+    LLMProviderResult,
+    ProviderRequestError,
+    ProviderTool,
+    ProviderTurn,
+    call_options,
+)
 from app.core.config import settings
 
 
@@ -27,7 +35,9 @@ class HTTPProvider(LLMProvider):
         if len(api_key.strip()) < 12:
             return False
         try:
-            async with httpx.AsyncClient(timeout=min(settings.assistant_timeout_seconds, 15)) as client:
+            async with httpx.AsyncClient(
+                timeout=min(settings.assistant_timeout_seconds, 15)
+            ) as client:
                 response = await client.get(self.models_url, headers=self._headers(api_key))
             return response.status_code == 200
         except httpx.HTTPError:
@@ -35,15 +45,14 @@ class HTTPProvider(LLMProvider):
 
     async def _post(self, url: str, api_key: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            async with httpx.AsyncClient(timeout=min(settings.assistant_timeout_seconds, call_options.get().deadline_seconds)) as client:
+            async with httpx.AsyncClient(timeout=call_options.get().deadline_seconds) as client:
                 response = await client.post(url, headers=self._headers(api_key), json=payload)
         except httpx.TimeoutException as exc:
-            raise RuntimeError(f"{self.name} API request timed out") from exc
+            raise TimeoutError(f"{self.name} API request timed out") from exc
         except httpx.HTTPError as exc:
             raise RuntimeError(f"{self.name} API request failed") from exc
         if response.status_code >= 400:
             error_type = None
-            provider_message = None
             try:
                 error_payload = response.json()
             except ValueError:
@@ -53,16 +62,10 @@ class HTTPProvider(LLMProvider):
                 if isinstance(error, dict):
                     if isinstance(error.get("type"), str):
                         error_type = error["type"][:120]
-                    if isinstance(error.get("message"), str):
-                        provider_message = error["message"].strip()[:2000]
                 else:
                     if isinstance(error_payload.get("type"), str):
                         error_type = error_payload["type"][:120]
-                    if isinstance(error_payload.get("message"), str):
-                        provider_message = error_payload["message"].strip()[:2000]
-            request_id = response.headers.get("request-id") or response.headers.get(
-                "x-request-id"
-            )
+            request_id = response.headers.get("request-id") or response.headers.get("x-request-id")
             raise ProviderRequestError(
                 provider=self.name,
                 status_code=response.status_code,
@@ -79,7 +82,9 @@ class HTTPProvider(LLMProvider):
 class OpenAICompatibleProvider(HTTPProvider):
     chat_url: str
 
-    async def chat(self, api_key: str, messages: list[dict[str, str]], model: str | None = None) -> LLMProviderResult:
+    async def chat(
+        self, api_key: str, messages: list[dict[str, str]], model: str | None = None
+    ) -> LLMProviderResult:
         selected_model = model or self.default_model
         data = await self._post(
             self.chat_url,
@@ -111,9 +116,15 @@ class AnthropicProvider(HTTPProvider):
     chat_url = "https://api.anthropic.com/v1/messages"
 
     def _headers(self, api_key: str) -> dict[str, str]:
-        return {"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
+        return {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
 
-    async def chat(self, api_key: str, messages: list[dict[str, str]], model: str | None = None) -> LLMProviderResult:
+    async def chat(
+        self, api_key: str, messages: list[dict[str, str]], model: str | None = None
+    ) -> LLMProviderResult:
         selected_model = model or self.default_model
         system = "\n\n".join(item["content"] for item in messages if item.get("role") == "system")
         turns = [item for item in messages if item.get("role") in {"user", "assistant"}]
@@ -128,7 +139,11 @@ class AnthropicProvider(HTTPProvider):
             payload["system"] = system
         data = await self._post(self.chat_url, api_key, payload)
         blocks = data.get("content") or []
-        content = "\n".join(str(block.get("text")) for block in blocks if block.get("type") == "text" and block.get("text"))
+        content = "\n".join(
+            str(block.get("text"))
+            for block in blocks
+            if block.get("type") == "text" and block.get("text")
+        )
         if not content.strip():
             raise RuntimeError("anthropic API response did not contain assistant text")
         usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
@@ -142,6 +157,106 @@ class AnthropicProvider(HTTPProvider):
             cache_write_tokens=usage.get("cache_creation_input_tokens"),
             finish_reason=data.get("stop_reason"),
             request_id=data.get("id"),
+        )
+
+    @staticmethod
+    def _content_block(block: ContentBlock) -> dict[str, Any]:
+        if block.type == "text":
+            return {"type": "text", "text": block.text or ""}
+        if block.type == "tool_call":
+            if block.opaque.get("provider_block"):
+                return block.opaque["provider_block"]
+            return {
+                "type": "tool_use",
+                "id": block.id,
+                "name": block.name,
+                "input": block.arguments or {},
+            }
+        if block.type == "tool_result":
+            return {
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": json_text(block.result),
+                "is_error": block.is_error,
+            }
+        if block.type == "image":
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": block.mime_type,
+                    "data": block.data,
+                },
+            }
+        raise ValueError("unsupported_content_block")
+
+    async def tool_chat(
+        self,
+        api_key: str,
+        turns: list[ProviderTurn],
+        tools: list[ProviderTool],
+        model: str | None = None,
+    ) -> LLMProviderResult:
+        selected_model = model or self.default_model
+        system = "\n\n".join(
+            block.text or ""
+            for turn in turns
+            if turn.role == "system"
+            for block in turn.content
+            if block.type == "text"
+        )
+        messages = [
+            {
+                "role": turn.role,
+                "content": [self._content_block(block) for block in turn.content],
+            }
+            for turn in turns
+            if turn.role in {"user", "assistant"}
+        ]
+        payload: dict[str, Any] = {
+            "model": selected_model,
+            "max_tokens": call_options.get().max_output_tokens,
+            "messages": messages,
+            "tools": [
+                {
+                    "name": wire_tool_name(tool.name),
+                    "description": tool.description,
+                    "input_schema": tool.input_schema,
+                }
+                for tool in tools
+            ],
+        }
+        if system:
+            payload["system"] = system
+        data = await self._post(self.chat_url, api_key, payload)
+        blocks = []
+        names = {wire_tool_name(tool.name): tool.name for tool in tools}
+        for item in data.get("content") or []:
+            if item.get("type") == "text":
+                blocks.append(ContentBlock("text", text=str(item.get("text") or "")))
+            elif item.get("type") == "tool_use":
+                blocks.append(
+                    ContentBlock(
+                        "tool_call",
+                        id=str(item.get("id") or ""),
+                        name=names.get(str(item.get("name")), str(item.get("name"))),
+                        arguments=item.get("input") if isinstance(item.get("input"), dict) else {},
+                        opaque={"provider_block": item},
+                    )
+                )
+        text = "\n".join(block.text or "" for block in blocks if block.type == "text")
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        return LLMProviderResult(
+            content=text,
+            model=str(data.get("model") or selected_model),
+            provider=self.name,
+            input_tokens=usage.get("input_tokens"),
+            output_tokens=usage.get("output_tokens"),
+            cache_read_tokens=usage.get("cache_read_input_tokens"),
+            cache_write_tokens=usage.get("cache_creation_input_tokens"),
+            finish_reason=data.get("stop_reason"),
+            request_id=data.get("id"),
+            turn=ProviderTurn("assistant", blocks, {"id": data.get("id")}),
         )
 
 
@@ -165,16 +280,31 @@ class GeminiProvider(HTTPProvider):
     def _headers(self, api_key: str) -> dict[str, str]:
         return {"x-goog-api-key": api_key, "Content-Type": "application/json"}
 
-    async def chat(self, api_key: str, messages: list[dict[str, str]], model: str | None = None) -> LLMProviderResult:
+    async def chat(
+        self, api_key: str, messages: list[dict[str, str]], model: str | None = None
+    ) -> LLMProviderResult:
         selected_model = model or self.default_model
         system = "\n\n".join(item["content"] for item in messages if item.get("role") == "system")
         contents = [
-            {"role": "model" if item.get("role") == "assistant" else "user", "parts": [{"text": item["content"]}]}
-            for item in messages if item.get("role") in {"user", "assistant"}
+            {
+                "role": "model" if item.get("role") == "assistant" else "user",
+                "parts": [{"text": item["content"]}],
+            }
+            for item in messages
+            if item.get("role") in {"user", "assistant"}
         ]
-        payload: dict[str, Any] = {"contents": contents, "generationConfig": {"temperature": 0, "maxOutputTokens": call_options.get().max_output_tokens}}
+        payload: dict[str, Any] = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": call_options.get().max_output_tokens,
+            },
+        }
         if call_options.get().response_schema:
-            payload["generationConfig"].update(responseMimeType="application/json", responseJsonSchema=call_options.get().response_schema)
+            payload["generationConfig"].update(
+                responseMimeType="application/json",
+                responseJsonSchema=call_options.get().response_schema,
+            )
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
         data = await self._post(
@@ -184,16 +314,14 @@ class GeminiProvider(HTTPProvider):
         )
         try:
             parts = data["candidates"][0]["content"]["parts"]
-            content = "\n".join(str(part["text"]) for part in parts if part.get("text") and not part.get("thought"))
+            content = "\n".join(
+                str(part["text"]) for part in parts if part.get("text") and not part.get("thought")
+            )
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError("gemini API response did not contain assistant text") from exc
         if not content.strip():
             raise RuntimeError("gemini API returned an empty assistant response")
-        usage = (
-            data.get("usageMetadata")
-            if isinstance(data.get("usageMetadata"), dict)
-            else {}
-        )
+        usage = data.get("usageMetadata") if isinstance(data.get("usageMetadata"), dict) else {}
         return LLMProviderResult(
             content=content,
             model=str(data.get("modelVersion") or selected_model),
@@ -206,6 +334,122 @@ class GeminiProvider(HTTPProvider):
             request_id=data.get("responseId"),
         )
 
+    @staticmethod
+    def _part(block: ContentBlock) -> dict[str, Any]:
+        if block.opaque.get("provider_part"):
+            return block.opaque["provider_part"]
+        if block.type == "text":
+            return {"text": block.text or ""}
+        if block.type == "tool_call":
+            call = {"name": wire_tool_name(block.name or ""), "args": block.arguments or {}}
+            if block.id:
+                call["id"] = block.id
+            return {"functionCall": call}
+        if block.type == "tool_result":
+            response = {
+                "name": wire_tool_name(block.name or ""),
+                "response": {"result": block.result},
+            }
+            if block.id and block.opaque.get("include_id"):
+                response["id"] = block.id
+            return {"functionResponse": response}
+        if block.type == "image":
+            return {"inlineData": {"mimeType": block.mime_type, "data": block.data}}
+        raise ValueError("unsupported_content_block")
+
+    async def tool_chat(
+        self,
+        api_key: str,
+        turns: list[ProviderTurn],
+        tools: list[ProviderTool],
+        model: str | None = None,
+    ) -> LLMProviderResult:
+        selected_model = model or self.default_model
+        system = "\n\n".join(
+            block.text or ""
+            for turn in turns
+            if turn.role == "system"
+            for block in turn.content
+            if block.type == "text"
+        )
+        contents = [
+            {
+                "role": "model" if turn.role == "assistant" else "user",
+                "parts": [self._part(block) for block in turn.content],
+            }
+            for turn in turns
+            if turn.role in {"user", "assistant"}
+        ]
+        payload: dict[str, Any] = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": call_options.get().max_output_tokens,
+            },
+            "tools": [
+                {
+                    "functionDeclarations": [
+                        {
+                            "name": wire_tool_name(tool.name),
+                            "description": tool.description,
+                            "parameters": tool.input_schema,
+                        }
+                        for tool in tools
+                    ]
+                }
+            ],
+        }
+        if system:
+            payload["systemInstruction"] = {"parts": [{"text": system}]}
+        data = await self._post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{selected_model}:generateContent",
+            api_key,
+            payload,
+        )
+        candidate = (data.get("candidates") or [{}])[0]
+        names = {wire_tool_name(tool.name): tool.name for tool in tools}
+        blocks = []
+        for index, part in enumerate(candidate.get("content", {}).get("parts", [])):
+            if "functionCall" in part:
+                call = part["functionCall"]
+                blocks.append(
+                    ContentBlock(
+                        "tool_call",
+                        id=str(call.get("id") or f"gemini-call-{index + 1}"),
+                        name=names.get(str(call.get("name")), str(call.get("name"))),
+                        arguments=call.get("args") if isinstance(call.get("args"), dict) else {},
+                        opaque={"provider_part": part},
+                    )
+                )
+            elif part.get("text") is not None and not part.get("thought"):
+                blocks.append(
+                    ContentBlock("text", text=str(part["text"]), opaque={"provider_part": part})
+                )
+            elif "inlineData" in part:
+                inline = part["inlineData"]
+                blocks.append(
+                    ContentBlock(
+                        "image",
+                        mime_type=inline.get("mimeType"),
+                        data=inline.get("data"),
+                        opaque={"provider_part": part},
+                    )
+                )
+        text = "\n".join(block.text or "" for block in blocks if block.type == "text")
+        usage = data.get("usageMetadata") if isinstance(data.get("usageMetadata"), dict) else {}
+        return LLMProviderResult(
+            content=text,
+            model=str(data.get("modelVersion") or selected_model),
+            provider=self.name,
+            input_tokens=usage.get("promptTokenCount"),
+            output_tokens=usage.get("candidatesTokenCount"),
+            cache_read_tokens=usage.get("cachedContentTokenCount"),
+            reasoning_tokens=usage.get("thoughtsTokenCount"),
+            finish_reason=candidate.get("finishReason"),
+            request_id=data.get("responseId"),
+            turn=ProviderTurn("assistant", blocks, {"response_id": data.get("responseId")}),
+        )
+
 
 class OpenRouterProvider(OpenAICompatibleProvider):
     name = "openrouter"
@@ -214,3 +458,15 @@ class OpenRouterProvider(OpenAICompatibleProvider):
     default_model = "openai/gpt-4.1-mini"
     models_url = "https://openrouter.ai/api/v1/models"
     chat_url = "https://openrouter.ai/api/v1/chat/completions"
+
+
+def wire_tool_name(name: str) -> str:
+    """Provider-safe reversible spelling for dotted registry names."""
+
+    return name.replace("__", "____").replace(".", "__")
+
+
+def json_text(value: Any) -> str:
+    import json
+
+    return json.dumps(value, default=str, separators=(",", ":"), ensure_ascii=False)
