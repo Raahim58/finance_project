@@ -371,7 +371,10 @@ class GeminiProvider(HTTPProvider):
         if block.type == "tool_result":
             response = {
                 "name": wire_tool_name(block.name or ""),
-                "response": {"result": block.result},
+                # Database-backed tools can return Decimal/date/datetime values.
+                # Gemini's functionResponse is JSON, so normalize them before
+                # httpx performs its strict request-body encoding.
+                "response": {"result": json_value(block.result)},
             }
             if block.id and block.opaque.get("include_id"):
                 response["id"] = block.id
@@ -415,7 +418,11 @@ class GeminiProvider(HTTPProvider):
                         {
                             "name": wire_tool_name(tool.name),
                             "description": tool.description,
-                            "parameters": tool.input_schema,
+                            # Pydantic emits JSON Schema ($defs/$ref/anyOf). Gemini's
+                            # `parameters` field accepts its narrower Schema message;
+                            # `parametersJsonSchema` is the mutually-exclusive field
+                            # intended for the JSON Schema representation.
+                            "parametersJsonSchema": tool.input_schema,
                         }
                         for tool in tools
                     ]
@@ -493,3 +500,9 @@ def json_text(value: Any) -> str:
     import json
 
     return json.dumps(value, default=str, separators=(",", ":"), ensure_ascii=False)
+
+
+def json_value(value: Any) -> Any:
+    import json
+
+    return json.loads(json_text(value))

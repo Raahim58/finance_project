@@ -1,6 +1,9 @@
+from datetime import date, timedelta
+
 import pytest
 from pydantic import BaseModel
 
+from app.tools.market_tools import MarketSeriesInput, _series
 from app.tools.registry import ToolDefinition, ToolRegistry
 
 
@@ -42,3 +45,29 @@ def test_sync_registry_does_not_claim_post_return_timeout_cancellation(monkeypat
     registry.register(_definition(timeout=1))
 
     assert registry.invoke("test.tool", None, None, {}) == {"ok": True}
+
+
+def test_market_series_bounds_model_payload_and_returns_older_history_cursor(monkeypatch):
+    first = date(2025, 1, 1)
+    rows = [
+        {
+            "date": first + timedelta(days=index),
+            "close": index,
+            "source": "fixture",
+            "source_url": "https://example.test/series",
+            "artifact_id": "artifact-1",
+            "artifact_sha256": "sha-1",
+        }
+        for index in range(300)
+    ]
+    monkeypatch.setattr(
+        "app.tools.market_tools.market_series",
+        lambda *_args: {"instrument_id": "instrument-1", "symbol": "TEST", "series": rows},
+    )
+
+    result = _series(None, None, MarketSeriesInput(instrument_id="instrument-1"))
+
+    assert result["coverage"]["returned"] == 260
+    assert result["coverage"]["remaining"] == 40
+    assert result["coverage"]["continuation"] == (first + timedelta(days=39)).isoformat()
+    assert len(result["data"]["series"]["rows"]) == 260

@@ -1,3 +1,6 @@
+from datetime import date
+from decimal import Decimal
+
 import pytest
 import httpx
 
@@ -356,7 +359,17 @@ async def test_gemini_native_tools_preserve_signature_and_function_response(mode
         return responses.pop(0)
 
     monkeypatch.setattr(provider, "_post", fake_post)
-    tools = [ProviderTool("market.freshness", "Freshness", {"type": "object"})]
+    schema = {
+        "$defs": {
+            "Scope": {
+                "type": "object",
+                "properties": {"portfolio_id": {"type": "string"}},
+            }
+        },
+        "type": "object",
+        "properties": {"scope": {"$ref": "#/$defs/Scope"}},
+    }
+    tools = [ProviderTool("market.freshness", "Freshness", schema)]
     turns = [ProviderTurn("user", [ContentBlock("text", text="Freshness?")])]
     first = await provider.tool_chat("secret", turns, tools, model)
     call = first.turn.content[0]
@@ -367,7 +380,11 @@ async def test_gemini_native_tools_preserve_signature_and_function_response(mode
                 "tool_result",
                 id=call.id,
                 name=call.name,
-                result={"status": "ok"},
+                result={
+                    "status": "ok",
+                    "price": Decimal("123.45"),
+                    "as_of": date(2026, 9, 13),
+                },
                 opaque={"include_id": False},
             )
         ],
@@ -375,8 +392,13 @@ async def test_gemini_native_tools_preserve_signature_and_function_response(mode
     final = await provider.tool_chat("secret", [*turns, first.turn, result], tools, model)
 
     assert first.content == ""
+    declaration = captured[0]["tools"][0]["functionDeclarations"][0]
+    assert declaration["parametersJsonSchema"] == schema
+    assert "parameters" not in declaration
     assert captured[1]["contents"][1]["parts"][0] == signed_part
     function_response = captured[1]["contents"][2]["parts"][0]["functionResponse"]
     assert function_response["name"] == "market__freshness"
     assert "id" not in function_response
+    assert function_response["response"]["result"]["price"] == "123.45"
+    assert function_response["response"]["result"]["as_of"] == "2026-09-13"
     assert final.content == "Final text."

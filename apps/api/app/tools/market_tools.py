@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from pydantic import BaseModel, Field
 
@@ -18,6 +18,7 @@ class MarketSeriesInput(BaseModel):
     instrument_id: str
     start: date | None = None
     end: date | None = None
+    limit: int = Field(default=260, ge=2, le=260)
 
 
 class MacroInput(BaseModel):
@@ -38,7 +39,8 @@ def _freshness(db, _user, _payload: EmptyInput):
 
 def _series(db, _user, payload: MarketSeriesInput):
     data = market_series(db, payload.instrument_id, payload.start, payload.end)
-    rows = data["series"]
+    all_rows = data["series"]
+    rows = all_rows[-payload.limit :]
     sources = {}
     normalized = []
     for row in rows:
@@ -61,12 +63,19 @@ def _series(db, _user, payload: MarketSeriesInput):
             item.pop(key, None)
         normalized.append(item)
     data = {**data, "series": normalized}
+    remaining = max(0, len(all_rows) - len(rows))
+    continuation = None
+    if remaining and rows:
+        first_date = rows[0].get("date")
+        if isinstance(first_date, date):
+            continuation = (first_date - timedelta(days=1)).isoformat()
     return tool_result(
         "ok" if rows else "missing",
         data,
         sources=list(sources.values()),
         returned=len(rows),
-        remaining=None,
+        remaining=remaining,
+        continuation=continuation,
     )
 
 
@@ -156,7 +165,7 @@ def register_market_tools(registry: ToolRegistry) -> None:
         ToolDefinition(
             "market.series",
             "1.0",
-            "Canonical OHLCV history with observation provenance",
+            "Canonical OHLCV history with observation provenance. Returns at most 260 latest observations; use the continuation date as end to request older history.",
             MarketSeriesInput,
             "market:read",
             True,
