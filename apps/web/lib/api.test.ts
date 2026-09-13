@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clearApiCache, getCompanies, getCompanyHistory, getPortfolioSummary } from "./api";
+import { clearApiCache, getCompanies, getCompanyHistory, getPortfolioSummary, resumeAssistantExecution } from "./api";
 
 describe("API GET cache", () => {
   beforeEach(() => {
@@ -63,5 +63,24 @@ describe("API GET cache", () => {
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/market/companies?limit=1000");
     expect(fetchMock.mock.calls[1][0]).toBe("/api/market/company/MEBL/history?limit=2000");
+  });
+
+  it("shows the sanitized provider diagnostic for a failed assistant run", async () => {
+    localStorage.setItem("psx_ai_token", "test-session");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValue({
+        execution_id: "run-1",
+        status: "failed",
+        error_code: "provider_http_400",
+        error_detail: "Invalid function declaration schema.",
+        response: null,
+      }),
+    } as unknown as Response);
+
+    await expect(resumeAssistantExecution("run-1")).rejects.toThrow(
+      "Invalid function declaration schema.",
+    );
   });
 });

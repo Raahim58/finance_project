@@ -481,7 +481,7 @@ export type MacroRegime={regime:string;method:string;method_note:string;dimensio
 export function getMacroRegime(portfolioId?:string){return request<MacroRegime>(`/macro/regime${portfolioId?`?portfolio_id=${encodeURIComponent(portfolioId)}`:""}`);}
 export function runHistoricalReplay(portfolioId:string,startDate:string,endDate:string,useCurrentHoldings=true){return request<HistoricalReplay>(`/portfolios/${encodeURIComponent(portfolioId)}/scenarios/historical-replay`,{method:"POST",body:JSON.stringify({start_date:startDate,end_date:endDate,use_current_holdings:useCurrentHoldings})});}
 
-export type AssistantRun = {execution_id:string;status:string;error_code?:string;response?:AssistantResult|null};
+export type AssistantRun = {execution_id:string;status:string;error_code?:string;error_detail?:string|null;response?:AssistantResult|null};
 const ACTIVE_ASSISTANT_RUN = "assistant.activeExecution";
 const PENDING_ASSISTANT_REQUEST = "assistant.pendingRequest";
 export function activeAssistantExecution(){return sessionStorage.getItem(ACTIVE_ASSISTANT_RUN)??(sessionStorage.getItem(PENDING_ASSISTANT_REQUEST)?"pending":null);}
@@ -502,7 +502,7 @@ export async function resumeAssistantExecution(executionId:string):Promise<Assis
     }
     if(run.status==="failed"){
       if(sessionStorage.getItem(ACTIVE_ASSISTANT_RUN)===executionId) sessionStorage.removeItem(ACTIVE_ASSISTANT_RUN);
-      throw new Error(`Assistant execution failed (${run.error_code??"unknown"}).`);
+      throw new Error(run.error_detail||`Assistant execution failed (${run.error_code??"unknown"}).`);
     }
     await new Promise(resolve=>setTimeout(resolve,1000));
   }

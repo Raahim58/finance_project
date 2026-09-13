@@ -29,6 +29,7 @@ SAFE_FIELDS = {
     "error_code",
     "http_status",
     "error_type",
+    "provider_message",
     "provider_request_id",
     "possible_duplicate_charge",
     "finish_reason",
@@ -206,10 +207,29 @@ def finish_attempt(identifier, *, response=None, error=None, latency_ms=0):
             if isinstance(error, ProviderRequestError):
                 metadata["http_status"] = error.status_code
                 metadata["error_type"] = error.error_type
+                metadata["provider_message"] = error.provider_message
                 metadata["provider_request_id"] = error.request_id
             row.status = "failed"
         row.metadata_json = json.dumps(metadata)
         row.completed_at = now()
+
+
+def provider_error_detail(db, execution_id: str) -> str | None:
+    """Return the newest sanitized provider diagnostic for an owned execution."""
+
+    row = db.scalar(
+        select(AssistantAttempt)
+        .where(
+            AssistantAttempt.execution_id == execution_id,
+            AssistantAttempt.status == "failed",
+        )
+        .order_by(AssistantAttempt.created_at.desc())
+        .limit(1)
+    )
+    if row is None:
+        return None
+    value = json.loads(row.metadata_json).get("provider_message")
+    return value if isinstance(value, str) and value else None
 
 
 def inspect_execution(db, execution):

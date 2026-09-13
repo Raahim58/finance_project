@@ -898,6 +898,7 @@ def test_output_truncation_and_provider_errors_remain_distinct(client, monkeypat
             provider="anthropic",
             status_code=429,
             error_type="rate_limit_error",
+            provider_message="Rate limit exceeded for this account.",
             request_id="req-safe",
         )
 
@@ -907,7 +908,8 @@ def test_output_truncation_and_provider_errors_remain_distinct(client, monkeypat
         headers=headers,
         json={"question": "Explain again", "provider": "anthropic"},
     )
-    assert response.status_code == 503
+    assert response.status_code == 429
+    assert response.json()["detail"]["error_detail"] == "Rate limit exceeded for this account."
     with SessionLocal() as db:
         failed = db.scalar(
             select(AssistantExecution)
@@ -920,4 +922,5 @@ def test_output_truncation_and_provider_errors_remain_distinct(client, monkeypat
         metadata = json.loads(attempt.metadata_json)
     assert failed.error_code == "provider_http_429"
     assert metadata["http_status"] == 429
+    assert metadata["provider_message"] == "Rate limit exceeded for this account."
     assert metadata["provider_request_id"] == "req-safe"

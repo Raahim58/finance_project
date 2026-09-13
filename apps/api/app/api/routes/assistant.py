@@ -12,7 +12,7 @@ from app.models.intelligence_context import ContextRefreshRequest
 from app.models.workstation import AssistantMessage, Conversation
 from app.schemas.assistant import AssistantMessageCreate, AssistantResponse, ConversationCreate, AssistantRunCreate
 from app.services import assistant_execution as execution_service
-from app.services.assistant_diagnostics import inspect_execution
+from app.services.assistant_diagnostics import inspect_execution, provider_error_detail
 from app.models.assistant_execution import AssistantExecution, now as execution_now
 from app.services.portfolio_service import get_portfolio_or_404
 from app.services.context_refresh_service import reconcile_pending_contexts
@@ -152,6 +152,7 @@ def run_status(execution_id: str, current_user: User = Depends(get_current_user)
                db: Session = Depends(get_db)):
     row = execution_service.owned(db, current_user.id, execution_id)
     return {"execution_id": row.id, "status": row.status, "error_code": row.error_code,
+            "error_detail": provider_error_detail(db, row.id),
             "response": json.loads(row.response_json) if row.response_json else None}
 
 
@@ -219,5 +220,16 @@ async def compatible_message(db, user, payload, conversation_id=None):
     row = execution_service.owned(db, user.id, identifier)
     if row.response_json:
         return json.loads(row.response_json)
-    status_code = int(row.error_code.split("_")[1]) if row.error_code and row.error_code.startswith("http_") else 503
-    raise HTTPException(status_code, {"execution_id": identifier, "error_code": row.error_code})
+    status_code = (
+        int(row.error_code.rsplit("_", 1)[1])
+        if row.error_code and row.error_code.startswith("provider_http_")
+        else 503
+    )
+    raise HTTPException(
+        status_code,
+        {
+            "execution_id": identifier,
+            "error_code": row.error_code,
+            "error_detail": provider_error_detail(db, identifier),
+        },
+    )

@@ -6,6 +6,7 @@ passed only in request headers, never included in exceptions or application logs
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -53,6 +54,7 @@ class HTTPProvider(LLMProvider):
             raise RuntimeError(f"{self.name} API request failed") from exc
         if response.status_code >= 400:
             error_type = None
+            provider_message = None
             try:
                 error_payload = response.json()
             except ValueError:
@@ -62,21 +64,42 @@ class HTTPProvider(LLMProvider):
                 if isinstance(error, dict):
                     if isinstance(error.get("type"), str):
                         error_type = error["type"][:120]
+                    elif isinstance(error.get("status"), str):
+                        error_type = error["status"][:120]
+                    provider_message = _safe_provider_message(error.get("message"), api_key)
                 else:
                     if isinstance(error_payload.get("type"), str):
                         error_type = error_payload["type"][:120]
+                    provider_message = _safe_provider_message(
+                        error_payload.get("message"), api_key
+                    )
             request_id = response.headers.get("request-id") or response.headers.get("x-request-id")
             raise ProviderRequestError(
                 provider=self.name,
                 status_code=response.status_code,
                 error_type=error_type,
-                provider_message=None,
+                provider_message=provider_message,
                 request_id=None if request_id is None else request_id[:255],
             )
         try:
             return response.json()
         except ValueError as exc:
             raise RuntimeError(f"{self.name} API returned invalid JSON") from exc
+
+
+def _safe_provider_message(value: Any, api_key: str) -> str | None:
+    """Retain a useful provider diagnostic without retaining credentials or bodies."""
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    message = value.replace(api_key, "[REDACTED]") if api_key else value
+    message = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", message)
+    message = re.sub(
+        r"(?i)((?:x-goog-)?api[_ -]?key|authorization)(\s*[:=]\s*)[^\s,;]+",
+        r"\1\2[REDACTED]",
+        message,
+    )
+    return " ".join(message.split())[:1000]
 
 
 class OpenAICompatibleProvider(HTTPProvider):
