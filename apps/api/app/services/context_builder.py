@@ -219,15 +219,25 @@ class ContextBuilder:
                 if name in {ContextSectionName.PORTFOLIO, ContextSectionName.IPS}
                 else "-"
             )
+            research_cache_key = (
+                request.question
+                or (
+                    request.research_purpose.value
+                    if request.research_purpose
+                    else "-"
+                )
+            )
+            if name == ContextSectionName.EVENTS:
+                research_cache_key = f"{research_cache_key}:events:{request.event_limit}"
+            elif name == ContextSectionName.RAG_EVIDENCE:
+                research_cache_key = f"{research_cache_key}:rag:{request.rag_limit}"
             cache_key = (
                 CONTEXT_CONTRACT_VERSION,
                 user.id,
                 instrument.id,
                 portfolio_cache_key,
                 name.value,
-                request.question or request.research_purpose.value
-                if request.research_purpose
-                else request.question or "-",
+                research_cache_key,
             )
             dependency_hash = self._dependency_hash(
                 db, user, request, instrument, portfolio, ips, name, built_at

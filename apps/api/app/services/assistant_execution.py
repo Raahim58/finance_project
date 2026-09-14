@@ -212,11 +212,7 @@ def schedule(identifier):
 
 
 def reconcile(db):
-    """Startup recovery fails closed after an uncertain paid attempt.
-
-    Safe computations are restarted; no completed evidence is reused across versions.
-    Sent attempts without outcomes consume the one durable retry allowance.
-    """
+    """Restart safe local work and fail closed on uncertain external attempts."""
     cutoff = now() - timedelta(seconds=30)
     rows = db.scalars(
         select(AssistantExecution).where(AssistantExecution.status.in_(["queued", "running"]))
@@ -238,7 +234,12 @@ def reconcile(db):
             metadata = json.loads(attempt.metadata_json)
             metadata["possible_duplicate_charge"] = True
             attempt.metadata_json = json.dumps(metadata)
-        if uncertain and row.retry_count >= 1:
+        paid_uncertain = [attempt for attempt in uncertain if attempt.provider != "mock"]
+        if paid_uncertain:
+            row.status = "failed"
+            row.error_code = "provider_attempt_uncertain"
+            row.completed_at = now()
+        elif uncertain and row.retry_count >= 1:
             row.status = "failed"
             row.error_code = "provider_retry_exhausted"
             row.completed_at = now()

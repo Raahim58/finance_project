@@ -82,16 +82,16 @@ history, server-resolved portfolio/instrument identity, and the current read-too
 catalog. It performs no evidence prefetch and no paid formatting-repair call.
 
 Anthropic and Gemini adapters now transport typed text, tool-call, tool-result, and image
-blocks in their native request formats. Tool-only and parallel calls remain valid, IDs
-remain associated with their results, and Gemini provider parts preserve opaque thought
-signatures. These contracts were checked against the official
+blocks in their native request formats. Tool-only and parallel calls remain valid and
+IDs remain associated with their results. These contracts were checked against the official
 [Anthropic tool-use documentation](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use)
-and [Gemini function-calling documentation](https://ai.google.dev/gemini-api/docs/function-calling).
+and [Gemini Interactions documentation](https://ai.google.dev/gemini-api/docs/interactions-overview).
 
 Provider turns and tool-result turns are encrypted and checkpointed separately. Resume
 rechecks user, conversation, and portfolio ownership, keeps the originally selected
-provider/model, reuses byte-identical completed attempts, and applies the existing
-uncertain-paid-attempt retry policy. Independent calls run concurrently with a maximum
+provider/model, and reuses byte-identical completed attempts. An uncertain external
+provider request fails explicitly instead of being replayed and possibly charged twice.
+Independent calls run concurrently with a maximum
 of four workers; every database worker creates its own session. PostgreSQL workers set a
 transaction-local statement timeout, while the orchestration timeout ignores any late
 worker result.
@@ -141,3 +141,31 @@ Observed Phase 2 boundary results on 2026-09-13:
 Phase 3 streaming and its browser delivery checks remain unimplemented. Live-model
 selection and answer quality also remain an explicit later gate; Phase 2 makes no live
 quality claim.
+
+## Gemini Interactions improvement
+
+New Gemini Assistant executions use the stateful Interactions API. The initial request
+sends the question and bounded prior conversation. Each continuation sends
+`previous_interaction_id` and only newly completed function results; tools and system
+instructions are re-supplied as required by the API. Interaction IDs and completed
+results are encrypted in the durable checkpoint before the loop advances. Missing or
+expired remote state produces an explicit terminal error and is never silently replayed.
+
+Gemini 3 executions receive Google Search and URL Context alongside the internal read
+tools. URL citations returned by Gemini are preserved in Assistant citations and web-tool
+activity is exposed in redacted diagnostics. Exact prices, portfolio values, allocation
+math, and compliance remain backend calculations over stored database values.
+
+Research facts and events can be selected by section, exact period range, cursor, and
+page size. Responses preserve requested records and continuation metadata; the server
+removes duplicated serialization but does not invent a document summary. The existing
+200,000 cumulative-input safeguard remains based on the provider's retained logical
+context. Diagnostics separately report transmitted bytes and provider-reported input,
+cached input, output, and reasoning tokens, and reconcile conservative reservations
+when provider usage is available.
+
+No schema migration is required for this improvement: interaction state fits the
+encrypted transcript checkpoint introduced by `0029_assistant_tool_loop`. Native answer
+streaming remains the separate Phase 3 deliverable. Offline checks do not establish
+live-model answer quality; the OGDC price, MEBL portfolio-fit, and recent-event prompts
+remain user-run live acceptance checks.

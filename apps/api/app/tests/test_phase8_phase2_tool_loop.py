@@ -81,7 +81,7 @@ def _auth_with_gemini(client, monkeypatch, email="phase2-gemini@example.com"):
                 provider="gemini",
                 encrypted_api_key=encrypt_secret("offline-gemini-key"),
                 masked_api_key="offlin...-key",
-                default_model="gemini-2.5-flash-lite",
+                default_model="gemini-3-flash-preview",
             )
         )
         return headers, user.id
@@ -235,36 +235,37 @@ def test_native_anthropic_loop_dispatches_parallel_tools_and_persists_transcript
     assert execution.reserved_input_tokens > 0
 
 
-def test_native_gemini_loop_dispatches_registry_and_preserves_signature(client, monkeypatch):
-    headers, _ = _auth_with_gemini(client, monkeypatch)
+def test_native_gemini_loop_continues_without_resending_prior_results(client, monkeypatch):
+    headers, user_id = _auth_with_gemini(client, monkeypatch)
     provider = GeminiProvider()
     captured = []
-    signed_call = {
-        "functionCall": {"name": "market__freshness", "args": {}},
-        "thoughtSignature": "opaque-loop-signature",
-    }
     responses = [
         {
-            "responseId": "gemini-loop-tools",
-            "modelVersion": "gemini-2.5-flash-lite",
-            "candidates": [
+            "id": "gemini-loop-tools",
+            "model": "gemini-3-flash-preview",
+            "status": "requires_action",
+            "steps": [
                 {
-                    "finishReason": "STOP",
-                    "content": {"role": "model", "parts": [signed_call]},
+                    "type": "function_call",
+                    "status": "waiting",
+                    "id": "freshness-call",
+                    "name": "market__freshness",
+                    "arguments": {},
                 }
             ],
-            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 2},
+            "usage": {"total_input_tokens": 10, "total_output_tokens": 2},
         },
         {
-            "responseId": "gemini-loop-final",
-            "modelVersion": "gemini-2.5-flash-lite",
-            "candidates": [
+            "id": "gemini-loop-final",
+            "model": "gemini-3-flash-preview",
+            "status": "completed",
+            "steps": [
                 {
-                    "finishReason": "STOP",
-                    "content": {"role": "model", "parts": [{"text": "Freshness inspected."}]},
+                    "type": "model_output",
+                    "content": [{"type": "text", "text": "Freshness inspected."}],
                 }
             ],
-            "usageMetadata": {"promptTokenCount": 20, "candidatesTokenCount": 3},
+            "usage": {"total_input_tokens": 20, "total_output_tokens": 3},
         },
     ]
 
@@ -282,10 +283,129 @@ def test_native_gemini_loop_dispatches_registry_and_preserves_signature(client, 
 
     assert response.status_code == 201, response.text
     assert response.json()["tool_trace"][0]["tool"] == "market.freshness"
-    assert captured[1]["contents"][-2]["parts"][0] == signed_call
-    function_response = captured[1]["contents"][-1]["parts"][0]["functionResponse"]
+    assert captured[1]["previous_interaction_id"] == "gemini-loop-tools"
+    assert len(captured[1]["input"]) == 1
+    function_response = captured[1]["input"][0]
     assert function_response["name"] == "market__freshness"
-    assert "id" not in function_response
+    assert function_response["call_id"] == "freshness-call"
+    assert "Is market data fresh?" not in json.dumps(captured[1])
+    assert [tool["type"] for tool in captured[0]["tools"]][-2:] == [
+        "google_search",
+        "url_context",
+    ]
+    with SessionLocal() as db:
+        execution = db.scalar(
+            select(AssistantExecution)
+            .where(AssistantExecution.user_id == user_id)
+            .order_by(AssistantExecution.created_at.desc())
+        )
+        checkpoint = json.loads(decrypt_secret(execution.transcript_encrypted))
+        diagnostic = diagnostics.inspect_execution(db, execution)
+    assert checkpoint["provider_state"] == {
+        "transport": "gemini_interactions",
+        "continuation_id": "gemini-loop-final",
+    }
+    assert checkpoint["completed_tool_call_ids"] == ["freshness-call"]
+    assert execution.reserved_input_tokens == 30
+    assert diagnostic["usage"]["input_tokens"] == 30
+    assert diagnostic["usage"]["model_calls"] == 2
+    assert diagnostic["usage"]["transmitted_input_bytes"] > 0
+
+
+def test_gemini_six_parallel_results_then_dependent_allocation_are_checkpointed(
+    client, monkeypatch
+):
+    headers, user_id = _auth_with_gemini(
+        client, monkeypatch, email="gemini-chain@example.com"
+    )
+    provider = GeminiProvider()
+    captured = []
+    responses = [
+        {
+            "id": "parallel-interaction",
+            "model": "gemini-3-flash-preview",
+            "status": "requires_action",
+            "steps": [
+                {
+                    "type": "function_call",
+                    "id": f"fact-{index}",
+                    "name": "market__freshness",
+                    "arguments": {},
+                }
+                for index in range(6)
+            ],
+            "usage": {"total_input_tokens": 100, "total_output_tokens": 10},
+        },
+        {
+            "id": "allocation-interaction",
+            "model": "gemini-3-flash-preview",
+            "status": "requires_action",
+            "steps": [
+                {
+                    "type": "function_call",
+                    "id": "allocation-call",
+                    "name": "allocation__verify",
+                    "arguments": {},
+                }
+            ],
+            "usage": {"total_input_tokens": 120, "total_output_tokens": 8},
+        },
+        {
+            "id": "final-interaction",
+            "model": "gemini-3-flash-preview",
+            "status": "completed",
+            "steps": [
+                {
+                    "type": "model_output",
+                    "content": [{"type": "text", "text": "Analysis complete."}],
+                }
+            ],
+            "usage": {"total_input_tokens": 130, "total_output_tokens": 5},
+        },
+    ]
+
+    async def fake_post(_url, _key, payload):
+        captured.append(payload)
+        return responses.pop(0)
+
+    async def fake_tool(_user_id, call):
+        data = (
+            {"accepted": False, "errors": ["ips_breach"]}
+            if call.name == "allocation.verify"
+            else {"sequence": call.id}
+        )
+        return ToolExecution(call, tool_result("ok", data=data), 1.0)
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    monkeypatch.setattr("app.ai.tool_loop.get_provider", lambda _name: provider)
+    monkeypatch.setattr("app.ai.tool_loop._execute_tool", fake_tool)
+    response = client.post(
+        "/assistant/messages",
+        headers=headers,
+        json={"question": "Research then verify allocation", "provider": "gemini"},
+    )
+
+    assert response.status_code == 201, response.text
+    assert [row["call_id"] for row in captured[1]["input"]] == [
+        f"fact-{index}" for index in range(6)
+    ]
+    assert captured[1]["previous_interaction_id"] == "parallel-interaction"
+    assert [row["call_id"] for row in captured[2]["input"]] == ["allocation-call"]
+    assert captured[2]["previous_interaction_id"] == "allocation-interaction"
+    assert "fact-0" not in json.dumps(captured[2]["input"])
+    assert response.json()["synthesis"]["allocation_check"]["status"] == "rejected"
+    with SessionLocal() as db:
+        execution = db.scalar(
+            select(AssistantExecution)
+            .where(AssistantExecution.user_id == user_id)
+            .order_by(AssistantExecution.created_at.desc())
+        )
+        checkpoint = json.loads(decrypt_secret(execution.transcript_encrypted))
+    assert checkpoint["completed_tool_call_ids"] == [
+        *[f"fact-{index}" for index in range(6)],
+        "allocation-call",
+    ]
+    assert checkpoint["provider_state"]["continuation_id"] == "final-interaction"
 
 
 def test_parallel_tool_workers_are_bounded_to_four_and_keep_call_order(client, monkeypatch):
@@ -900,6 +1020,14 @@ def test_output_truncation_and_provider_errors_remain_distinct(client, monkeypat
             error_type="rate_limit_error",
             provider_message="Rate limit exceeded for this account.",
             request_id="req-safe",
+            quota_violations=[
+                {
+                    "quotaId": "RequestsPerDayPerProjectPerModel",
+                    "quotaDimensions": {"model": "claude-test"},
+                    "quotaValue": "20",
+                }
+            ],
+            retry_delay="60s",
         )
 
     monkeypatch.setattr(provider, "_post", provider_error)
@@ -909,7 +1037,11 @@ def test_output_truncation_and_provider_errors_remain_distinct(client, monkeypat
         json={"question": "Explain again", "provider": "anthropic"},
     )
     assert response.status_code == 429
-    assert response.json()["detail"]["error_detail"] == "Rate limit exceeded for this account."
+    assert response.json()["detail"]["error_detail"] == (
+        "Rate limit exceeded for this account. "
+        "Quota: RequestsPerDayPerProjectPerModel (model=claude-test, limit=20) "
+        "Retry after: 60s"
+    )
     with SessionLocal() as db:
         failed = db.scalar(
             select(AssistantExecution)
@@ -924,3 +1056,5 @@ def test_output_truncation_and_provider_errors_remain_distinct(client, monkeypat
     assert metadata["http_status"] == 429
     assert metadata["provider_message"] == "Rate limit exceeded for this account."
     assert metadata["provider_request_id"] == "req-safe"
+    assert metadata["quota_violations"][0]["quotaValue"] == "20"
+    assert metadata["retry_delay"] == "60s"

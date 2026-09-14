@@ -24,6 +24,12 @@ executions remain readable and require no fabricated backfill. Downgrade removes
 that checkpoint column; take a backup first because in-progress transcripts cannot be
 recovered after downgrade.
 
+The Gemini Interactions transport requires no additional migration. Its interaction ID,
+completed function-result associations, web citations, and usage totals are stored in
+the encrypted `0029` checkpoint and existing encrypted attempt payloads. Legacy Gemini
+checkpoints that already contain tool turns but no interaction ID fail explicitly; they
+are not replayed against a new paid interaction.
+
 Workstation checkpoints include `0006_domain_data` through `0012_audit_events`. Ingestion observability is migration `0013_ingestion_observability`. Phase 2 worker coverage, secondary standardized facts, persisted screening snapshots, and official-fact extraction provenance are migration `0014_phase2_ingestion_plane`. Global Evidence v1 source configuration/state, discovery candidates, and event-cluster/source-selection fields are migration `0015_global_evidence_v1`. Pass 2 targeted and historical refresh requests use the durable ledger added by `0016_evidence_refresh_requests`. Pass 3 resumable cursors, date bounds, budgets, counters, and continuous source-health timestamps are migration `0017_evidence_history`.
 
 ```bash

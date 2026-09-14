@@ -88,12 +88,16 @@ class ProviderRequestError(RuntimeError):
         error_type: str | None = None,
         provider_message: str | None = None,
         request_id: str | None = None,
+        quota_violations: list[dict[str, Any]] | None = None,
+        retry_delay: str | None = None,
     ) -> None:
         self.provider = provider
         self.status_code = status_code
         self.error_type = error_type
         self.provider_message = provider_message
         self.request_id = request_id
+        self.quota_violations = quota_violations or []
+        self.retry_delay = retry_delay
         detail = f"{provider} API request failed with HTTP {status_code}"
         if error_type:
             detail += f" ({error_type})"
@@ -117,6 +121,10 @@ class LLMProviderResult:
     finish_reason: str | None = None
     request_id: str | None = None
     turn: ProviderTurn | None = None
+    continuation_id: str | None = None
+    web_citations: list[dict[str, Any]] = field(default_factory=list)
+    web_tool_activity: list[dict[str, Any]] = field(default_factory=list)
+    transmitted_input_bytes: int | None = None
 
 
 class LLMProvider(ABC):
@@ -210,6 +218,7 @@ class ProviderCallOptions:
     response_schema: dict | None = None
     max_output_tokens: int = 4096
     deadline_seconds: float = 30
+    continuation_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -15,6 +15,10 @@ from app.models.llm_invocation import LLMInvocation
 execution_id: ContextVar[str | None] = ContextVar("assistant_execution_id", default=None)
 SAFE_FIELDS = {
     "input_bytes",
+    "transmitted_input_bytes",
+    "retained_context_estimated_tokens",
+    "accounted_input_tokens",
+    "reservation_adjustment_tokens",
     "estimated_input_tokens",
     "input_tokens",
     "output_tokens",
@@ -31,6 +35,11 @@ SAFE_FIELDS = {
     "error_type",
     "provider_message",
     "provider_request_id",
+    "quota_violations",
+    "retry_delay",
+    "interaction_id",
+    "web_tool_step_count",
+    "web_citation_count",
     "possible_duplicate_charge",
     "finish_reason",
     "estimated_cost",
@@ -88,7 +97,16 @@ def sampled(identifier: str) -> bool:
     return int(hashlib.sha256(identifier.encode()).hexdigest(), 16) % 10 == 0
 
 
-def begin_attempt(operation, provider, model, messages, estimated_tokens):
+def begin_attempt(
+    operation,
+    provider,
+    model,
+    messages,
+    estimated_tokens,
+    *,
+    transmitted_input_bytes=None,
+    schema_version="phase8-native-tool-turn-1",
+):
     identifier = execution_id.get()
     if identifier is None:
         return None
@@ -123,8 +141,10 @@ def begin_attempt(operation, provider, model, messages, estimated_tokens):
         attempt_metadata = {
             "estimated_input_tokens": estimated_tokens,
             "input_bytes": len(json.dumps(messages).encode()),
+            "transmitted_input_bytes": transmitted_input_bytes,
+            "retained_context_estimated_tokens": estimated_tokens,
             "projection_version": "phase8-tool-transcript-1",
-            "schema_version": "phase8-native-tool-turn-1",
+            "schema_version": schema_version,
             "prompt_version": "phase8-tool-loop-1",
             **_structural_context_metadata(messages),
         }
@@ -163,6 +183,22 @@ def finish_attempt(identifier, *, response=None, error=None, latency_ms=0):
                 }
             )
             metadata["provider_request_id"] = response.request_id
+            metadata["interaction_id"] = response.continuation_id
+            metadata["web_tool_step_count"] = len(response.web_tool_activity)
+            metadata["web_citation_count"] = len(response.web_citations)
+            if response.transmitted_input_bytes is not None:
+                metadata["transmitted_input_bytes"] = response.transmitted_input_bytes
+            if response.input_tokens is not None:
+                execution = db.get(
+                    AssistantExecution, row.execution_id, with_for_update=True
+                )
+                reserved = int(metadata.get("estimated_input_tokens") or 0)
+                adjustment = int(response.input_tokens) - reserved
+                execution.reserved_input_tokens = max(
+                    0, execution.reserved_input_tokens + adjustment
+                )
+                metadata["accounted_input_tokens"] = int(response.input_tokens)
+                metadata["reservation_adjustment_tokens"] = adjustment
             payload = json.loads(decrypt_secret(row.payload_encrypted))
             payload["response"] = {
                 "content": response.content,
@@ -176,6 +212,10 @@ def finish_attempt(identifier, *, response=None, error=None, latency_ms=0):
                 "reasoning_tokens": response.reasoning_tokens,
                 "finish_reason": response.finish_reason,
                 "request_id": response.request_id,
+                "continuation_id": response.continuation_id,
+                "web_citations": response.web_citations,
+                "web_tool_activity": response.web_tool_activity,
+                "transmitted_input_bytes": response.transmitted_input_bytes,
             }
             row.payload_encrypted = encrypt_secret(json.dumps(payload))
             row.status = "completed"
@@ -209,6 +249,8 @@ def finish_attempt(identifier, *, response=None, error=None, latency_ms=0):
                 metadata["error_type"] = error.error_type
                 metadata["provider_message"] = error.provider_message
                 metadata["provider_request_id"] = error.request_id
+                metadata["quota_violations"] = error.quota_violations
+                metadata["retry_delay"] = error.retry_delay
             row.status = "failed"
         row.metadata_json = json.dumps(metadata)
         row.completed_at = now()
@@ -228,16 +270,32 @@ def provider_error_detail(db, execution_id: str) -> str | None:
     )
     if row is None:
         return None
-    value = json.loads(row.metadata_json).get("provider_message")
-    return value if isinstance(value, str) and value else None
+    metadata = json.loads(row.metadata_json)
+    value = metadata.get("provider_message")
+    parts = [value] if isinstance(value, str) and value else []
+    for violation in metadata.get("quota_violations") or []:
+        if not isinstance(violation, dict):
+            continue
+        name = violation.get("quotaId") or violation.get("quotaMetric") or "unknown quota"
+        details = []
+        dimensions = violation.get("quotaDimensions")
+        if isinstance(dimensions, dict):
+            details.extend(f"{key}={item}" for key, item in dimensions.items())
+        if violation.get("quotaValue") is not None:
+            details.append(f"limit={violation['quotaValue']}")
+        parts.append(f"Quota: {name}" + (f" ({', '.join(details)})" if details else ""))
+    if metadata.get("retry_delay"):
+        parts.append(f"Retry after: {metadata['retry_delay']}")
+    return " ".join(parts)[:2000] or None
 
 
 def inspect_execution(db, execution):
-    attempts = db.scalars(
+    attempts = list(db.scalars(
         select(AssistantAttempt)
         .where(AssistantAttempt.execution_id == execution.id)
         .order_by(AssistantAttempt.created_at)
-    )
+    ))
+    attempt_metadata = [json.loads(row.metadata_json) for row in attempts]
     queue_ms = None
     if execution.started_at:
         queue_ms = round(
@@ -260,6 +318,26 @@ def inspect_execution(db, execution):
         "repair_count": execution.repair_count,
         "revision_count": execution.revision_count,
         "reserved_input_tokens": execution.reserved_input_tokens,
+        "usage": {
+            "input_tokens": sum(
+                int(item.get("input_tokens") or item.get("estimated_input_tokens") or 0)
+                for item in attempt_metadata
+            ),
+            "output_tokens": sum(int(item.get("output_tokens") or 0) for item in attempt_metadata),
+            "cache_read_tokens": sum(
+                int(item.get("cache_read_tokens") or 0) for item in attempt_metadata
+            ),
+            "reasoning_tokens": sum(
+                int(item.get("reasoning_tokens") or 0) for item in attempt_metadata
+            ),
+            "transmitted_input_bytes": sum(
+                int(item.get("transmitted_input_bytes") or 0) for item in attempt_metadata
+            ),
+            "model_calls": len(attempts),
+            "web_tool_steps": sum(
+                int(item.get("web_tool_step_count") or 0) for item in attempt_metadata
+            ),
+        },
         "stages": [
             {
                 "id": stage.id,
@@ -407,6 +485,10 @@ def recovered_response(operation, provider, model, messages):
                     reasoning_tokens=response.get("reasoning_tokens"),
                     finish_reason=response.get("finish_reason"),
                     request_id=response.get("request_id"),
+                    continuation_id=response.get("continuation_id"),
+                    web_citations=response.get("web_citations") or [],
+                    web_tool_activity=response.get("web_tool_activity") or [],
+                    transmitted_input_bytes=response.get("transmitted_input_bytes"),
                     turn=None
                     if response.get("turn") is None
                     else ProviderTurn.from_dict(response["turn"]),

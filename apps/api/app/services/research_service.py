@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 
 import numpy as np
 from fastapi import HTTPException
@@ -414,17 +414,31 @@ def list_events(
     entity_key: str | None = None,
     event_type: str | None = None,
     limit: int = 100,
+    *,
+    occurred_start: date | None = None,
+    occurred_end: date | None = None,
+    offset: int = 0,
 ):
     statement = select(Event)
     if entity_key:
         statement = statement.join(EventEntityLink, EventEntityLink.event_id == Event.id).where(EventEntityLink.entity_key == entity_key.upper())
     if event_type:
         statement = statement.where(Event.event_type == event_type)
-    rows = list(db.scalars(statement.order_by(Event.occurred_at.desc()).limit(limit)))
+    if occurred_start:
+        statement = statement.where(
+            Event.occurred_at >= datetime.combine(occurred_start, time.min, tzinfo=UTC)
+        )
+    if occurred_end:
+        statement = statement.where(
+            Event.occurred_at <= datetime.combine(occurred_end, time.max, tzinfo=UTC)
+        )
+    rows = list(
+        db.scalars(statement.order_by(Event.occurred_at.desc()).offset(offset).limit(limit))
+    )
     result = []
     for event in rows:
         sources = list(db.scalars(select(EventSource).where(EventSource.event_id == event.id)))
-        result.append({"id": event.id, "event_type": event.event_type, "title": event.title, "occurred_at": event.occurred_at, "materiality": event.materiality, "direction": event.direction, "confidence": event.confidence, "details": json.loads(event.details_json), "sources": [{"source_name": source.source_name, "source_url": source.source_url, "document_id": source.document_id} for source in sources]})
+        result.append({"id": event.id, "event_type": event.event_type, "title": event.title, "occurred_at": event.occurred_at, "materiality": event.materiality, "direction": event.direction, "confidence": event.confidence, "details": json.loads(event.details_json), "sources": [{"source_name": source.source_name, "source_url": source.source_url, "document_id": source.document_id, "published_at": source.published_at} for source in sources]})
     return result
 
 

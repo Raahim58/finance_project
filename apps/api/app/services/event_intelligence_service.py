@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from functools import lru_cache
 from urllib.parse import urlparse
@@ -401,6 +401,9 @@ def list_normalized_events(
     materiality: str | None = None,
     view: str = "material",
     include_unclassified: bool = False,
+    occurred_start: date | None = None,
+    occurred_end: date | None = None,
+    offset: int = 0,
     limit: int = 100,
 ) -> list[dict[str, object]]:
     if view not in {"material", "company_relevant", "portfolio_relevant", "all_classified", "unresolved", "all"}:
@@ -427,7 +430,23 @@ def list_normalized_events(
         statement = statement.where(NormalizedEvent.event_type == event_type)
     if materiality:
         statement = statement.where(NormalizedEvent.materiality == materiality)
-    events = list(db.scalars(statement.order_by(NormalizedEvent.occurred_at.desc()).limit(limit)).unique())
+    if occurred_start:
+        statement = statement.where(
+            NormalizedEvent.occurred_at
+            >= datetime.combine(occurred_start, time.min, tzinfo=UTC)
+        )
+    if occurred_end:
+        statement = statement.where(
+            NormalizedEvent.occurred_at
+            <= datetime.combine(occurred_end, time.max, tzinfo=UTC)
+        )
+    events = list(
+        db.scalars(
+            statement.order_by(NormalizedEvent.occurred_at.desc())
+            .offset(offset)
+            .limit(limit)
+        ).unique()
+    )
     return [serialize_normalized_event(db, event) for event in events]
 
 

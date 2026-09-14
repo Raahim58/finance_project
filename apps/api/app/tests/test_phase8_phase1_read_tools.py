@@ -1,7 +1,7 @@
 """Phase 8 Phase 1 evidence fidelity and read-only tool acceptance tests."""
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -14,7 +14,14 @@ from app.models.intelligence_context import ContextRefreshRequest
 from app.models.market import MarketPrice
 from app.models.portfolio import PortfolioTransaction
 from app.models.user import User
-from app.models.workstation import AllocationSet, FinancialFact, Instrument
+from app.models.workstation import (
+    AllocationSet,
+    Event,
+    EventEntityLink,
+    EventSource,
+    FinancialFact,
+    Instrument,
+)
 from app.seed.demo import seed_workstation
 from app.services.rag_service import ParsedPage, create_document_from_pages
 from app.tools import build_tool_registry
@@ -136,6 +143,99 @@ def test_company_sections_preserve_period_unit_source_and_have_no_side_effects(m
         assert _counts(db) == before
         assert prohibited_calls == []
         assert seeded["portfolio_id"]
+
+        first_page = build_tool_registry().invoke(
+            "research.company_sections",
+            db,
+            user,
+            {
+                "instrument_id": instrument.id,
+                "sections": ["company_facts"],
+                "period_start": "2023-01-01",
+                "period_end": "2023-12-31",
+                "limit": 1,
+            },
+        )
+        first_data = expand_model_data(first_page["data"])
+        assert first_page["coverage"]["returned"] == 1
+        assert first_page["coverage"]["remaining"] == 1
+        assert first_page["coverage"]["continuation"] == "1"
+        assert first_data["sections"][0]["evidence_refs"]
+        assert "evidence" not in first_data["sections"][0]
+        assert len(first_page["sources"]) == 1
+
+        second_page = build_tool_registry().invoke(
+            "research.company_sections",
+            db,
+            user,
+            {
+                "instrument_id": instrument.id,
+                "sections": ["company_facts"],
+                "period_start": "2023-01-01",
+                "period_end": "2023-12-31",
+                "cursor": "1",
+                "limit": 1,
+            },
+        )
+        assert second_page["coverage"]["returned"] == 1
+        assert second_page["coverage"]["remaining"] == 0
+        assert second_page["coverage"]["continuation"] is None
+
+
+def test_research_events_period_pagination_returns_citable_sources(monkeypatch):
+    _, user_id = _seed(monkeypatch)
+    with SessionLocal.begin() as db:
+        instrument = db.scalar(select(Instrument).where(Instrument.symbol == "MEBL"))
+        for index, day in enumerate((10, 11)):
+            event = Event(
+                event_type="news",
+                title=f"Observed MEBL event {index}",
+                occurred_at=datetime(2026, 8, day, 12, tzinfo=UTC),
+                cluster_key=f"phase8-event-{index}",
+                materiality="medium",
+                direction="neutral",
+                confidence=Decimal("0.9"),
+            )
+            db.add(event)
+            db.flush()
+            db.add(
+                EventEntityLink(
+                    event_id=event.id,
+                    entity_type="instrument",
+                    entity_key=instrument.symbol,
+                    link_method="test_fixture",
+                    confidence=Decimal("1"),
+                )
+            )
+            db.add(
+                EventSource(
+                    event_id=event.id,
+                    source_name="Issuer notice",
+                    source_url=f"https://example.com/mebl-{index}",
+                    published_at=event.occurred_at,
+                )
+            )
+    with SessionLocal() as db:
+        user = db.get(User, user_id)
+        registry = build_tool_registry()
+        first = registry.invoke(
+            "research.events",
+            db,
+            user,
+            {
+                "entity_key": "MEBL",
+                "period_start": "2026-08-10",
+                "period_end": "2026-08-11",
+                "limit": 1,
+            },
+        )
+        assert first["coverage"]["returned"] == 1
+        assert first["coverage"]["remaining"] is None
+        assert first["coverage"]["continuation"] == "1"
+        event = expand_model_data(first["data"])["events"][0]
+        assert event["source_refs"] == [first["sources"][0]["id"]]
+        assert "sources" not in event
+        assert first["sources"][0]["source_url"].startswith("https://example.com/")
 
 
 def test_universe_pagination_is_stable_and_reports_coverage(monkeypatch):

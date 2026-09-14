@@ -138,6 +138,29 @@ def test_restart_uncertainty_preserves_single_retry_budget(execution):
         assert db.get(AssistantExecution, identifier).error_code == "provider_retry_exhausted"
 
 
+def test_restart_does_not_replay_uncertain_external_provider_request(execution):
+    identifier, _ = execution
+    with SessionLocal.begin() as db:
+        row = db.get(AssistantExecution, identifier)
+        row.status = "running"
+        row.heartbeat_at = now() - timedelta(minutes=10)
+        db.add(
+            AssistantAttempt(
+                execution_id=identifier,
+                operation="tool_loop_turn_1",
+                provider="gemini",
+                model="gemini-3-flash-preview",
+                status="sent",
+            )
+        )
+    with SessionLocal() as db:
+        assert reconcile(db) == []
+        row = db.get(AssistantExecution, identifier)
+        assert row.status == "failed"
+        assert row.error_code == "provider_attempt_uncertain"
+        assert db.scalar(select(AssistantAttempt)).status == "uncertain"
+
+
 def test_payload_retention_sampling_and_eviction(execution):
     identifier, _ = execution
     with SessionLocal.begin() as db:

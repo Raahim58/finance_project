@@ -13,16 +13,21 @@ python -m app.core.keys
 
 Put the generated Fernet key in `ENCRYPTION_KEY`. User LLM keys are encrypted at rest, never returned after save, and decrypted server-side only for an LLM request.
 
-The Phase 8 Assistant uses one model-directed, read-only native tool loop. Assistant
-requests are owned by the API process and persisted in PostgreSQL; no Assistant Celery
+The Phase 8 Assistant uses one model-directed, read-only native tool loop. New Gemini
+Assistant runs use the stateful Interactions API: the first turn sends the question,
+while later turns send `previous_interaction_id` and only new function results. Gemini 3
+models also receive Google Search and URL Context for current external verification.
+Assistant requests are owned by the API process and persisted in PostgreSQL; no Assistant Celery
 worker is used. Apply migrations through `0029_assistant_tool_loop` before starting the
 API. The migration adds the encrypted transcript checkpoint used for restart recovery.
 
 `ASSISTANT_EXECUTION_DEADLINE_SECONDS` defaults to one 300-second outer deadline for
 every Assistant request. `ASSISTANT_EXECUTION_INPUT_TOKEN_LIMIT` defaults to 200,000
 cumulative estimated input tokens. Before every provider turn the estimate includes the
-entire serialized transcript, native tool schemas, and images; provider-reported
-input/output/cache/reasoning usage remains separate. `ASSISTANT_MAX_TOOL_ITERATIONS` and
+entire retained logical context, native tool schemas, and images; this remains the
+safeguard even though Gemini continuations transmit only new results. Diagnostics track
+transmitted bytes and provider-reported input/output/cache/reasoning separately, then
+reconcile the conservative reservation to reported input. `ASSISTANT_MAX_TOOL_ITERATIONS` and
 `ASSISTANT_MAX_TOOL_COST_UNITS` retain the operator-configured call and cost safeguards.
 The older `PHASE8_*_DEADLINE_SECONDS` settings remain for non-Assistant compatibility
 consumers and do not select budgets in the new Assistant path.
@@ -43,11 +48,13 @@ DATABASE_URL=sqlite+pysqlite:///./psx_ai_local.db alembic upgrade head
 ```
 
 The API reconciles queued and abandoned Assistant runs at startup and every 20 seconds.
-It runs at most two local executions concurrently. A sent provider attempt without a
-recorded outcome is marked uncertain and consumes the execution's one retry allowance.
-Retry and input counters remain in the execution row across restarts. Persisted provider
-turns and associated tool results resume from the encrypted transcript; provider/model
-selection cannot change mid-execution.
+It runs at most two local executions concurrently. A sent external-provider attempt
+without a recorded outcome is marked uncertain and fails explicitly to avoid a duplicate
+paid request. The local mock provider retains its single retry allowance. Retry and input
+counters remain in the execution row across restarts. Persisted provider turns,
+associated tool results, and Gemini interaction IDs resume from the encrypted transcript;
+provider/model selection cannot change mid-execution. An expired Gemini interaction
+fails explicitly rather than replaying the chain.
 
 Inspect redacted diagnostics through the owner-scoped API or CLI:
 

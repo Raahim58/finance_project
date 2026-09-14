@@ -245,6 +245,69 @@ async def test_provider_error_message_redacts_active_key(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_gemini_quota_failure_preserves_safe_metric_and_retry_details(monkeypatch):
+    provider = GeminiProvider()
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            return httpx.Response(
+                429,
+                json={
+                    "error": {
+                        "code": 429,
+                        "message": "Quota exceeded",
+                        "status": "RESOURCE_EXHAUSTED",
+                        "details": [
+                            {
+                                "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                                "violations": [
+                                    {
+                                        "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+                                        "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+                                        "quotaDimensions": {
+                                            "model": "gemini-3-flash-preview",
+                                            "location": "global",
+                                        },
+                                        "quotaValue": "20",
+                                    }
+                                ],
+                            },
+                            {
+                                "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                                "retryDelay": "3600s",
+                            },
+                        ],
+                    }
+                },
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: FakeClient())
+
+    with pytest.raises(ProviderRequestError) as raised:
+        await provider.chat("secret-provider-key", [{"role": "user", "content": "q"}])
+
+    assert raised.value.error_type == "RESOURCE_EXHAUSTED"
+    assert raised.value.retry_delay == "3600s"
+    assert raised.value.quota_violations == [
+        {
+            "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+            "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+            "quotaValue": "20",
+            "quotaDimensions": {
+                "model": "gemini-3-flash-preview",
+                "location": "global",
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_anthropic_native_tools_preserve_parallel_call_ids_and_results(monkeypatch):
     provider = AnthropicProvider()
     captured = []
@@ -322,35 +385,41 @@ async def test_anthropic_native_tools_preserve_parallel_call_ids_and_results(mon
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-2.5-flash-lite"])
-async def test_gemini_native_tools_preserve_signature_and_function_response(model, monkeypatch):
+async def test_gemini_interactions_continue_with_only_new_function_results(model, monkeypatch):
     provider = GeminiProvider()
     captured = []
-    signed_part = {
-        "functionCall": {"name": "market__freshness", "args": {}},
-        "thoughtSignature": "opaque-signature",
-    }
     responses = [
         {
-            "responseId": "gemini-tools",
-            "modelVersion": model,
-            "candidates": [
+            "id": "gemini-tools",
+            "model": model,
+            "status": "requires_action",
+            "steps": [
                 {
-                    "finishReason": "STOP",
-                    "content": {"role": "model", "parts": [signed_part]},
+                    "type": "function_call",
+                    "status": "waiting",
+                    "id": "call-1",
+                    "name": "market__freshness",
+                    "arguments": {},
                 }
             ],
-            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 2},
+            "usage": {
+                "total_input_tokens": 10,
+                "total_output_tokens": 2,
+                "total_cached_tokens": 3,
+                "total_thought_tokens": 1,
+            },
         },
         {
-            "responseId": "gemini-final",
-            "modelVersion": model,
-            "candidates": [
+            "id": "gemini-final",
+            "model": model,
+            "status": "completed",
+            "steps": [
                 {
-                    "finishReason": "STOP",
-                    "content": {"role": "model", "parts": [{"text": "Final text."}]},
+                    "type": "model_output",
+                    "content": [{"type": "text", "text": "Final text."}],
                 }
             ],
-            "usageMetadata": {"promptTokenCount": 20, "candidatesTokenCount": 3},
+            "usage": {"total_input_tokens": 20, "total_output_tokens": 3},
         },
     ]
 
@@ -389,16 +458,78 @@ async def test_gemini_native_tools_preserve_signature_and_function_response(mode
             )
         ],
     )
-    final = await provider.tool_chat("secret", [*turns, first.turn, result], tools, model)
+    final = await provider.tool_chat_with_options(
+        "secret",
+        [*turns, first.turn, result],
+        tools,
+        model,
+        options=ProviderCallOptions(continuation_id=first.continuation_id),
+    )
 
     assert first.content == ""
-    declaration = captured[0]["tools"][0]["functionDeclarations"][0]
-    assert declaration["parametersJsonSchema"] == schema
-    assert "parameters" not in declaration
-    assert captured[1]["contents"][1]["parts"][0] == signed_part
-    function_response = captured[1]["contents"][2]["parts"][0]["functionResponse"]
+    assert first.continuation_id == "gemini-tools"
+    declaration = captured[0]["tools"][0]
+    assert declaration["parameters"] == schema
+    assert not any(tool["type"] == "google_search" for tool in captured[0]["tools"])
+    assert captured[1]["previous_interaction_id"] == "gemini-tools"
+    function_response = captured[1]["input"][0]
+    assert function_response["type"] == "function_result"
     assert function_response["name"] == "market__freshness"
-    assert "id" not in function_response
-    assert function_response["response"]["result"]["price"] == "123.45"
-    assert function_response["response"]["result"]["as_of"] == "2026-09-13"
+    assert function_response["call_id"] == "call-1"
+    serialized_result = function_response["result"][0]["text"]
+    assert '"price":"123.45"' in serialized_result
+    assert '"as_of":"2026-09-13"' in serialized_result
+    assert "Freshness?" not in str(captured[1])
     assert final.content == "Final text."
+
+
+@pytest.mark.asyncio
+async def test_gemini_3_interactions_enable_web_tools_and_preserve_citations(monkeypatch):
+    provider = GeminiProvider()
+    captured = []
+
+    async def fake_post(_url, _key, payload):
+        captured.append(payload)
+        return {
+            "id": "web-answer",
+            "model": "gemini-3-flash-preview",
+            "status": "completed",
+            "steps": [
+                {"type": "google_search_call", "id": "search-1", "status": "completed"},
+                {
+                    "type": "model_output",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Verified event.",
+                            "annotations": [
+                                {
+                                    "type": "url_citation",
+                                    "url": "https://example.com/event",
+                                    "title": "Event source",
+                                    "start_index": 0,
+                                    "end_index": 14,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
+            "usage": {"total_input_tokens": 12, "total_output_tokens": 4},
+        }
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    result = await provider.tool_chat(
+        "secret",
+        [ProviderTurn("user", [ContentBlock("text", text="Verify the event")])],
+        [ProviderTool("research.events", "Events", {"type": "object"})],
+        "gemini-3-flash-preview",
+    )
+
+    assert [tool["type"] for tool in captured[0]["tools"]][-2:] == [
+        "google_search",
+        "url_context",
+    ]
+    assert result.web_tool_activity[0]["type"] == "google_search_call"
+    assert result.web_citations[0]["source_url"] == "https://example.com/event"
+    assert result.web_citations[0]["title"] == "Event source"
