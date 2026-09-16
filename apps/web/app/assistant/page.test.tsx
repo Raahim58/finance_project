@@ -80,3 +80,22 @@ describe("assistant scope and async correctness",()=>{
     expect(link).toHaveAttribute("href","https://example.com/filing");
   });
 });
+
+it("renders server allocation rows and separate evidence outcomes",async()=>{
+  getPortfolios.mockResolvedValue([]);
+  const base=result("Model narrative\n- first item\n- second item");
+  sendAssistantMessage.mockResolvedValue({...base,tool_trace:[{tool:"allocation.verify"}],source_citations:[{source_name:"Stored IPS"}],synthesis:{...base.synthesis,allocation_check:{status:"accepted",verification_id:"verify-1",rows:[{instrument_id:"m",symbol:"MEBL",current_capital_weight:.4,proposed_capital_weight:.5,side:"buy",quantity:"2",gross_amount:"200",currency:"PKR"},{instrument_id:"CASH",symbol:"CASH",current_capital_weight:.6,proposed_capital_weight:.5}],checks:{price_freshness:{status:"stale"},ips_compliance:{status:"PASS"},modeled_goal:{status:"below",required_return:.2,proposed_modeled_return:.1,shortfall:.1}},evidence_readiness:{status:"insufficient_evidence",actionable_recommendation_eligible:false}}}});
+  const {container}=render(<AssistantPage/>);
+  fireEvent.change(screen.getByLabelText("Question"),{target:{value:"Recommend weights"}});
+  fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+  await screen.findByRole("table");
+  expect(screen.getByRole("rowheader",{name:"MEBL"})).toBeInTheDocument();
+  expect(screen.getByRole("rowheader",{name:"CASH"})).toBeInTheDocument();
+  expect(screen.getByText("Prices: stale")).toBeInTheDocument();
+  expect(screen.getByText("Below modeled goal")).toBeInTheDocument();
+  expect(screen.getByText("Insufficient evidence for an actionable recommendation.")).toBeInTheDocument();
+  expect(screen.getByText("Model narrative - first item - second item").textContent).toBe("Model narrative\n- first item\n- second item");
+  expect(screen.getByRole("heading",{name:"Cited evidence"})).toBeInTheDocument();
+  expect(screen.getByText("Stored IPS",{selector:"strong"})).toBeInTheDocument();
+  cleanup();
+});

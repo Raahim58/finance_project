@@ -287,6 +287,21 @@ export type ScenarioResult = Omit<OpenApi["schemas"]["ScenarioResponse"],"positi
 
 export type HistoricalReplay = { portfolio_id:string; start_date:string; end_date:string; counterfactual:boolean; assumption:string; start_value:number; end_value:number; pnl:number; return?:number|null; path:Array<{date:string;value:number}>; max_drawdown?:number|null; recovery_days?:number|null; sector_pnl_contribution:Record<string,number>; positions:Array<Record<string,unknown>>; total_return_available:boolean; total_return_unavailable_reason:string };
 
+export type AssistantAllocation = {
+  status:"accepted"|"rejected"|"unavailable"|"not_requested";
+  verification_id?:string|null;
+  rows?:Array<{instrument_id:string;symbol:string;current_capital_weight:number;proposed_capital_weight:number;side?:"buy"|"sell"|null;quantity?:string|null;gross_amount?:string|null;currency?:string|null}>;
+  errors?:string[];
+  checks?:{
+    arithmetic_funding?:{status:string;errors?:string[]};
+    ips_compliance?:{status:string};
+    price_freshness?:{status:string};
+    modeled_goal?:{status:"meets"|"below"|"unavailable";method?:string|null;required_return?:number|null;proposed_modeled_return?:number|null;shortfall?:number|null};
+  };
+  evidence_readiness?:{status:string;actionable_recommendation_eligible?:boolean;optimality?:string}|null;
+  cost_note?:string|null;
+};
+
 export type AssistantResult = {
   conversation_id: string;
   message_id: string;
@@ -296,7 +311,7 @@ export type AssistantResult = {
   source_citations: Array<Record<string, unknown>>;
   freshness_warnings: string[];
   tool_trace: Array<Record<string, unknown>>;
-  synthesis: {execution_id?:string;mode:"llm_tool_loop"|"synthesis_unavailable"|"llm_grounded"|"deterministic_fallback"|"recommendation_synthesis_unavailable";provider?:string|null;model?:string|null;reason?:string|null;recommendation?:"Buy/Add"|"Hold"|"Reduce"|"Avoid"|"Insufficient Evidence"|null;confidence?:"High"|"Medium"|"Low"|null;horizon?:{label:string;source:"ips"|"user"|"not_available"}|null;instrument_ids?:string[];evidence_ids?:string[];context_receipt_ids?:string[];diagnostic_ids?:string[];repaired?:boolean;mode_scope?:"targeted"|"market_wide";web_grounding?:{status:"used"|"available_not_used"|"unsupported"|"disabled";tool_steps:number;citation_count:number};token_usage?:{input_tokens:number;output_tokens:number;cache_read_tokens?:number;cache_write_tokens?:number;reasoning_tokens?:number;transmitted_input_bytes?:number;total_tokens:number;model_calls:number;reported_by_provider:boolean}};
+  synthesis: {allocation_check?:AssistantAllocation;execution_id?:string;mode:"llm_tool_loop"|"synthesis_unavailable"|"llm_grounded"|"deterministic_fallback"|"recommendation_synthesis_unavailable";provider?:string|null;model?:string|null;reason?:string|null;recommendation?:"Buy/Add"|"Hold"|"Reduce"|"Avoid"|"Insufficient Evidence"|null;confidence?:"High"|"Medium"|"Low"|null;horizon?:{label:string;source:"ips"|"user"|"not_available"}|null;instrument_ids?:string[];evidence_ids?:string[];context_receipt_ids?:string[];diagnostic_ids?:string[];repaired?:boolean;mode_scope?:"targeted"|"market_wide";web_grounding?:{status:"used"|"available_not_used"|"unsupported"|"disabled";tool_steps:number;citation_count:number};token_usage?:{input_tokens:number;output_tokens:number;cache_read_tokens?:number;cache_write_tokens?:number;reasoning_tokens?:number;transmitted_input_bytes?:number;total_tokens:number;model_calls:number;reported_by_provider:boolean}};
   context_contract_version?:string|null;
   context_status?:string|null;
   context_receipt?:Record<string,unknown>|null;

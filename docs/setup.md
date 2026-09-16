@@ -279,3 +279,26 @@ the event contract, deterministic boundaries, and read APIs.
 ## Safety assumptions
 
 No broker password storage, browser automation, or trade placement exists. Rebalance output is only a proposal. Market prices and exact portfolio values come from database queries, while document retrieval supplies narrative evidence only.
+
+## Focused Assistant correction
+
+No migration or new seed is required. The existing encrypted execution/checkpoint and
+`AnalysisRun` fields support normalized evidence, local finalization recovery and versioned
+saved-analysis reuse. Assistant reads calculate in memory on a cache miss and do not save
+analytics. The only added model tool is the database-backed, section-selectable
+`market.overview`; universe screening remains optional on the existing tool.
+
+Run the isolated backend boundary once, then the browser checks:
+
+```bash
+DATABASE_URL='sqlite+pysqlite:///:memory:' EMBEDDING_BACKEND=hash \
+  apps/api/.venv/bin/python -m pytest apps/api/app/tests -q
+cd apps/web
+npm test
+npm run typecheck
+npm run build
+```
+
+See `docs/phase8/revamp.md` for exact local recovery commands, allocation status meanings,
+unchanged budgets and the prepared but unexecuted live benchmark. No live provider call,
+external search or streaming is required for these offline checks.

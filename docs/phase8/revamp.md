@@ -171,3 +171,163 @@ encrypted transcript checkpoint introduced by `0029_assistant_tool_loop`. Native
 streaming remains the separate Phase 3 deliverable. Offline checks do not establish
 live-model answer quality; the OGDC price, MEBL portfolio-fit, and recent-event prompts
 remain user-run live acceptance checks.
+
+## Focused Assistant reliability correction (baseline d99b466)
+
+The existing native loop and polling delivery remain in use. Tools normalize dates to
+ISO strings and Decimals to exact strings before evidence registration. Unsupported
+JSON values fail explicitly. Final serialization and allocation rendering have separate
+`response_serialization_failed` and `response_rendering_failed` codes; database failures
+retain `response_persistence_failed`. Diagnostics retain code, exception type and code
+location, without exception messages or financial payloads.
+
+Allocation envelopes remain compact for the provider and expand for server rendering.
+The latest verification attempt replaces prior results, including unavailable attempts.
+`synthesis.allocation_check` contains typed server rows for changed and unchanged holdings
+and cash. Current/proposed capital weights are fractions of total capital; risky-sleeve
+weights and percentage risk contributions are different metrics. The browser preserves
+answer line breaks and displays verification, price freshness and modeled-goal outcomes
+separately. Citation resolution checks reference identity, not whether prose is true.
+
+The model receives holding instrument IDs, the selected IPS mandate and citable internal
+portfolio/calculation references. It formulates provisional gross purchases and funding
+sales itself when evidence permits. `allocation.verify` calculates quantities, cash,
+weights, existing before/after metrics and compliance; no additional arithmetic,
+comparison or optimizer tool is exposed. Its `accepted` flag means arithmetic/compliance
+acceptance. Freshness readiness, modeled return versus required return and optimality
+remain explicit separate meanings. Modeled return is an estimate, never a guaranteed
+return or an IPS forecast. Freshness reuses trading sessions and source SLA policy.
+Shariah metadata aliases must agree; conflicting values are unknown.
+
+Assistant analytical reads use `persist=False`/`persist_analysis=False`. Matching existing
+`AnalysisRun` results are reused before ledger-performance and covariance/risk work. The `quant-v2` dependency
+fingerprint covers stored holdings/cash, full selected price observations and ledger/performance inputs,
+IPS, benchmark observations, risk-free inputs and parameters. Older fingerprints miss
+safely and calculate in memory. Other application callers retain analytical persistence.
+No migrations or new cache storage are required.
+
+`market.overview` selects `snapshot`, `gainers`, `losers`, `volume_leaders`, and/or `sectors`.
+It defaults to snapshot only; rankings default to 10 and are capped at 50. Each section
+reports available stored coverage and dates; missing snapshot data does not hide rankings.
+`market.universe` defaults to identity/classification only and optionally selects stored
+screening fields (`score`, `sector_percentile`, `completeness`, `screenable`, `growth_flag`,
+`income_growth`, `pat_growth`, `eps_growth`, `net_margin`, `liquidity`). Snapshot reads are
+batched per page and missing values/unclassified securities remain visible. Screening
+percentiles compare sector peers, not unrelated business models. Company sector evidence
+returns the selected sector by default; `sector_comparison_limit` explicitly requests up
+to 20 extra sector rows. Events apply offsets once and expose continuation correctly.
+
+Budgets remain 12 backend calls and 18 cost units, with the existing cumulative input
+safeguard and history limits. Catalog descriptions disclose costs; continuations disclose
+remaining allowances outside citation evidence. Allocation work is instructed to preserve
+three units for verification. This guides model selection without promising live model
+quality or adding routing/model repair calls.
+
+### Offline checks and local recovery
+
+Run the boundary once against an isolated database; the test fixtures drop/create tables:
+
+```bash
+DATABASE_URL='sqlite+pysqlite:///:memory:' EMBEDDING_BACKEND=hash \
+  apps/api/.venv/bin/python -m pytest apps/api/app/tests -q
+cd apps/web
+npm test
+npm run typecheck
+npm run build
+```
+
+A checkpointed final provider answer can be finalized locally without another paid turn.
+For a failed serialization/rendering/persistence execution, run this server-side recovery
+from `apps/api` with the application's normal server configuration. Use the owning user ID
+and exact failed execution ID; the helper refuses uncertain attempts and non-final turns:
+
+```bash
+python - <<'PY'
+from app.db.session import SessionLocal
+from app.services.assistant_execution import queue_finalization_recovery
+with SessionLocal() as db:
+    queue_finalization_recovery(db, 'OWNING_USER_ID', 'FAILED_EXECUTION_ID')
+PY
+```
+
+The existing API maintenance loop schedules the queued execution. Expired provider-work
+deadlines do not block purely local finalization. No external attempt is scheduled during
+this recovery. Diagnostics expose safe failure locations in the execution's stage metadata.
+
+### Prepared live benchmark — NOT EXECUTED
+
+Capture expected facts in a read-only database snapshot immediately before any separately
+authorized live run; retain source/date/missing states, not stale facts copied from a prior
+answer. Store expected facts with run metadata and compare completed answers against that
+snapshot. No benchmark model request is part of this correction.
+
+| Request | Expected database facts / checks | Efficient first reads |
+| --- | --- | --- |
+| Latest MEBL price | Selected canonical latest close, currency, trade date and provenance; missing if absent | `market.series`, limit 1 |
+| Compare MEBL and HBL | Only requested companies, consistent selected periods/units and sourced sectors/facts; disclose unavailable periods | Requested company sections |
+| Analyze MEBL and recommend verified portfolio weights | Stored holdings/cash and confirmed IPS; verifier's quantities, gross amounts, unchanged holdings/cash and capital weights; independent readiness/goal results | Company evidence, summary, IPS, then verify |
+| What led the market? | Database gainers/volume leaders/sector statistics for the effective date; record ranking coverage independently of snapshot availability | One selected `market.overview` |
+| Broad discovery | Active stored universe, sourced classifications, stored selected screening fields and all missing values across stable pages; no final recommendation during discovery | Paginated screening universe, bounded deeper evidence |
+| Missing evidence | Actual absent/stale company, mandate, price or external coverage; no invented financial facts or verified allocation | Relevant smallest read |
+
+For each case record: request completion, factual accuracy against expected facts,
+verification use for proposals, capital-weight agreement with server output (tolerance
+only for display rounding), backend reads, provider calls, reported input/output/cached/
+reasoning tokens, transmitted bytes and latency. A pass requires completed delivery,
+correct sourced facts or explicit gaps, and server agreement for any proposed allocation.
+Optimization or guaranteed goal attainment is not a criterion. Scripted acceptance tests
+prove contracts and offline flow; this unexecuted benchmark is the later model-quality gate.
+Streaming, external search, ingestion changes, trades, new optimizers and candidate-scope
+contract changes remain deferred.
+
+Read-only public database baseline captured on 2026-09-16 at 15:21 UTC (the model
+benchmark remains unexecuted):
+
+| Stored fact | Expected value |
+| --- | --- |
+| Latest stored MEBL close | PKR 587.90, 2026-08-12, source `dps` |
+| Latest stored HBL close | PKR 334.31, 2026-08-12, source `dps` |
+| Snapshot for latest stored market date | Missing |
+| Top stored gainers for 2026-08-12 | IDEAL close 49.13 / volume 5,534; GAMON close 28.25 / volume 873,125; LEUL close 49.58 / volume 103,987 |
+| Stored sector rows for that date | 47 |
+| Active instrument records / screening snapshot records | 740 / 740 (instrument count is not a certification of eligible-universe coverage) |
+
+These are dated stored facts, not current verified market prices. An answer against this
+baseline must disclose the August cutoff and insufficient price freshness for an
+actionable allocation. The missing snapshot must leave available rankings usable.
+Refresh the expected-fact snapshot before a later authorized live benchmark. Private
+portfolio/IPS values are deliberately excluded from this public documentation and must
+be captured server-side for the owning benchmark portfolio. The offline accepted-flow
+fixture records one held MEBL share, PKR 10,000 cash and a PKR 1,000 gross buy proposal;
+its exact expected quantities/weights come from the stored fixture price and verifier.
+
+### Completion evidence for this correction
+
+The complete backend suite ran once on isolated SQLite: 376 passed and two initial
+failures in 198.46 seconds. The allowance placement and workstation alignment-cache
+regressions were corrected; the affected native-loop/read-tool/registry/revamp tests
+and alignment-cache test then passed (54 tests, 109.56 seconds). Additional audit cases
+verified missing snapshot with retained rankings, incomplete valuation, unavailable
+prices and Gemini's delivered allowance; the sector-limit cache correction passed its
+specific database acceptance test. Final cache checks passed (2 tests, 6.82 seconds),
+including skipping ledger-performance work on a saved hit. Completed-answer recovery
+passed with an expired provider-work deadline and no additional provider call. The
+internal tool-failure diagnostic test passed with safe type/location metadata.
+
+Frontend boundary: 7 files / 20 tests passed, typecheck passed, and production build
+passed. The Assistant's final status-label correction passed its focused 6-test browser
+component check and typecheck. `git diff --check` passed. No full backend rerun, live
+model benchmark, external search, streaming, migration or application financial write
+was performed by these checks. The public benchmark facts were collected in a read-only
+transaction, separately from destructive isolated test fixtures.
+
+| Plan item | Current implementation / acceptance evidence |
+| --- | --- |
+| A–B | Strict normalized JSON; handled final serialization; expanded latest allocation result; timestamp persistence and compact restart tests |
+| C–D | Batched holding IDs; selected mandate; internal citable calculation/price metadata; database fidelity and no-write tests |
+| E | Delivered system allowance for both providers; catalog costs; proposal/verification responsibility; 15+3-unit representative budget test |
+| F | Shared source/session freshness and Shariah accessor; arithmetic/IPS/freshness/goal checks; stale/shortfall/missing IPS/valuation/price tests |
+| G | Versioned ledger/price/IPS/benchmark/rate/parameter dependencies; saved lookup before performance/risk work; no-write and invalidation tests |
+| H–I | One selectable database market tool; optional batched screening; selected-sector default and keyed comparison limit; three-page events and independent price ranking assertions |
+| J | Typed server allocation checks/rows; historical compatibility; native table and separate labels; line preservation and citation fallback component tests |
+| K | Safe stage code/type/location; explicit owned local recovery of checkpointed final answers; no uncertain replay or formatting-repair call |
