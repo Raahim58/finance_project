@@ -1,5 +1,8 @@
 from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal
 import json
+import math
 from time import monotonic
 from typing import Any, Callable, Literal
 
@@ -12,6 +15,27 @@ from app.models.user import User
 
 ToolHandler = Callable[[Session, User, BaseModel], dict[str, Any]]
 ToolStatus = Literal["ok", "missing", "invalid_arguments", "unavailable"]
+
+
+def normalize_json(value: Any) -> Any:
+    """Preserve exact supported evidence values at the JSON boundary."""
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise TypeError("Non-finite decimal evidence")
+        return str(value)
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise TypeError("Evidence object keys must be strings")
+        return {key: normalize_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [normalize_json(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        raise TypeError("Non-finite floating-point evidence")
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    raise TypeError(f"Unsupported evidence type: {type(value).__name__}")
 
 
 def compact_model_data(value: Any) -> Any:
@@ -64,8 +88,8 @@ def tool_result(
 
     payload = {
         "status": status,
-        "data": compact_model_data(data),
-        "sources": sources or [],
+        "data": compact_model_data(normalize_json(data)),
+        "sources": normalize_json(sources or []),
         "coverage": {
             "returned": returned,
             "remaining": remaining,
@@ -73,7 +97,7 @@ def tool_result(
         },
     }
     if error is not None:
-        payload["data"] = {"error": error}
+        payload["data"] = {"error": normalize_json(error)}
     return payload
 
 
@@ -91,9 +115,10 @@ class ToolDefinition:
     handler: ToolHandler
 
     def model_schema(self) -> dict[str, Any]:
+        units = {"low": 1, "medium": 3, "high": 6}.get(self.cost_class, 6)
         return {
             "name": self.name,
-            "description": self.description,
+            "description": f"{self.description} Cost: {units} units.",
             "input_schema": self.input_model.model_json_schema(),
         }
 
@@ -156,12 +181,15 @@ class ToolRegistry:
                 "missing" if exc.status_code == 404 else "unavailable",
                 error={"code": code},
             )
-        except Exception:
+        except Exception as exc:
+            from app.services import assistant_diagnostics as diagnostics
+
+            diagnostics.record_tool_failure(name, exc, "handler_unavailable")
             return tool_result("unavailable", error={"code": "handler_unavailable"})
         elapsed = monotonic() - started
         self._cost_units_spent += units
         if isinstance(result, dict) and set(result) == {"status", "data", "sources", "coverage"}:
-            encoded = json.dumps(result, default=str, separators=(",", ":")).encode()
+            encoded = json.dumps(result, allow_nan=False, separators=(",", ":")).encode()
             result["coverage"].update(
                 elapsed_ms=round(elapsed * 1000, 3),
                 estimated_bytes=len(encoded),

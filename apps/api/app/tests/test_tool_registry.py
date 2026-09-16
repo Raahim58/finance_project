@@ -91,5 +91,35 @@ def test_market_series_accepts_single_latest_row(monkeypatch):
 
     assert result["coverage"]["returned"] == 1
     assert result["data"]["series"]["rows"] == [
-        [date(2026, 8, 12), 101, "market_source_1"]
+        ["2026-08-12", 101, "market_source_1"]
     ]
+
+
+def test_tool_evidence_json_normalization_is_exact_and_strict():
+    import json
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    from app.tools.registry import tool_result
+
+    result = tool_result("ok", [{"amount": Decimal("1.2300")}],
+                         sources=[{"published_at": datetime(2026, 9, 14, tzinfo=timezone.utc)}])
+    assert result["data"]["rows"] == [["1.2300"]]
+    assert result["sources"][0]["published_at"] == "2026-09-14T00:00:00+00:00"
+    json.dumps(result, allow_nan=False)
+    with pytest.raises(TypeError, match="Unsupported evidence type"):
+        tool_result("ok", {"unsupported": object()})
+
+
+def test_market_overview_keeps_rankings_when_snapshot_is_missing(monkeypatch):
+    from types import SimpleNamespace
+    import app.tools.market_tools as market
+    from app.tools.registry import expand_model_data
+    day = date(2026, 9, 14)
+    monkeypatch.setattr(market, "resolve_market_date", lambda *_args: day)
+    monkeypatch.setattr(market, "get_market_snapshot", lambda *_args: None)
+    row = SimpleNamespace(model_dump=lambda: {"symbol": "MEBL", "close": 123, "source": "stored", "trade_date": day})
+    monkeypatch.setattr(market, "get_top_gainers", lambda *_args: [row])
+    result = expand_model_data(market._overview(None, None, market.MarketOverviewInput(sections=["snapshot", "gainers"])))
+    assert result["status"] == "ok"
+    assert result["data"]["snapshot"]["status"] == "missing"
+    assert result["data"]["gainers"]["records"] == [{"symbol": "MEBL", "close": 123, "source": "stored", "trade_date": "2026-09-14"}]

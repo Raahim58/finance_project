@@ -387,6 +387,7 @@ def test_gemini_six_parallel_results_then_dependent_allocation_are_checkpointed(
     assert [row["call_id"] for row in captured[1]["input"]] == [
         f"fact-{index}" for index in range(6)
     ]
+    assert "Execution allowance (not evidence)" in captured[1]["system_instruction"]
     assert captured[1]["previous_interaction_id"] == "parallel-interaction"
     assert [row["call_id"] for row in captured[2]["input"]] == ["allocation-call"]
     assert captured[2]["previous_interaction_id"] == "allocation-interaction"
@@ -1112,3 +1113,152 @@ def test_output_truncation_and_provider_errors_remain_distinct(client, monkeypat
     assert metadata["provider_request_id"] == "req-safe"
     assert metadata["quota_violations"][0]["quotaValue"] == "20"
     assert metadata["retry_delay"] == "60s"
+
+
+def test_compact_allocation_recovery_and_latest_failed_attempt():
+    from app.ai.providers.base import ContentBlock
+    from app.ai.tool_loop import ToolExecution, _render_allocation, _result_blocks
+    from app.tools.registry import tool_result
+
+    checkpoint = {"evidence": {}, "next_evidence": 1, "tool_trace": []}
+    accepted = tool_result("ok", {
+        "accepted": True, "verification_id": "check-1",
+        "legs": [{"instrument_id": "m", "symbol": "MEBL", "quantity": "2",
+                  "gross_amount": "200", "side": "buy", "required_statement": "Buy 2 shares."}],
+        "current_weights": {"m": .4, "h": .5, "CASH": .1},
+        "proposed_weights": {"m": .45, "h": .5, "CASH": .05},
+        "evidence_versions": {"m": {"symbol": "MEBL"}, "h": {"symbol": "HBL"}},
+    })
+    # Historical compact checkpoints must also recover locally.
+    checkpoint["allocation_check"] = accepted["data"]
+    text, result = _render_allocation(checkpoint)
+    assert "Buy 2 shares" in text
+    assert [row["symbol"] for row in result["rows"]] == ["MEBL", "HBL", "CASH"]
+    call = ContentBlock("tool_call", id="verify-2", name="allocation.verify", arguments={})
+    blocks = _result_blocks(checkpoint, ToolExecution(call, tool_result("unavailable", error={"code": "tool_timeout"}), 1))
+    assert blocks[0].result["status"] == "unavailable"
+    _, result = _render_allocation(checkpoint)
+    assert result["status"] == "unavailable"
+    assert result["verification_id"] is None
+    assert result["rows"] == []
+
+
+def test_timestamp_citation_survives_final_delivery_and_checkpoint(client, monkeypatch):
+    from datetime import UTC, datetime
+    headers, user_id = _auth_with_anthropic(client, monkeypatch, email="timestamp-loop@example.com")
+    provider = AnthropicProvider()
+    responses = [
+        {"model": "claude-test", "stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "id": "events-1", "name": "research__events", "input": {}}
+        ], "usage": {}},
+        {"model": "claude-test", "stop_reason": "end_turn", "content": [
+            {"type": "text", "text": "Stored event [[E1]]."}
+        ], "usage": {}},
+    ]
+    async def fake_post(*_args):
+        return responses.pop(0)
+    async def fake_tool(_user_id, call):
+        return ToolExecution(call, tool_result("ok", {"events": [{"id": "event-1"}]},
+            sources=[{"source_name": "Stored issuer event", "published_at": datetime(2026, 9, 14, tzinfo=UTC)}]), 1)
+    monkeypatch.setattr(provider, "_post", fake_post)
+    monkeypatch.setattr("app.ai.tool_loop.get_provider", lambda _name: provider)
+    monkeypatch.setattr("app.ai.tool_loop._execute_tool", fake_tool)
+    response = client.post("/assistant/messages", headers=headers, json={"question": "Read the stored event", "provider": "anthropic"})
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["source_citations"][0]["published_at"] == "2026-09-14T00:00:00+00:00"
+    assert body["synthesis"]["token_usage"]["model_calls"] == 2
+    with SessionLocal() as db:
+        saved = db.get(AssistantMessage, body["message_id"])
+        assert json.loads(saved.evidence_json)["sources"][0]["published_at"] == "2026-09-14T00:00:00+00:00"
+        execution = db.get(AssistantExecution, body["synthesis"]["execution_id"])
+        checkpoint = json.loads(decrypt_secret(execution.transcript_encrypted))
+        assert checkpoint["evidence"]["E1"]["source"]["published_at"] == "2026-09-14T00:00:00+00:00"
+
+
+def test_safe_internal_error_location_excludes_exception_payload():
+    from app.services.assistant_diagnostics import safe_error_metadata
+    try:
+        try:
+            raise TypeError("secret private financial payload")
+        except TypeError as exc:
+            raise AssistantTerminalError("response_serialization_failed") from exc
+    except AssistantTerminalError as exc:
+        metadata = safe_error_metadata(exc)
+    assert metadata["error_code"] == "response_serialization_failed"
+    assert metadata["exception_type"] == "TypeError"
+    assert metadata["exception_location"]["function"] == "test_safe_internal_error_location_excludes_exception_payload"
+    assert "secret" not in json.dumps(metadata)
+
+
+def test_accepted_allocation_delivery_and_local_recovery_do_not_repeat_provider(client, monkeypatch):
+    import app.ai.tool_loop as loop
+    from app.services.assistant_execution import execute, queue_finalization_recovery
+    headers, user_id = _auth_with_anthropic(client, monkeypatch, email="accepted-recovery@example.com")
+    instrument = next(row for row in _mock_market(monkeypatch) if row.symbol == "MEBL")
+    portfolio_id = client.post("/portfolios", headers=headers, json={"name": "Allocation"}).json()["id"]
+    assert client.post(f"/portfolios/{portfolio_id}/holdings", headers=headers,
+        json={"symbol": "MEBL", "quantity": "1", "average_cost": "100"}).status_code == 201
+    assert client.post(f"/portfolios/{portfolio_id}/transactions", headers=headers,
+        json={"symbol": "CASH", "transaction_type": "deposit", "amount": "10000", "transaction_date": "2026-08-07"}).status_code == 201
+    assert client.post(f"/portfolios/{portfolio_id}/ips/confirm", headers=headers,
+        json={"constraints": {}, "horizon_years": 5}).status_code == 201
+    provider = AnthropicProvider()
+    captured = []
+    responses = [
+        {"model": "claude-test", "stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "id": "summary", "name": "portfolio__summary", "input": {"portfolio_id": portfolio_id}},
+            {"type": "tool_use", "id": "ips", "name": "ips__compliance", "input": {"portfolio_id": portfolio_id}},
+        ], "usage": {}},
+        {"model": "claude-test", "stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "id": "verify", "name": "allocation__verify", "input": {
+                "portfolio_id": portfolio_id, "allowed_instrument_ids": [instrument.id],
+                "proposal": {"legs": [{"instrument_id": instrument.id, "side": "buy", "gross_amount": "1000"}]}}},
+        ], "usage": {}},
+        {"model": "claude-test", "stop_reason": "end_turn", "content": [{"type": "text", "text": "Calculation [[E3]]."}], "usage": {}},
+    ]
+    async def fake_post(_url, _key, payload):
+        captured.append(payload)
+        return responses.pop(0)
+    monkeypatch.setattr(provider, "_post", fake_post)
+    monkeypatch.setattr(loop, "get_provider", lambda _name: provider)
+    persist = loop._persist_final_message
+    def failed_persist(*_args):
+        raise AssistantTerminalError("response_persistence_failed")
+    monkeypatch.setattr(loop, "_persist_final_message", failed_persist)
+    response = client.post("/assistant/messages", headers=headers,
+        json={"question": "Recommend and verify allocation", "portfolio_id": portfolio_id, "provider": "anthropic"})
+    assert response.status_code == 503
+    assert len(captured) == 3
+    with SessionLocal() as db:
+        row = db.scalar(select(AssistantExecution).where(AssistantExecution.user_id == user_id))
+        identifier = row.id
+        checkpoint = json.loads(decrypt_secret(row.transcript_encrypted))
+        assert checkpoint["reserved_tool_cost_units"] == 5
+        assert checkpoint["allocation_check"]["accepted"] is True
+        assert "Execution allowance (not evidence)" in json.dumps(captured[1])
+        from datetime import timedelta
+        from app.models.assistant_execution import now
+        row.started_at = now() - timedelta(seconds=1000)
+        db.commit()
+        queue_finalization_recovery(db, user_id, identifier)
+    monkeypatch.setattr(loop, "_persist_final_message", persist)
+    asyncio.run(execute(identifier))
+    with SessionLocal() as db:
+        row = db.get(AssistantExecution, identifier)
+        assert row.status == "completed", row.error_code
+        result = json.loads(row.response_json)
+        assert result["synthesis"]["allocation_check"]["status"] == "accepted"
+        assert {item["symbol"] for item in result["synthesis"]["allocation_check"]["rows"]} == {"MEBL", "CASH"}
+        assert result["synthesis"]["token_usage"]["model_calls"] == 3
+    assert len(captured) == 3
+
+
+def test_representative_evidence_reads_leave_verification_within_existing_budget():
+    from app.ai.tool_loop import _reserve_calls
+    checkpoint = {"reserved_tool_calls": 0, "reserved_tool_cost_units": 0}
+    names = ["research.company_sections"] * 3 + ["research.events", "portfolio.summary", "ips.compliance", "quant.security"]
+    _reserve_calls(checkpoint, [ContentBlock("tool_call", id=str(index), name=name, arguments={}) for index, name in enumerate(names)])
+    assert checkpoint["reserved_tool_cost_units"] == 15
+    _reserve_calls(checkpoint, [ContentBlock("tool_call", id="verify", name="allocation.verify", arguments={})])
+    assert checkpoint == {"reserved_tool_calls": 8, "reserved_tool_cost_units": 18}

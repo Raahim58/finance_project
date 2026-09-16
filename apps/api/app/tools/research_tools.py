@@ -32,6 +32,7 @@ class CompanySectionsInput(BaseModel):
     period_end: date | None = None
     cursor: str | None = Field(default=None, pattern=r"^[0-9]+$")
     limit: int = Field(default=25, ge=1, le=50)
+    sector_comparison_limit: int = Field(default=0, ge=0, le=20)
 
     @model_validator(mode="after")
     def validate_period(self):
@@ -157,6 +158,7 @@ def _company_sections(db, user, payload: CompanySectionsInput):
             scope=ContextScope.COMPANY_INTELLIGENCE,
             sections=requested,
             event_limit=requested_limit,
+            sector_comparison_limit=payload.sector_comparison_limit,
         ),
     )
     section = context.sections[requested[0].value].model_dump(mode="json")
@@ -270,7 +272,7 @@ def _events(db, _user, payload: EventInput):
         normalized, event_sources = _normalize_event(event, payload.entity_key)
         events.append(normalized)
         sources.extend(event_sources)
-    has_more = len(fetched) > offset + len(selected)
+    has_more = len(fetched) > len(selected)
     return tool_result(
         "ok" if events else "missing",
         {"events": events},

@@ -8,7 +8,7 @@ class AllocationLeg(BaseModel):
     model_config = ConfigDict(extra="forbid")
     instrument_id: str
     side: Literal["buy", "sell"]
-    gross_amount: Decimal = Field(gt=0, allow_inf_nan=False)
+    gross_amount: Decimal = Field(gt=0, allow_inf_nan=False, description="Provisional gross cash amount in stored instrument currency; verifier computes lot-rounded quantity.")
 
 
 class AllocationProposal(BaseModel):

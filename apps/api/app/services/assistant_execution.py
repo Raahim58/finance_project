@@ -34,6 +34,38 @@ def owned(db, user_id, identifier):
     return row
 
 
+def completed_final_turn(row):
+    if not row.transcript_encrypted:
+        return False
+    checkpoint = json.loads(decrypt_secret(row.transcript_encrypted))
+    turns = checkpoint.get("turns", [])
+    return bool(checkpoint.get("provider_turn_complete") and turns
+                and turns[-1].get("role") == "assistant"
+                and not any(block.get("type") == "tool_call" for block in turns[-1].get("content", [])))
+
+
+def queue_finalization_recovery(db, user_id, identifier):
+    """Explicit local recovery only; never schedule another external attempt."""
+    row = owned(db, user_id, identifier)
+    if row.status != "failed" or row.error_code not in {
+        "response_serialization_failed", "response_rendering_failed", "response_persistence_failed",
+        "TypeError",  # historical timestamp/compact-result failures
+    } or not completed_final_turn(row):
+        raise HTTPException(409, "No completed final turn available for local recovery")
+    uncertain = db.scalar(select(AssistantAttempt.id).where(
+        AssistantAttempt.execution_id == row.id,
+        AssistantAttempt.status.in_(["sent", "uncertain"]),
+    ))
+    if uncertain:
+        raise HTTPException(409, "Uncertain provider attempt cannot be recovered")
+    row.status = "queued"
+    row.error_code = None
+    row.completed_at = None
+    row.heartbeat_at = None
+    db.commit()
+    return row.id
+
+
 def accept(db, user, payload, client_request_id, conversation_id=None):
     from app.ai.orchestrator import _conversation, _resolved_portfolio
 
@@ -125,14 +157,15 @@ async def execute(identifier):
                 user = db.get(User, row.user_id)
                 deadline = settings.assistant_execution_deadline_seconds
                 elapsed = (now() - row.started_at.replace(tzinfo=now().tzinfo)).total_seconds()
-                if elapsed >= deadline:
+                local_finalization = completed_final_turn(row)
+                if elapsed >= deadline and not local_finalization:
                     from app.ai.tool_loop import AssistantTerminalError
 
                     raise AssistantTerminalError("execution_deadline_exhausted")
                 stage_id = diagnostics.begin_stage("orchestration")
                 stage_started = time.perf_counter()
                 try:
-                    async with asyncio.timeout(deadline - elapsed):
+                    async with asyncio.timeout(None if local_finalization else deadline - elapsed):
                         result = await run_assistant(
                             db, user, payload, row.conversation_id, accepted=True
                         )
@@ -140,6 +173,7 @@ async def execute(identifier):
                     diagnostics.finish_stage(
                         stage_id,
                         status="failed",
+                        error=exc,
                         latency_ms=round((time.perf_counter() - stage_started) * 1000),
                     )
                     if isinstance(exc, TimeoutError):
@@ -170,6 +204,7 @@ async def execute(identifier):
                 diagnostics.finish_stage(
                     persistence_stage_id,
                     status="failed",
+                    error=exc,
                     latency_ms=round((time.perf_counter() - persistence_started) * 1000),
                 )
                 from app.ai.tool_loop import AssistantTerminalError

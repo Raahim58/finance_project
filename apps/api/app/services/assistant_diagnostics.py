@@ -521,7 +521,33 @@ def begin_stage(operation):
         return row.id
 
 
-def finish_stage(identifier, *, status, latency_ms, validation_count=0):
+def safe_error_metadata(error):
+    """Capture type/code and the innermost code location, never exception text."""
+    cause = error
+    seen = set()
+    while cause.__cause__ is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        cause = cause.__cause__
+    trace = cause.__traceback__
+    while trace is not None and trace.tb_next is not None:
+        trace = trace.tb_next
+    return {
+        "error_code": getattr(error, "code", type(error).__name__),
+        "exception_type": type(cause).__name__,
+        "exception_location": {
+            "module": trace.tb_frame.f_globals.get("__name__"),
+            "function": trace.tb_frame.f_code.co_name,
+            "line": trace.tb_lineno,
+        } if trace else None,
+    }
+
+
+def record_tool_failure(name, error, code):
+    identifier = begin_stage(f"tool:{name}")
+    finish_stage(identifier, status="failed", latency_ms=0, error=error, error_code=code)
+
+
+def finish_stage(identifier, *, status, latency_ms, validation_count=0, error=None, error_code=None):
     from app.models.assistant_execution import AssistantStage
 
     if identifier is None:
@@ -531,5 +557,10 @@ def finish_stage(identifier, *, status, latency_ms, validation_count=0):
         row.status = status
         row.completed_at = now()
         row.metadata_json = json.dumps(
-            {"latency_ms": latency_ms, "validation_failure_count": validation_count}
+            {"latency_ms": latency_ms, "validation_failure_count": validation_count,
+             **(safe_error_metadata(error) if error is not None else {})}
         )
+        if error_code is not None:
+            metadata = json.loads(row.metadata_json)
+            metadata["error_code"] = error_code
+            row.metadata_json = json.dumps(metadata)
