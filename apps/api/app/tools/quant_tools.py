@@ -4,13 +4,17 @@ from app.reasoning.allocation import AllocationProposal
 from app.services.allocation_verification import verify_allocation
 from app.services.decision_analytics_service import risk_budget_analysis
 from app.services.workstation_service import portfolio_quant, security_quant
-from app.tools.portfolio_tools import PortfolioInput
+from app.tools.portfolio_tools import PortfolioInput, portfolio_source
 from app.tools.registry import ToolDefinition, ToolRegistry, tool_result
 
 
 def _quant(db, user, payload: PortfolioInput):
+    data = portfolio_quant(db, user, payload.portfolio_id, persist=False)
+    source = portfolio_source(payload.portfolio_id, data, "aligned_price_covariance_and_ledger_performance")
+    data = {key: value for key, value in data.items() if key != "price_provenance"}
     return tool_result(
-        "ok", portfolio_quant(db, user, payload.portfolio_id), returned=1, remaining=0
+        "ok", data, sources=[source],
+        returned=1, remaining=0
     )
 
 
@@ -19,12 +23,22 @@ class SecurityInput(BaseModel):
 
 
 def _security(db, _user, payload: SecurityInput):
-    return tool_result("ok", security_quant(db, payload.instrument_id), returned=1, remaining=0)
+    data = security_quant(db, payload.instrument_id)
+    return tool_result("ok", data, sources=[{
+        "source_name": "Canonical security price risk calculation",
+        "instrument_id": payload.instrument_id, "symbol": data.get("symbol"),
+        "data_cutoff": data.get("data_cutoff"), "price_source": data.get("source"),
+        "calculation_method": "daily_price_returns_risk_metrics", "annualization": data.get("annualization"),
+    }], returned=1, remaining=0)
 
 
 def _risk_budget(db, user, payload: PortfolioInput):
+    data = risk_budget_analysis(db, user, payload.portfolio_id)
+    source = portfolio_source(payload.portfolio_id, data, "covariance_component_risk_contributions")
+    data = {key: value for key, value in data.items() if key != "price_provenance"}
     return tool_result(
-        "ok", risk_budget_analysis(db, user, payload.portfolio_id), returned=1, remaining=0
+        "ok", data, sources=[source],
+        returned=1, remaining=0
     )
 
 
@@ -42,7 +56,16 @@ def _verify_allocation(db, user, payload: AllocationVerificationInput):
         payload.proposal,
         payload.allowed_instrument_ids,
     )
-    return tool_result("ok", data, returned=len(data.get("legs", [])), remaining=0)
+    return tool_result("ok", data, sources=[{
+        "source_name": "Server allocation verification",
+        "portfolio_id": payload.portfolio_id, "verification_id": data.get("verification_id"),
+        "ips_version_id": data.get("ips_version_id"),
+        "calculation_method": "gross_cash_lot_rounding_and_ips_comparison",
+        "price_observations": {
+            key: {field: record.get(field) for field in ("symbol", "source", "source_url", "trade_date", "artifact_id", "artifact_sha256")}
+            for key, record in data.get("evidence_versions", {}).items()
+        },
+    }], returned=len(data.get("legs", [])), remaining=0)
 
 
 def register_quant_tools(registry: ToolRegistry) -> None:
@@ -92,7 +115,7 @@ def register_quant_tools(registry: ToolRegistry) -> None:
         ToolDefinition(
             "allocation.verify",
             "1.0",
-            "Read-only deterministic verification of a model-proposed allocation",
+            "Submit provisional gross buys/funding sales. Calculates quantities, cash, capital weights, before/after metrics and IPS compliance without executing trades",
             AllocationVerificationInput,
             "portfolio:read",
             True,

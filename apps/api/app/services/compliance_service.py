@@ -7,6 +7,15 @@ from typing import Any, Iterable, Literal, TypedDict
 ComplianceStatus = Literal["PASS", "BREACH", "NOT_EVALUATED"]
 
 
+def shariah_eligibility(metadata: dict[str, Any]) -> bool | None:
+    """Known metadata aliases must agree; absent/conflicting values stay unknown."""
+    values = [metadata[key] for key in ("shariah_eligible", "shariah_compliant")
+              if key in metadata and metadata[key] is not None]
+    if not values or any(not isinstance(value, bool) for value in values):
+        return None
+    return values[0] if all(value == values[0] for value in values) else None
+
+
 class PositionInput(TypedDict, total=False):
     symbol: str
     weight: float

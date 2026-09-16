@@ -275,7 +275,7 @@ def _portfolio_metrics(asset_returns: np.ndarray, weights: np.ndarray, expected:
     }
 
 
-def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: PortfolioComparisonRequest):
+def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: PortfolioComparisonRequest, *, persist_analysis: bool = True):
     portfolio, symbols, days, returns, covariance, expected, constraints, benchmark_symbol, risk_free = _market_inputs(db, user, portfolio_id, list(payload.target_weights))
     proposed = {key.upper(): float(value) for key, value in payload.target_weights.items()}
     weight_check = weight_diagnostics(proposed)
@@ -346,7 +346,7 @@ def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: Portf
         "metrics": metrics,
         "current_risk_contributions": current_risk,
         "proposed_risk_contributions": proposed_risk,
-        "current_compliance": ips_compliance(db, user, portfolio.id),
+        "current_compliance": ips_compliance(db, user, portfolio.id, persist_analysis=persist_analysis),
         "proposed_compliance": _weight_compliance(
             proposed,
             constraints,
@@ -393,4 +393,7 @@ def risk_budget_analysis(db: Session, user: User, portfolio_id: str, target: dic
     cash_weight = float(summary.cash_balance) / total_capital if total_capital else 0.0
     items.append({"symbol": "CASH", "total_capital_weight": cash_weight, "risky_sleeve_weight": None, "component_risk": 0.0, "percentage_risk": 0.0, "target_risk": None, "residual": None})
     error = float(np.sqrt(np.sum((np.asarray(contribution["percentage"]) - normalized) ** 2))) if normalized is not None else None
-    return {"portfolio_id": portfolio.id, "data_cutoff": days[-1], "portfolio_basis": "total_capital", "items": items, "total_percentage_risk": float(np.sum(contribution["percentage"])), "residual_error": error, "diagnostics": [] if normalized is not None else ["No target risk budget is configured; actual contribution is shown without a target."]}
+    return {"portfolio_id": portfolio.id, "data_cutoff": days[-1], "portfolio_basis": "total_capital", "items": items, "total_percentage_risk": float(np.sum(contribution["percentage"])), "residual_error": error, "diagnostics": [] if normalized is not None else ["No target risk budget is configured; actual contribution is shown without a target."],
+            "price_provenance": [{"symbol": row.symbol, "source_name": row.data_source,
+                                  "data_cutoff": row.latest_price_date, "artifact_id": row.artifact_id}
+                                 for row in summary.holdings]}

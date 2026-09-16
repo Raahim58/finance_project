@@ -64,6 +64,7 @@ class IntelligenceContextRequest(BaseModel):
     question: str | None = Field(default=None, min_length=1, max_length=2000)
     rag_limit: int = Field(default=5, ge=1, le=8)
     event_limit: int = Field(default=8, ge=1, le=100)
+    sector_comparison_limit: int = Field(default=0, ge=0, le=20)
 
     @model_validator(mode="after")
     def validate_scope(self) -> "IntelligenceContextRequest":

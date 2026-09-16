@@ -178,3 +178,37 @@ def test_payload_retention_sampling_and_eviction(execution):
     assert diagnostics.sampled(identifier) == diagnostics.sampled(identifier)
     count = sum(diagnostics.sampled(str(i)) for i in range(1000))
     assert 70 <= count <= 130
+
+
+def test_shariah_aliases_agree_or_remain_unknown():
+    from app.services.compliance_service import shariah_eligibility
+    assert shariah_eligibility({"shariah_compliant": True}) is True
+    assert shariah_eligibility({"shariah_eligible": False}) is False
+    assert shariah_eligibility({"shariah_eligible": True, "shariah_compliant": False}) is None
+    assert shariah_eligibility({}) is None
+    assert shariah_eligibility({"shariah_eligible": "true"}) is None
+
+
+def test_tool_failure_keeps_safe_type_and_location_in_internal_stage(execution):
+    from pydantic import BaseModel
+    from app.tools.registry import ToolDefinition, ToolRegistry
+    identifier, user_id = execution
+    class Input(BaseModel):
+        pass
+    def failed_handler(*_args):
+        raise TypeError("PRIVATE HOLDINGS secret key")
+    registry = ToolRegistry()
+    registry.register(ToolDefinition("test.failure", "1", "offline", Input,
+        "test:read", True, False, 1, "low", failed_handler))
+    token = diagnostics.execution_id.set(identifier)
+    try:
+        with SessionLocal() as db:
+            result = registry.invoke("test.failure", db, db.get(User, user_id), {})
+            assert result["data"]["error"]["code"] == "handler_unavailable"
+            stages = diagnostics.inspect_execution(db, db.get(AssistantExecution, identifier))["stages"]
+            failed = next(stage for stage in stages if stage["operation"] == "tool:test.failure")
+            assert failed["metadata"]["exception_type"] == "TypeError"
+            assert failed["metadata"]["exception_location"]["function"] == "failed_handler"
+            assert "PRIVATE" not in json.dumps(failed["metadata"])
+    finally:
+        diagnostics.execution_id.reset(token)

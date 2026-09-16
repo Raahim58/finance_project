@@ -475,3 +475,181 @@ def test_mebl_oversized_fixture_is_a_production_shaped_reconstruction():
         "event_subjects": 64402,
         "source_references": 67557,
     }
+
+
+def test_assistant_mandate_ids_market_and_screening_are_database_reads(monkeypatch):
+    from app.models.workstation import AnalysisRun, CompanyScreeningSnapshot, PortfolioIPSVersion
+    seeded, user_id = _seed(monkeypatch)
+    with SessionLocal() as db:
+        user = db.get(User, user_id)
+        # Resolve the seeded user-owned portfolio through its actual stored IPS.
+        version = db.scalar(select(PortfolioIPSVersion).where(PortfolioIPSVersion.status == "confirmed"))
+        portfolio_id = version.portfolio_id
+        registry = build_tool_registry()
+        before = db.scalar(select(func.count()).select_from(AnalysisRun))
+        summary = expand_model_data(registry.invoke("portfolio.summary", db, user, {"portfolio_id": portfolio_id}))
+        assert summary["status"] == "ok"
+        assert summary["sources"][0]["record_id"] == portfolio_id
+        for holding in summary["data"]["holdings"]:
+            assert holding["instrument_id"] == db.scalar(select(Instrument.id).where(Instrument.symbol == holding["symbol"]))
+        ips = expand_model_data(registry.invoke("ips.compliance", db, user, {"portfolio_id": portfolio_id}))
+        assert ips["data"]["mandate"]["ips_version_id"] == version.id
+        assert ips["data"]["mandate"]["required_return"] == (str(version.required_return) if version.required_return is not None else None)
+        assert ips["data"]["mandate"]["constraints"] == json.loads(version.constraints_json)
+        overview = expand_model_data(registry.invoke("market.overview", db, user, {"sections": ["gainers", "sectors"], "limit": 3}))
+        assert overview["status"] == "ok"
+        expected = sorted(db.scalars(select(MarketPrice).where(MarketPrice.trade_date == date.fromisoformat(overview["data"]["gainers"]["effective_date"]))), key=lambda row: (row.change_percent, row.volume), reverse=True)[:3]
+        assert [row["symbol"] for row in overview["data"]["gainers"]["records"]] == [row.symbol for row in expected]
+        assert [Decimal(row["close"]) for row in overview["data"]["gainers"]["records"]] == [row.close for row in expected]
+        instrument = db.scalar(select(Instrument).where(Instrument.symbol == "MEBL"))
+        sector = expand_model_data(registry.invoke("research.company_sections", db, user, {"instrument_id": instrument.id, "sections": ["sector"]}))
+        assert sector["data"]["sections"][0]["data"]["comparisons"] == []
+        compared = expand_model_data(registry.invoke("research.company_sections", db, user, {"instrument_id": instrument.id, "sections": ["sector"], "sector_comparison_limit": 1}))
+        assert len(compared["data"]["sections"][0]["data"]["comparisons"]) == 1
+
+        universe = registry.invoke("market.universe", db, user, {"screening_fields": ["score", "income_growth"], "limit": 3})
+        assert universe["status"] == "ok"
+        assert "screening_as_of" in universe["data"]["columns"]
+        assert universe["data"]["screening_coverage"]["returned_instruments"] == 3
+        assert db.scalar(select(func.count()).select_from(AnalysisRun)) == before
+
+
+def test_event_pagination_applies_offset_once(monkeypatch):
+    from app.tools.research_tools import EventInput, _events
+    # A database-like reader applies offset before returning limit+1 rows.
+    events = [{"id": str(index), "sources": []} for index in range(7)]
+    def reader(_db, **kwargs):
+        offset = kwargs.get("offset", 0)
+        return events[offset:offset + kwargs["limit"]]
+    # Use the actual event service signature adapter below.
+    import app.tools.research_tools as research
+    monkeypatch.setattr(research, "list_events", lambda _db, **kwargs: reader(_db, **kwargs))
+    seen, cursor = [], None
+    for _ in range(4):
+        result = expand_model_data(_events(None, None, EventInput(cursor=cursor, limit=2)))
+        seen.extend(row["id"] for row in result["data"]["events"])
+        cursor = result["coverage"]["continuation"]
+        if cursor is None:
+            break
+    assert seen == [str(index) for index in range(7)]
+    assert cursor is None
+
+
+def test_saved_quant_reuse_and_dependency_invalidation_do_not_write_on_reads(monkeypatch):
+    from app.models.workstation import AnalysisRun, PortfolioIPSVersion
+    from app.models.portfolio import Portfolio
+    from app.services import workstation_service as service
+    seeded, user_id = _seed(monkeypatch)
+    with SessionLocal() as db:
+        user = db.get(User, user_id)
+        portfolio_id = seeded["portfolio_id"]
+        saved = service.portfolio_quant(db, user, portfolio_id)
+        before = db.scalar(select(func.count()).select_from(AnalysisRun))
+        numerical_calls = []
+        original = service.return_matrix
+        def track(prices):
+            numerical_calls.append(True)
+            return original(prices)
+        original_performance = service.get_portfolio_performance
+        def track_performance(*args, **kwargs):
+            numerical_calls.append("performance")
+            return original_performance(*args, **kwargs)
+        monkeypatch.setattr(service, "get_portfolio_performance", track_performance)
+        monkeypatch.setattr(service, "return_matrix", track)
+        reused = service.portfolio_quant(db, user, portfolio_id, persist=False)
+        assert reused["run_id"] == saved["run_id"]
+        assert not numerical_calls
+        # An older observation correction must invalidate, not just a new cutoff.
+        price = db.scalar(select(MarketPrice).where(MarketPrice.symbol == "MEBL").order_by(MarketPrice.trade_date))
+        price.close += Decimal("1")
+        db.commit()
+        corrected = service.portfolio_quant(db, user, portfolio_id, persist=False)
+        assert corrected["run_id"] is None
+        assert numerical_calls
+        assert db.scalar(select(func.count()).select_from(AnalysisRun)) == before
+        saved = service.portfolio_quant(db, user, portfolio_id)
+        numerical_calls.clear()
+        version = db.get(PortfolioIPSVersion, db.get(Portfolio, portfolio_id).selected_ips_version_id)
+        constraints = json.loads(version.constraints_json)
+        constraints["risk_free_series_key"] = "missing-observed-rate"
+        version.constraints_json = json.dumps(constraints)
+        db.commit()
+        assert service.portfolio_quant(db, user, portfolio_id, persist=False)["run_id"] is None
+        assert numerical_calls
+        # Parameters also invalidate; no legacy result may satisfy the v2 lookup.
+        saved = service.portfolio_quant(db, user, portfolio_id)
+        numerical_calls.clear()
+        assert service.portfolio_quant(db, user, portfolio_id, shrinkage=.3, persist=False)["run_id"] is None
+        assert numerical_calls
+        run = db.get(AnalysisRun, saved["run_id"])
+        run.code_version = "quant-v1"
+        db.commit()
+        numerical_calls.clear()
+        assert service.portfolio_quant(db, user, portfolio_id, persist=False)["run_id"] is None
+        assert numerical_calls
+
+
+def test_verifier_separates_acceptance_freshness_and_modeled_goal(monkeypatch):
+    from app.models.workstation import AnalysisRun, PortfolioIPSVersion, ScenarioRun
+    from app.models.portfolio import Portfolio
+    from app.reasoning.allocation import AllocationProposal
+    from app.services import allocation_verification as service
+    from app.services.canonical_market_service import latest_price
+    seeded, user_id = _seed(monkeypatch)
+    with SessionLocal() as db:
+        user = db.get(User, user_id)
+        portfolio = db.get(Portfolio, seeded["portfolio_id"])
+        version = db.get(PortfolioIPSVersion, portfolio.selected_ips_version_id)
+        version.constraints_json = "{}"
+        version.required_return = Decimal("100")  # deliberately infeasible test hurdle, not a forecast
+        db.commit()
+        instrument = db.scalar(select(Instrument).where(Instrument.symbol == "MEBL"))
+        price = latest_price(db, instrument.symbol)
+        class Clock:
+            @staticmethod
+            def now(_tz):
+                return datetime.combine(price.trade_date, datetime.min.time(), tzinfo=UTC)
+        monkeypatch.setattr(service, "datetime", Clock)
+        proposal = AllocationProposal.model_validate({"legs": [{"instrument_id": instrument.id, "side": "buy", "gross_amount": str(price.close * 2)}]})
+        before = {model: db.scalar(select(func.count()).select_from(model)) for model in (AnalysisRun, AllocationSet, ScenarioRun)}
+        result = service.verify_allocation(db, user, portfolio.id, proposal, [instrument.id])
+        assert result["accepted"] is True, result["errors"]
+        assert result["checks"]["arithmetic_funding"]["status"] == "accepted"
+        assert result["checks"]["modeled_goal"]["status"] == "below"
+        assert result["checks"]["modeled_goal"]["shortfall"] > 0
+        assert result["checks"]["price_freshness"]["status"] == "current"
+        assert result["evidence_readiness"]["optimality"] == "not_established"
+        assert result["legs"][0]["quantity"] == "2"
+        # Advance using the same session policy, not an arbitrary stale-day cutoff.
+        class LaterClock:
+            @staticmethod
+            def now(_tz):
+                from datetime import timedelta
+                return datetime.combine(price.trade_date, datetime.min.time(), tzinfo=UTC) + timedelta(days=7)
+        monkeypatch.setattr(service, "datetime", LaterClock)
+        stale = service.verify_allocation(db, user, portfolio.id, proposal, [instrument.id])
+        assert stale["accepted"] is True
+        assert stale["checks"]["price_freshness"]["status"] == "stale"
+        assert stale["evidence_readiness"]["actionable_recommendation_eligible"] is False
+        with monkeypatch.context() as scoped:
+            original_summary = service.get_portfolio_summary
+            scoped.setattr(service, "get_portfolio_summary", lambda *args: original_summary(*args).model_copy(update={"valuation_complete": False, "unpriced_symbols": ["MEBL"]}))
+            incomplete = service.verify_allocation(db, user, portfolio.id, proposal, [instrument.id])
+            assert incomplete["accepted"] is False
+            assert "incomplete_portfolio_valuation" in incomplete["errors"]
+            assert incomplete["evidence_readiness"]["actionable_recommendation_eligible"] is False
+        with monkeypatch.context() as scoped:
+            original_price = service.latest_price
+            scoped.setattr(service, "latest_price", lambda session, symbol: None if symbol == "MEBL" else original_price(session, symbol))
+            unavailable = service.verify_allocation(db, user, portfolio.id, proposal, [instrument.id])
+            assert unavailable["accepted"] is False
+            assert unavailable["checks"]["price_freshness"]["status"] == "unavailable"
+            assert "missing_instrument_or_price" in unavailable["errors"]
+        portfolio.selected_ips_version_id = None
+        db.commit()
+        missing = service.verify_allocation(db, user, portfolio.id, proposal, [instrument.id])
+        assert missing["accepted"] is False
+        assert "confirmed_ips_missing" in missing["errors"]
+        assert missing["checks"]["modeled_goal"]["status"] == "unavailable"
+        for model, count in before.items():
+            assert db.scalar(select(func.count()).select_from(model)) == count

@@ -67,6 +67,35 @@ PURPOSE_QUERIES = {
 }
 
 
+def price_freshness(db: Session, price, now: datetime) -> dict[str, Any]:
+    """Shared trading-session/source-SLA policy, without company risk work."""
+    if price is None:
+        return {"status": "unavailable", "policy": None}
+    artifact = db.get(SourceArtifact, price.artifact_id) if price.artifact_id else None
+    source = db.get(DataSource, artifact.data_source_id) if artifact else None
+    state = ContextState.CURRENT
+    intervening_sessions = (
+        sessions_between(db, price.trade_date + timedelta(days=1), now.date())
+        if price.trade_date < now.date()
+        else []
+    )
+    expected = {
+        "cadence": "trading_session",
+        "source_sla_minutes": source.freshness_sla_minutes if source else None,
+        "intervening_sessions": [row.session_date for row in intervening_sessions],
+        "calendar_statuses": sorted({row.status for row in intervening_sessions}),
+    }
+    outside_source_sla = bool(
+        source
+        and source.freshness_sla_minutes
+        and artifact
+        and _utc(artifact.retrieved_at) < now - timedelta(minutes=source.freshness_sla_minutes)
+    )
+    if intervening_sessions or (price.trade_date == now.date() and outside_source_sla):
+        state = ContextState.STALE
+    return {"status": "stale" if state == ContextState.STALE else "current", "policy": expected}
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(jsonable_encoder(value), sort_keys=True, separators=(",", ":"), default=str)
 
@@ -231,6 +260,8 @@ class ContextBuilder:
                 research_cache_key = f"{research_cache_key}:events:{request.event_limit}"
             elif name == ContextSectionName.RAG_EVIDENCE:
                 research_cache_key = f"{research_cache_key}:rag:{request.rag_limit}"
+            elif name == ContextSectionName.SECTOR:
+                research_cache_key = f"{research_cache_key}:sector:{request.sector_comparison_limit}"
             cache_key = (
                 CONTEXT_CONTRACT_VERSION,
                 user.id,
@@ -829,29 +860,9 @@ class ContextBuilder:
                     urgency="high",
                 )
             ]
-        artifact = db.get(SourceArtifact, price.artifact_id) if price.artifact_id else None
-        source = db.get(DataSource, artifact.data_source_id) if artifact else None
-        state = ContextState.CURRENT
-        now = self.now()
-        intervening_sessions = (
-            sessions_between(db, price.trade_date + timedelta(days=1), now.date())
-            if price.trade_date < now.date()
-            else []
-        )
-        expected = {
-            "cadence": "trading_session",
-            "source_sla_minutes": source.freshness_sla_minutes if source else None,
-            "intervening_sessions": [row.session_date for row in intervening_sessions],
-            "calendar_statuses": sorted({row.status for row in intervening_sessions}),
-        }
-        outside_source_sla = bool(
-            source
-            and source.freshness_sla_minutes
-            and artifact
-            and _utc(artifact.retrieved_at) < now - timedelta(minutes=source.freshness_sla_minutes)
-        )
-        if intervening_sessions or (price.trade_date == now.date() and outside_source_sla):
-            state = ContextState.STALE
+        freshness = price_freshness(db, price, self.now())
+        expected = freshness["policy"]
+        state = ContextState.STALE if freshness["status"] == "stale" else ContextState.CURRENT
         observed_risk = company_risk(db, instrument.symbol, price.trade_date)
         data = {
             "price": {
@@ -947,17 +958,21 @@ class ContextBuilder:
                     {"sector": instrument.sector, "cadence": "trading_session"},
                 )
             ]
+        peers = [row for row in rows if row.sector.lower() != selected.sector.lower()]
+        comparisons = peers[:_request.sector_comparison_limit]
         data = {
             "company_sector": selected.model_dump(),
-            "comparisons": [row.model_dump() for row in rows[:20]],
+            "comparisons": [row.model_dump() for row in comparisons],
+            "comparison_coverage": {"returned": len(comparisons), "available": len(peers)},
         }
         evidence = [
             _evidence(
                 "structured_fact",
-                f"sector:{selected.sector}:{selected.trade_date}:{selected.source}:{_hash(selected.model_dump())[:16]}",
-                selected.source,
-                as_of=selected.trade_date,
+                f"sector:{row.sector}:{row.trade_date}:{row.source}:{_hash(row.model_dump())[:16]}",
+                row.source,
+                as_of=row.trade_date,
             )
+            for row in [selected, *comparisons]
         ]
         return _section(
             ContextSectionName.SECTOR,

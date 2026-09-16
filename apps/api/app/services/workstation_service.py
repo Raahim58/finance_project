@@ -24,7 +24,7 @@ from app.domain.quant import (
 )
 from app.domain.analytics_contract import DEFAULT_MAX_CASH_WEIGHT, WEIGHT_TOLERANCE, weight_diagnostics
 from app.models.market import MarketPrice
-from app.models.portfolio import PortfolioHolding
+from app.models.portfolio import PortfolioHolding, PortfolioTransaction
 from app.models.user import User
 from app.models.workstation import (
     AnalysisRun,
@@ -54,7 +54,7 @@ from app.services.scenario_service import resolve_shock
 from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_performance, get_portfolio_summary
 from app.services.risk_profile_service import RISK_ORDER as _RISK_ORDER, assess_risk_profile
 from app.services.canonical_market_service import latest_price, price_series
-from app.services.compliance_service import evaluate_ips_constraints
+from app.services.compliance_service import evaluate_ips_constraints, shariah_eligibility
 
 
 _ALIGNED_PRICE_TTL_SECONDS = 60
@@ -235,7 +235,7 @@ def list_ips_versions(db: Session, user: User, portfolio_id: str):
     return results
 
 
-def ips_compliance(db: Session, user: User, portfolio_id: str):
+def ips_compliance(db: Session, user: User, portfolio_id: str, *, persist_analysis: bool = True):
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     version = db.get(PortfolioIPSVersion, portfolio.selected_ips_version_id) if portfolio.selected_ips_version_id else None
     if version is None:
@@ -249,11 +249,11 @@ def ips_compliance(db: Session, user: User, portfolio_id: str):
     for holding in summary.holdings:
         instrument = instruments.get(holding.symbol)
         metadata = _load(instrument.metadata_json) if instrument and instrument.metadata_json else {}
-        positions.append({"symbol": holding.symbol, "weight": float(holding.market_value) / total if total else 0.0, "sector": holding.sector, "shariah_eligible": metadata.get("shariah_compliant")})
+        positions.append({"symbol": holding.symbol, "weight": float(holding.market_value) / total if total else 0.0, "sector": holding.sector, "shariah_eligible": shariah_eligibility(metadata), "asset_type": instrument.instrument_type if instrument else None, "currency": instrument.currency if instrument else None})
     positions.append({"symbol": "CASH", "weight": float(summary.cash_balance) / total if total else 0.0, "sector": "Cash"})
     modeled_inputs: dict[str, object] = {"liquid_assets": float(summary.cash_balance), "data_cutoff": summary.data_freshness_date, "estimator": "aligned_price_covariance_v1"}
     try:
-        quant = portfolio_quant(db, user, portfolio.id)
+        quant = portfolio_quant(db, user, portfolio.id, persist=persist_analysis)
         variance = quant.get("portfolio", {}).get("variance")
         benchmark = quant.get("benchmark") if isinstance(quant.get("benchmark"), dict) else {}
         benchmark_metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), dict) else {}
@@ -267,10 +267,10 @@ def ips_compliance(db: Session, user: User, portfolio_id: str):
         # Availability is reported per modeled check; cash and weight checks still run.
         pass
     result = evaluate_ips_constraints(constraints, positions, ips_version_id=version.id, valuation_complete=summary.valuation_complete, unpriced_symbols=summary.unpriced_symbols, context="current", modeled_inputs=modeled_inputs)
-    return {"portfolio_id": portfolio.id, **result, "evaluated_at": datetime.now(UTC)}
+    return {"portfolio_id": portfolio.id, **result, "evaluated_at": datetime.now(UTC), "data_cutoff": modeled_inputs.get("data_cutoff"), "price_provenance": [{"symbol": row.symbol, "source_name": row.data_source, "data_cutoff": row.latest_price_date, "artifact_id": row.artifact_id} for row in summary.holdings]}
 
 
-def _aligned_prices(db: Session, portfolio_id: str, start: date | None, end: date | None):
+def _aligned_prices(db: Session, portfolio_id: str, start: date | None, end: date | None, *, price_rows=None):
     holding_rows = list(
         db.execute(
             select(PortfolioHolding.symbol, PortfolioHolding.updated_at)
@@ -279,10 +279,10 @@ def _aligned_prices(db: Session, portfolio_id: str, start: date | None, end: dat
         )
     )
     symbols = [row.symbol for row in holding_rows]
-    return _aligned_symbol_prices(db, symbols, start, end, cache_key=(portfolio_id, tuple((row.symbol, row.updated_at) for row in holding_rows)))
+    return _aligned_symbol_prices(db, symbols, start, end, cache_key=(portfolio_id, tuple((row.symbol, row.updated_at) for row in holding_rows)), price_rows=price_rows)
 
 
-def _aligned_symbol_prices(db: Session, symbols: list[str], start: date | None, end: date | None, cache_key: object | None = None):
+def _aligned_symbol_prices(db: Session, symbols: list[str], start: date | None, end: date | None, cache_key: object | None = None, *, price_rows=None):
     """Align canonical prices for an analytical universe without changing holdings."""
     symbols = sorted({symbol.upper() for symbol in symbols})
     if len(symbols) < 2:
@@ -310,11 +310,11 @@ def _aligned_symbol_prices(db: Session, symbols: list[str], start: date | None, 
     now = monotonic()
     with _aligned_price_cache_lock:
         cached = _aligned_price_cache.get(key)
-        if cached and cached[0] > now:
+        if price_rows is None and cached and cached[0] > now:
             return list(cached[1]), list(cached[2]), [list(column) for column in cached[3]]
         by_symbol = {symbol: {} for symbol in symbols}
         for symbol in symbols:
-            for row in price_series(db, symbol, start, end):
+            for row in price_rows[symbol] if price_rows is not None else price_series(db, symbol, start, end):
                 by_symbol[symbol][row.trade_date] = float(row.close)
         aligned_dates = sorted(set.intersection(*(set(values) for values in by_symbol.values())))
         if len(aligned_dates) < 31:
@@ -467,23 +467,69 @@ def _rolling_metrics(values: np.ndarray, window: int = 60) -> list[dict[str, flo
     return output
 
 
-def portfolio_quant(db: Session, user: User, portfolio_id: str, shrinkage: float = 0.20):
+def portfolio_quant(db: Session, user: User, portfolio_id: str, shrinkage: float = 0.20, *, persist: bool = True):
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
-    symbols, days, prices = _aligned_prices(db, portfolio.id, None, None)
+    summary = get_portfolio_summary(db, user, portfolio_id)
+    symbols = sorted({row.symbol for row in summary.holdings})
+    if len(symbols) < 2:
+        raise HTTPException(status_code=422, detail="At least two securities are required")
+    series = {symbol: price_series(db, symbol) for symbol in symbols}
+    # Reuse already fetched observations to refresh the existing alignment cache.
+    # Later workstation callers keep their established cache reuse behavior.
+    symbols, days, prices = _aligned_prices(db, portfolio.id, None, None, price_rows=series)
+    ledger_inputs = [dict(row) for row in db.execute(
+        select(PortfolioTransaction.__table__).where(PortfolioTransaction.portfolio_id == portfolio.id)
+        .order_by(PortfolioTransaction.transaction_date, PortfolioTransaction.created_at, PortfolioTransaction.id)
+    ).mappings()]
+    historical_symbols = {row["symbol"] for row in ledger_inputs if row["instrument_id"] is not None}
+    historical_series = {symbol: series[symbol] if symbol in series else price_series(db, symbol)
+                         for symbol in sorted(historical_symbols)}
+    constraints = _selected_ips_constraints(db, portfolio)
+    benchmark_symbol = _benchmark_symbol(db, portfolio, constraints)
+    risk_free = _effective_risk_free_rate(db, days[-1], str(constraints.get("risk_free_series_key")) if constraints.get("risk_free_series_key") else None)
+    benchmark_series = price_series(db, benchmark_symbol) if benchmark_symbol else []
+    ips_version = db.get(PortfolioIPSVersion, portfolio.selected_ips_version_id) if portfolio.selected_ips_version_id else None
+    recorded_actions = db.scalar(select(func.count()).select_from(CorporateAction)) or 0
+    def observation_dependencies(rows):
+        return [[row.trade_date, str(row.close), str(row.previous_close), row.source,
+                 row.source_url, row.artifact_id, row.artifact_sha256, row.observed_at,
+                 row.adjustment_state, row.quality_status] for row in rows]
+    fingerprint_data = {
+        "dependency_version": "portfolio_quant-v2",
+        "portfolio_id": portfolio.id,
+        "summary": summary.model_dump(mode="json"),
+        "price_observations": {symbol: observation_dependencies(rows) for symbol, rows in series.items()},
+        "performance_ledger_inputs": ledger_inputs,
+        "performance_price_observations": {symbol: observation_dependencies(rows) for symbol, rows in historical_series.items()},
+        "performance_limit": 5000, "performance_method": "ledger_time_weighted_return",
+        "ips_version_id": portfolio.selected_ips_version_id, "ips_constraints": constraints,
+        "required_return": str(ips_version.required_return) if ips_version and ips_version.required_return is not None else None,
+        "benchmark_symbol": benchmark_symbol, "benchmark_observations": observation_dependencies(benchmark_series),
+        "risk_free": risk_free, "shrinkage": shrinkage, "annualization": 252, "rolling_window": 60,
+        "recorded_corporate_action_count": recorded_actions,
+    }
+    fingerprint = sha256(_json(fingerprint_data).encode()).hexdigest()
+    run = db.scalar(select(AnalysisRun).where(
+        AnalysisRun.portfolio_id == portfolio.id, AnalysisRun.analysis_type == "portfolio_quant",
+        AnalysisRun.input_fingerprint == fingerprint, AnalysisRun.code_version == "quant-v2",
+        AnalysisRun.status == "completed",
+    ))
+    if run is not None:
+        result_data = _load(run.result_json)
+        result_data.update(run_id=run.id, data_cutoff=days[-1])
+        return result_data
+    performance = get_portfolio_performance(db, user, portfolio.id, limit=5000)
+    portfolio_returns_by_date = {
+        point.value_date: float(point.day_change_percent) / 100
+        for point in performance if point.day_change_percent is not None
+    }
     returns = return_matrix(prices)
     covariance = covariance_matrix(returns, shrinkage)
     correlation = correlation_matrix(returns)
-    summary = get_portfolio_summary(db, user, portfolio_id)
     market_values = {row.symbol: float(row.market_value) for row in summary.holdings}
     total = float(summary.total_value)
     weights = np.array([market_values[s] / total for s in symbols]) if total else np.full(len(symbols), 1 / len(symbols))
     cash_weight = float(summary.cash_balance) / total if total else 0.0
-    performance = get_portfolio_performance(db, user, portfolio.id, limit=5000)
-    portfolio_returns_by_date = {
-        point.value_date: float(point.day_change_percent) / 100
-        for point in performance
-        if point.day_change_percent is not None
-    }
     portfolio_returns = np.asarray(list(portfolio_returns_by_date.values()))
     if len(portfolio_returns) >= 30:
         metrics: dict[str, object] = risk_metrics(portfolio_returns).to_dict()
@@ -498,15 +544,11 @@ def portfolio_quant(db: Session, user: User, portfolio_id: str, shrinkage: float
     # Corporate-action coverage is not yet complete enough to make an adjusted
     # total-return claim. Recorded ledger actions are honored, but absence is not
     # treated as evidence that no action occurred.
-    recorded_actions = db.scalar(select(func.count()).select_from(CorporateAction)) or 0
     metrics["total_return_available"] = False
     metrics["total_return_unavailable_reason"] = (
         "Corporate-action source coverage is not certified complete; metrics include only recorded ledger actions and cash income."
     )
     metrics["recorded_corporate_action_count"] = int(recorded_actions)
-    constraints = _selected_ips_constraints(db, portfolio)
-    benchmark_symbol = _benchmark_symbol(db, portfolio, constraints)
-    risk_free = _effective_risk_free_rate(db, days[-1], str(constraints.get("risk_free_series_key")) if constraints.get("risk_free_series_key") else None)
     benchmark = None
     if benchmark_symbol and risk_free:
         benchmark = _benchmark_analysis(db, benchmark_symbol, portfolio_returns_by_date, float(risk_free["annual_rate"]))
@@ -516,24 +558,17 @@ def portfolio_quant(db: Session, user: User, portfolio_id: str, shrinkage: float
     else:
         benchmark = {"available": False, "reason": "No benchmark is configured in the confirmed IPS or portfolio"}
     contributions = risk_contributions(weights, covariance)
-    fingerprint_data = {
-        "portfolio_id": portfolio.id,
-        "holding_version": [(row.symbol, str(row.quantity), str(row.average_cost)) for row in summary.holdings],
-        "performance_tail": [(day.isoformat(), value) for day, value in list(portfolio_returns_by_date.items())[-10:]],
-        "performance_count": len(portfolio_returns_by_date),
-        "cash_balance": str(summary.cash_balance),
-        "data_cutoff": days[-1].isoformat(),
-        "benchmark": benchmark,
-        "shrinkage": shrinkage,
-        "history_start": portfolio.history_start.isoformat() if portfolio.history_start else None,
-    }
-    fingerprint = sha256(_json(fingerprint_data).encode()).hexdigest()
-    run = db.scalar(select(AnalysisRun).where(AnalysisRun.input_fingerprint == fingerprint))
     result_data = {"data_cutoff": days[-1].isoformat(), "symbols": symbols, "sample_size": len(days) - 1, "annualization": 252, "covariance_shrinkage": shrinkage, "portfolio": metrics, "benchmark": benchmark, "rolling": {"window": 60, "portfolio_volatility": _rolling_metrics(portfolio_returns)}, "covariance": covariance.tolist(), "correlation": correlation.tolist(), "risk_contributions": dict(zip(symbols, [float(value) for value in contributions["percentage"]], strict=True)), "warnings": [] if portfolio.history_complete else ["Performance before the migration/opening-balance baseline is unavailable."]}
-    if run is None:
-        run = AnalysisRun(portfolio_id=portfolio.id, analysis_type="portfolio_quant", input_fingerprint=fingerprint, data_cutoff=days[-1], estimator_json=_json({"covariance": "diagonal_shrinkage", "lambda": shrinkage, "annualization": 252}), code_version="quant-v1", result_json=_json(result_data), artifact_hashes_json="[]", status="completed")
+    result_data["price_provenance"] = [
+        {"symbol": symbol, "source_name": row.source, "source_url": row.source_url,
+         "artifact_id": row.artifact_id, "artifact_sha256": row.artifact_sha256,
+         "data_cutoff": row.trade_date}
+        for symbol, rows in series.items() for row in rows[-1:]
+    ]
+    if persist:
+        run = AnalysisRun(portfolio_id=portfolio.id, analysis_type="portfolio_quant", input_fingerprint=fingerprint, data_cutoff=days[-1], estimator_json=_json({"covariance": "diagonal_shrinkage", "lambda": shrinkage, "annualization": 252}), code_version="quant-v2", result_json=_json(result_data), artifact_hashes_json="[]", status="completed")
         db.add(run); db.commit(); db.refresh(run)
-    result_data["run_id"] = run.id
+    result_data["run_id"] = run.id if run else None
     result_data["data_cutoff"] = days[-1]
     return result_data
 
