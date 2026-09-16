@@ -71,3 +71,25 @@ def test_market_series_bounds_model_payload_and_returns_older_history_cursor(mon
     assert result["coverage"]["remaining"] == 40
     assert result["coverage"]["continuation"] == (first + timedelta(days=39)).isoformat()
     assert len(result["data"]["series"]["rows"]) == 260
+
+
+def test_market_series_accepts_single_latest_row(monkeypatch):
+    rows = [
+        {"date": date(2026, 8, 11), "close": 100, "source": "fixture"},
+        {"date": date(2026, 8, 12), "close": 101, "source": "fixture"},
+    ]
+    monkeypatch.setattr(
+        "app.tools.market_tools.market_series",
+        lambda *_args: {"instrument_id": "instrument-1", "symbol": "TEST", "series": rows},
+    )
+
+    result = _series(
+        None,
+        None,
+        MarketSeriesInput(instrument_id="instrument-1", limit=1),
+    )
+
+    assert result["coverage"]["returned"] == 1
+    assert result["data"]["series"]["rows"] == [
+        [date(2026, 8, 12), 101, "market_source_1"]
+    ]

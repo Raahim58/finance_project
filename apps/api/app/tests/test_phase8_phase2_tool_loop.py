@@ -289,10 +289,8 @@ def test_native_gemini_loop_continues_without_resending_prior_results(client, mo
     assert function_response["name"] == "market__freshness"
     assert function_response["call_id"] == "freshness-call"
     assert "Is market data fresh?" not in json.dumps(captured[1])
-    assert [tool["type"] for tool in captured[0]["tools"]][-2:] == [
-        "google_search",
-        "url_context",
-    ]
+    assert {tool["type"] for tool in captured[0]["tools"]} == {"function"}
+    assert response.json()["synthesis"]["web_grounding"]["status"] == "disabled"
     with SessionLocal() as db:
         execution = db.scalar(
             select(AssistantExecution)
@@ -891,6 +889,62 @@ def test_final_message_persistence_failure_is_distinct(client, monkeypatch):
         )
     assert execution.error_code == "response_persistence_failed"
     assert attempt.status == "completed"
+
+
+def test_final_message_persistence_retries_once_without_duplicate(client, monkeypatch):
+    headers, user_id = _auth_with_anthropic(
+        client, monkeypatch, email="response-retry@example.com"
+    )
+    provider = AnthropicProvider()
+
+    async def final_response(_url, _key, _request):
+        return {
+            "id": "response-persistence-retry",
+            "model": "claude-test",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "Persisted after retry."}],
+            "usage": {},
+        }
+
+    original_add = Session.add
+    failures = 0
+
+    def fail_first_message(self, instance, *args, **kwargs):
+        nonlocal failures
+        if (
+            isinstance(instance, AssistantMessage)
+            and instance.role == "assistant"
+            and failures == 0
+        ):
+            failures += 1
+            raise RuntimeError("simulated transient message persistence failure")
+        return original_add(self, instance, *args, **kwargs)
+
+    monkeypatch.setattr(provider, "_post", final_response)
+    monkeypatch.setattr("app.ai.tool_loop.get_provider", lambda _name: provider)
+    monkeypatch.setattr(Session, "add", fail_first_message)
+    response = client.post(
+        "/assistant/messages",
+        headers=headers,
+        json={"question": "Persist the final answer", "provider": "anthropic"},
+    )
+
+    assert response.status_code == 201
+    assert failures == 1
+    with SessionLocal() as db:
+        execution = db.scalar(
+            select(AssistantExecution).where(AssistantExecution.user_id == user_id)
+        )
+        messages = list(
+            db.scalars(
+                select(AssistantMessage).where(
+                    AssistantMessage.conversation_id == execution.conversation_id,
+                    AssistantMessage.role == "assistant",
+                )
+            )
+        )
+    assert execution.status == "completed"
+    assert len(messages) == 1
 
 
 def test_attempt_outcome_persistence_failure_keeps_sent_attempt_linkage(client, monkeypatch):

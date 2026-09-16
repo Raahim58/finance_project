@@ -409,10 +409,6 @@ class GeminiProvider(HTTPProvider):
         )
 
     @staticmethod
-    def _supports_combined_web_tools(model: str) -> bool:
-        return model.startswith("gemini-3")
-
-    @staticmethod
     def _initial_interaction_input(turns: list[ProviderTurn]) -> list[dict[str, Any]]:
         steps: list[dict[str, Any]] = []
         for turn in turns:
@@ -495,10 +491,8 @@ class GeminiProvider(HTTPProvider):
                 "max_output_tokens": options.max_output_tokens,
             },
         }
-        if self._supports_combined_web_tools(selected_model):
-            payload["tools"].extend(
-                [{"type": "google_search"}, {"type": "url_context"}]
-            )
+        # Built-in web tools stay disabled until availability is established for
+        # the configured Google project, not merely inferred from model support.
         if options.continuation_id:
             payload["previous_interaction_id"] = options.continuation_id
         if system:

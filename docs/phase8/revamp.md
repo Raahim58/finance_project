@@ -151,10 +151,12 @@ instructions are re-supplied as required by the API. Interaction IDs and complet
 results are encrypted in the durable checkpoint before the loop advances. Missing or
 expired remote state produces an explicit terminal error and is never silently replayed.
 
-Gemini 3 executions receive Google Search and URL Context alongside the internal read
-tools. URL citations returned by Gemini are preserved in Assistant citations and web-tool
-activity is exposed in redacted diagnostics. Exact prices, portfolio values, allocation
-math, and compliance remain backend calculations over stored database values.
+Built-in Google Search and URL Context are disabled for every Assistant request because
+model support does not establish quota for the configured Google project. External
+coverage is reported unavailable instead of causing the whole model request to fail.
+Any future enablement must be quota-aware and explicitly scoped to a request. Exact
+prices, portfolio values, allocation math, and compliance remain backend calculations
+over stored database values.
 
 Research facts and events can be selected by section, exact period range, cursor, and
 page size. Responses preserve requested records and continuation metadata; the server

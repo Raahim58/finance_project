@@ -16,7 +16,8 @@ Put the generated Fernet key in `ENCRYPTION_KEY`. User LLM keys are encrypted at
 The Phase 8 Assistant uses one model-directed, read-only native tool loop. New Gemini
 Assistant runs use the stateful Interactions API: the first turn sends the question,
 while later turns send `previous_interaction_id` and only new function results. Gemini 3
-models also receive Google Search and URL Context for current external verification.
+models do not receive Google Search or URL Context: model support does not guarantee the
+configured Google project has web-tool quota. External verification is reported missing.
 Assistant requests are owned by the API process and persisted in PostgreSQL; no Assistant Celery
 worker is used. Apply migrations through `0029_assistant_tool_loop` before starting the
 API. The migration adds the encrypted transcript checkpoint used for restart recovery.

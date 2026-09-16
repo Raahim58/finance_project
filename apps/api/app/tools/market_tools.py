@@ -18,7 +18,7 @@ class MarketSeriesInput(BaseModel):
     instrument_id: str
     start: date | None = None
     end: date | None = None
-    limit: int = Field(default=260, ge=2, le=260)
+    limit: int = Field(default=260, ge=1, le=260)
 
 
 class MacroInput(BaseModel):

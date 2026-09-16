@@ -484,7 +484,7 @@ async def test_gemini_interactions_continue_with_only_new_function_results(model
 
 
 @pytest.mark.asyncio
-async def test_gemini_3_interactions_enable_web_tools_and_preserve_citations(monkeypatch):
+async def test_gemini_3_interactions_do_not_enable_web_tools(monkeypatch):
     provider = GeminiProvider()
     captured = []
 
@@ -526,10 +526,7 @@ async def test_gemini_3_interactions_enable_web_tools_and_preserve_citations(mon
         "gemini-3-flash-preview",
     )
 
-    assert [tool["type"] for tool in captured[0]["tools"]][-2:] == [
-        "google_search",
-        "url_context",
-    ]
+    assert [tool["type"] for tool in captured[0]["tools"]] == ["function"]
     assert result.web_tool_activity[0]["type"] == "google_search_call"
     assert result.web_citations[0]["source_url"] == "https://example.com/event"
     assert result.web_citations[0]["title"] == "Event source"
