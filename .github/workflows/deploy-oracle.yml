@@ -1,0 +1,110 @@
+name: Deploy to Oracle
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: oracle-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_KEY"
+          test -n "$KNOWN_HOSTS"
+
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/oracle_deploy
+          chmod 600 ~/.ssh/oracle_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy exact commit
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER }}
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$ORACLE_HOST"
+          test -n "$ORACLE_USER"
+
+          ssh \
+            -i ~/.ssh/oracle_deploy \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$ORACLE_USER@$ORACLE_HOST" \
+            "bash -s -- '$DEPLOY_SHA'" <<'EOF'
+          set -euo pipefail
+
+          deploy_sha="$1"
+          cd /home/ubuntu/finance_project
+
+          exec 9>/tmp/psx-oracle-deploy.lock
+          if ! flock -n 9; then
+            echo "Another Oracle deployment is already running." >&2
+            exit 1
+          fi
+
+          echo "== Refusing deployment while ingestion is running =="
+          running_ingestion="$({
+            docker compose -f compose.oracle.yml \
+              --profile ingestion \
+              --profile scheduling \
+              ps --status running --services
+          } | grep -E '^(worker-|.*-scheduler$)' || true)"
+          if [[ -n "$running_ingestion" ]]; then
+            echo "Stop these ingestion services before deploying:" >&2
+            printf '%s\n' "$running_ingestion" >&2
+            exit 1
+          fi
+
+          echo "== Fetching the triggering commit =="
+          git fetch origin main
+          git cat-file -e "${deploy_sha}^{commit}"
+          git reset --hard "$deploy_sha"
+
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            echo "Tracked Oracle checkout is not clean after reset." >&2
+            exit 1
+          fi
+
+          echo "== Building API and web =="
+          docker compose -f compose.oracle.yml build api web
+
+          echo "== Running database migrations =="
+          docker compose -f compose.oracle.yml run --rm api \
+            alembic upgrade head
+
+          echo "== Redeploying API and web =="
+          docker compose -f compose.oracle.yml up -d api web
+
+          echo "== Waiting for application readiness =="
+          curl \
+            --fail \
+            --retry 20 \
+            --retry-all-errors \
+            --retry-delay 2 \
+            http://127.0.0.1:3000/api/ready
+
+          echo
+          echo "== Deployed services =="
+          docker compose -f compose.oracle.yml ps api web
+          printf 'DEPLOY SUCCESSFUL: %s\n' "$deploy_sha"
+          EOF
