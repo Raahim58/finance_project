@@ -366,7 +366,7 @@ class DpsMarketDataProvider(MarketDataProvider):
         return result
 
     def refresh_latest(self, db: Session) -> dict[str, Any]:
-        from app.ingestion.artifact_store import LocalArtifactStore
+        from app.ingestion.artifact_store import get_artifact_store
         from app.models.workstation import DataQualityIssue, DataSource, Instrument, MarketObservation, SourceArtifact
         from app.services.canonical_market_service import reconcile_market_observations
         from app.services.market_ingestion import persist_market_data
@@ -393,7 +393,7 @@ class DpsMarketDataProvider(MarketDataProvider):
         if data_source is None:
             data_source = DataSource(name="PSX DPS", source_type="market", base_url=self.base_url, priority=10, freshness_sla_minutes=1440, enabled=True, use_notes="Personal, non-commercial low-rate retrieval; redistribution prohibited.")
             db.add(data_source); db.flush()
-        store = LocalArtifactStore(settings.source_artifact_root)
+        store = get_artifact_store(settings)
         artifact_count = 0
         artifacts_by_date = {}
         for captured in self.captured_responses:

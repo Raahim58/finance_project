@@ -42,4 +42,4 @@ npm run generate:api
 npm run dev
 ```
 
-See [setup](docs/setup.md), [architecture](docs/architecture.md), [data sources](docs/data-sources.md), [formulas](docs/formulas.md), [assistant tools](docs/mcp-tools.md), and [trading safety](docs/trading-safety.md).
+See [setup](docs/setup.md), [private Oracle deployment](docs/oracle-deployment.md), [architecture](docs/architecture.md), [data sources](docs/data-sources.md), [formulas](docs/formulas.md), [assistant tools](docs/mcp-tools.md), and [trading safety](docs/trading-safety.md).

@@ -196,8 +196,10 @@ The bounded Pass 4 official-source canary is disabled by default. Its `.venv`
 rollout, hard budgets, included source matrix, smoke test, and live status command
 are documented in [Global Evidence Pass 4: official-source canary](global-evidence-pass4-official.md).
 
-`docker compose up -d` now starts these pools and their dedicated scheduler. Phase 2
-workers do not consume evidence queues. Live messages use Redis priority `0`;
+Workers and schedulers are opt-in Compose profiles: `docker compose up -d` starts
+only PostgreSQL and Redis. Use `--profile ingestion` for explicitly selected
+workers and `--profile scheduling` for explicitly selected producers; neither
+profile's services restart automatically. Phase 2 workers do not consume evidence queues. Live messages use Redis priority `0`;
 historical hydration uses priority `8`, concurrency two, and a separate queue. Every
 worker mounts the same `SOURCE_ARTIFACT_ROOT` because temporary bodies move between
 stages through `.evidence-spool`; Redis messages contain IDs only. Postgres leases and

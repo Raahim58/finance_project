@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     eia_api_key: str = ""
     research_report_limit_per_run: int = 20
     source_artifact_root: str = "./data/artifacts"
+    artifact_storage_backend: str = "local"
+    artifact_s3_endpoint_url: str = ""
+    artifact_s3_region: str = "us-east-1"
+    artifact_s3_bucket: str = "psx-artifacts"
+    artifact_s3_access_key: str = ""
+    artifact_s3_secret_key: str = ""
+    artifact_s3_addressing_style: str = "path"
+    evidence_spool_root: str = "./data/evidence-spool"
     embedding_dimensions: int = 384
     embedding_backend: str = "sentence_transformers"
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
@@ -132,6 +140,31 @@ class Settings(BaseSettings):
         if normalized not in {"hash", "sentence_transformers"}:
             raise ValueError("EMBEDDING_BACKEND must be hash or sentence_transformers")
         return normalized
+
+    @field_validator("artifact_storage_backend")
+    @classmethod
+    def validate_artifact_storage_backend(cls, value: str) -> str:
+        normalized = value.lower().strip()
+        if normalized not in {"local", "s3"}:
+            raise ValueError("ARTIFACT_STORAGE_BACKEND must be local or s3")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_artifact_storage(self) -> "Settings":
+        if self.artifact_storage_backend == "s3":
+            missing = [
+                name
+                for name, value in {
+                    "ARTIFACT_S3_ENDPOINT_URL": self.artifact_s3_endpoint_url,
+                    "ARTIFACT_S3_BUCKET": self.artifact_s3_bucket,
+                    "ARTIFACT_S3_ACCESS_KEY": self.artifact_s3_access_key,
+                    "ARTIFACT_S3_SECRET_KEY": self.artifact_s3_secret_key,
+                }.items()
+                if not value
+            ]
+            if missing:
+                raise ValueError(f"S3 artifact storage requires: {', '.join(missing)}")
+        return self
 
     @model_validator(mode="after")
     def guard_mock_data_in_production(self) -> "Settings":

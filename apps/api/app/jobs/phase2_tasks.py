@@ -2,7 +2,6 @@ from calendar import monthrange
 from datetime import UTC, date, datetime
 from decimal import Decimal
 import json
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -21,6 +20,8 @@ from app.services.ingestion_persistence import source, store_artifact
 from app.services.market_ingestion import persist_market_data
 from app.services.market_providers import DpsMarketDataProvider
 from app.services.rag_service import create_document_from_pages, parse_pdf
+from app.ingestion.artifact_store import get_artifact_store
+from app.core.config import settings
 
 
 RETRY = dict(autoretry_for=(httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError), retry_backoff=True, retry_backoff_max=900, retry_jitter=True, max_retries=3)
@@ -193,7 +194,7 @@ def financial_extract(document_id: str) -> dict[str, object]:
         try:
             artifact = db.get(SourceArtifact, document.artifact_id)
             if artifact is None or not artifact.storage_path: raise ValueError("Downloaded report artifact is unavailable")
-            content = Path(artifact.storage_path).read_bytes(); pages, classification, parser_diagnostics = parse_financial_pdf(content)
+            content = get_artifact_store(settings).get(artifact.storage_path); pages, classification, parser_diagnostics = parse_financial_pdf(content)
             period_end = parse_period_end(document.title) or document.published_date
             method = "ocr" if classification == "ocr" else "text_layout"
             confidence = Decimal("0.700000") if classification == "ocr" else Decimal("0.900000")

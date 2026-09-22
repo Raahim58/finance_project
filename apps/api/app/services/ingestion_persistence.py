@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.ingestion.artifact_store import LocalArtifactStore
+from app.ingestion.artifact_store import get_artifact_store
 from app.models.workstation import DataSource, MacroObservation, MacroSeries, SourceArtifact
 from app.providers.macro.official_workbooks import MacroObservation as ParsedMacroObservation
 
@@ -31,7 +31,7 @@ def store_artifact(db: Session, data_source: DataSource, content: bytes, *, url:
     existing = db.scalar(select(SourceArtifact).where(*identity))
     if existing: return existing
     suffix = next((value for marker, value in (("pdf", ".pdf"), ("json", ".json"), ("csv", ".csv"), ("excel", ".xlsx")) if marker in content_type.lower()), ".bin")
-    stored = LocalArtifactStore(settings.source_artifact_root).put(content, suffix)
+    stored = get_artifact_store(settings).put(content, suffix)
     row = SourceArtifact(data_source_id=data_source.id, source_url=url, http_method=method, request_fingerprint=request_fingerprint, effective_at=effective_at, sha256=digest, content_type=content_type, storage_path=stored.storage_path, parser_version=parser_version, status="parsed", response_metadata_json=json.dumps({"bytes": len(content)}))
     try:
         with db.begin_nested():

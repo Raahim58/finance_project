@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+compose=(docker compose -f compose.oracle.yml)
+
+usage() {
+  echo "Usage: $0 status | run market | start phase2|macro|evidence | stop phase2|macro|evidence|all"
+}
+
+case "${1:-}" in
+  status)
+    "${compose[@]}" --profile ingestion --profile scheduling ps
+    ;;
+  run)
+    [[ "${2:-}" == "market" ]] || { usage; exit 2; }
+    "${compose[@]}" run --rm api python -m app.jobs.scheduler --once
+    ;;
+  start)
+    case "${2:-}" in
+      phase2) "${compose[@]}" --profile ingestion up -d worker-broad-fundamentals worker-dps-history worker-financial-download worker-extract ;;
+      macro) "${compose[@]}" --profile ingestion up -d worker-macro ;;
+      evidence) "${compose[@]}" --profile ingestion up -d worker-evidence-discovery worker-evidence-fetch worker-evidence-parse worker-evidence-pdf worker-evidence-index worker-historical-hydrate ;;
+      *) usage; exit 2 ;;
+    esac
+    ;;
+  stop)
+    case "${2:-}" in
+      phase2) "${compose[@]}" stop phase2-scheduler worker-broad-fundamentals worker-dps-history worker-financial-download worker-extract ;;
+      macro) "${compose[@]}" stop macro-scheduler worker-macro ;;
+      evidence) "${compose[@]}" stop evidence-scheduler worker-evidence-discovery worker-evidence-fetch worker-evidence-parse worker-evidence-pdf worker-evidence-index worker-historical-hydrate ;;
+      all) "${compose[@]}" --profile ingestion --profile scheduling stop phase2-scheduler macro-scheduler evidence-scheduler worker-broad-fundamentals worker-dps-history worker-financial-download worker-extract worker-macro worker-evidence-discovery worker-evidence-fetch worker-evidence-parse worker-evidence-pdf worker-evidence-index worker-historical-hydrate ;;
+      *) usage; exit 2 ;;
+    esac
+    ;;
+  *) usage; exit 2 ;;
+esac

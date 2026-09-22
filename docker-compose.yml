@@ -1,7 +1,7 @@
 x-worker-image: &worker-image
   image: psx-ai-portfolio-api:local
   pull_policy: build
-  restart: unless-stopped
+  restart: "no"
   build:
     context: ./apps/api
 
@@ -16,6 +16,7 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U psx -d psx_ai"]
       interval: 10s
@@ -29,9 +30,11 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    restart: unless-stopped
 
   worker-broad-fundamentals:
     <<: *worker-image
+    profiles: ["ingestion"]
     command: celery -A app.celery_app worker -Q broad_fundamentals --concurrency=20 --loglevel=INFO
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
@@ -46,6 +49,7 @@ services:
 
   worker-dps-history:
     <<: *worker-image
+    profiles: ["ingestion"]
     command: celery -A app.celery_app worker -Q dps_history --concurrency=24 --loglevel=INFO
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
@@ -60,6 +64,7 @@ services:
 
   worker-financial-download:
     <<: *worker-image
+    profiles: ["ingestion"]
     command: celery -A app.celery_app worker -Q financial_download --concurrency=12 --loglevel=INFO
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
@@ -74,6 +79,7 @@ services:
 
   worker-extract:
     <<: *worker-image
+    profiles: ["ingestion"]
     command: celery -A app.celery_app worker -Q financial_extract --concurrency=3 --loglevel=INFO
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
@@ -88,6 +94,7 @@ services:
 
   phase2-scheduler:
     <<: *worker-image
+    profiles: ["scheduling"]
     command: python -m app.jobs.phase2_scheduler
     environment:
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
@@ -103,6 +110,7 @@ services:
 
   worker-evidence-discovery:
     <<: *worker-image
+    profiles: ["ingestion"]
     command: celery -A app.celery_app worker -Q evidence_discovery --concurrency=4 --loglevel=INFO
     environment: &evidence-environment
       DATABASE_URL: postgresql+psycopg://psx:psx@postgres:5432/psx_ai
@@ -118,6 +126,7 @@ services:
 
   worker-evidence-fetch:
     <<: *worker-image
+    profiles: ["ingestion"]
     command: celery -A app.celery_app worker -Q evidence_fetch --concurrency=16 --loglevel=INFO
     environment: *evidence-environment
     volumes: *evidence-volumes
@@ -125,6 +134,7 @@ services:
 
   worker-evidence-parse:
     <<: *worker-image
+    profiles: ["ingestion"]
     command: celery -A app.celery_app worker -Q evidence_parse --concurrency=6 --loglevel=INFO
     environment: *evidence-environment
     volumes: *evidence-volumes
@@ -132,6 +142,7 @@ services:
 
   worker-evidence-pdf:
     <<: *worker-image
+    profiles: ["ingestion"]
     command: celery -A app.celery_app worker -Q evidence_pdf --concurrency=2 --loglevel=INFO
     environment: *evidence-environment
     volumes: *evidence-volumes
@@ -139,6 +150,7 @@ services:
 
   worker-evidence-index:
     <<: *worker-image
+    profiles: ["ingestion"]
     command: celery -A app.celery_app worker -Q evidence_index --concurrency=4 --loglevel=INFO
     environment: *evidence-environment
     volumes: *evidence-volumes
@@ -146,6 +158,7 @@ services:
 
   worker-historical-hydrate:
     <<: *worker-image
+    profiles: ["ingestion"]
     command: celery -A app.celery_app worker -Q historical_hydrate --concurrency=2 --loglevel=INFO
     environment: *evidence-environment
     volumes: *evidence-volumes
@@ -153,6 +166,7 @@ services:
 
   evidence-scheduler:
     <<: *worker-image
+    profiles: ["scheduling"]
     command: python -m app.jobs.evidence_scheduler
     environment: *evidence-environment
     volumes: *evidence-volumes

@@ -70,8 +70,7 @@ class EvidenceSpool:
     """Bounded local/shared-volume spool; paths never originate from source input."""
 
     def __init__(self, root: str | Path | None = None) -> None:
-        base = Path(root or settings.source_artifact_root)
-        self.root = base / ".evidence-spool"
+        self.root = Path(root or settings.evidence_spool_root)
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, candidate_id: str, suffix: str) -> Path:

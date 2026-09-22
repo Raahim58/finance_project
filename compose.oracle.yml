@@ -1,0 +1,197 @@
+x-api-image: &api-image
+  image: psx-ai-portfolio-api:oracle
+  build:
+    context: ./apps/api
+  env_file: .env.oracle
+
+x-worker: &worker
+  <<: *api-image
+  restart: "no"
+  profiles: ["ingestion"]
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    minio:
+      condition: service_started
+
+x-evidence-worker: &evidence-worker
+  <<: *worker
+  volumes:
+    - evidence_spool:/data/evidence-spool
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    env_file: .env.oracle
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ${PSX_DATA_ROOT:-/srv/psx}/postgres:/var/lib/postgresql/data
+      - ./ops/oracle/init-databases.sql:/docker-entrypoint-initdb.d/01-databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - ${PSX_DATA_ROOT:-/srv/psx}/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    env_file: .env.oracle
+    restart: unless-stopped
+    command: server /data --console-address :9001
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - ${PSX_DATA_ROOT:-/srv/psx}/minio:/data
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    env_file: .env.oracle
+    restart: "no"
+    depends_on:
+      - minio
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        until mc alias set psx http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 2; done;
+        mc mb --ignore-existing psx/"$$ARTIFACT_S3_BUCKET";
+        mc anonymous set none psx/"$$ARTIFACT_S3_BUCKET"
+
+  api:
+    <<: *api-image
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    expose:
+      - "8000"
+    volumes:
+      - ${PSX_DATA_ROOT:-/srv/psx}/import:/import:ro
+      - ${PSX_DATA_ROOT:-/srv/psx}/backups:/backups
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  web:
+    image: psx-ai-portfolio-web:oracle
+    build:
+      context: ./apps/web
+    env_file: .env.oracle
+    environment:
+      API_INTERNAL_BASE_URL: http://api:8000
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  worker-broad-fundamentals:
+    <<: *worker
+    command: celery -A app.celery_app worker -Q broad_fundamentals --concurrency=2 --loglevel=INFO
+
+  worker-dps-history:
+    <<: *worker
+    command: celery -A app.celery_app worker -Q dps_history --concurrency=4 --loglevel=INFO
+
+  worker-financial-download:
+    <<: *worker
+    command: celery -A app.celery_app worker -Q financial_download --concurrency=4 --loglevel=INFO
+
+  worker-extract:
+    <<: *worker
+    command: celery -A app.celery_app worker -Q financial_extract --concurrency=1 --loglevel=INFO
+
+  worker-macro:
+    <<: *worker
+    command: celery -A app.celery_app worker -P threads -n macro@%h -Q macro --concurrency=2 --loglevel=INFO
+
+  worker-evidence-discovery:
+    <<: *evidence-worker
+    command: celery -A app.celery_app worker -n discovery@%h -Q evidence_discovery --concurrency=2 --loglevel=INFO
+
+  worker-evidence-fetch:
+    <<: *evidence-worker
+    command: celery -A app.celery_app worker -n fetch@%h -Q evidence_fetch --concurrency=4 --loglevel=INFO
+
+  worker-evidence-parse:
+    <<: *evidence-worker
+    command: celery -A app.celery_app worker -n parse@%h -Q evidence_parse --concurrency=2 --loglevel=INFO
+
+  worker-evidence-pdf:
+    <<: *evidence-worker
+    command: celery -A app.celery_app worker -n pdf@%h -Q evidence_pdf --concurrency=1 --loglevel=INFO
+
+  worker-evidence-index:
+    <<: *evidence-worker
+    command: celery -A app.celery_app worker -n index@%h -Q evidence_index --concurrency=1 --loglevel=INFO
+
+  worker-historical-hydrate:
+    <<: *evidence-worker
+    command: celery -A app.celery_app worker -n historical@%h -Q historical_hydrate --concurrency=1 --loglevel=INFO
+
+  phase2-scheduler:
+    <<: *api-image
+    profiles: ["scheduling"]
+    restart: "no"
+    command: python -m app.jobs.phase2_scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  macro-scheduler:
+    <<: *api-image
+    profiles: ["scheduling"]
+    restart: "no"
+    command: python -m app.jobs.macro_scheduler
+    environment:
+      MACRO_INGESTION_ENABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  evidence-scheduler:
+    <<: *api-image
+    profiles: ["scheduling"]
+    restart: "no"
+    command: python -m app.jobs.evidence_scheduler
+    environment:
+      EVIDENCE_ENABLED: "true"
+    volumes:
+      - evidence_spool:/data/evidence-spool
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  evidence_spool:
