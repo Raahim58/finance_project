@@ -1,0 +1,13 @@
+execution_id,provider,model,call,input_tokens,output_tokens,latency_ms,finish_reason
+a160c0d7-25c8-44b1-aa73-c50b6460a210,anthropic,claude-sonnet-5,1,7037,1478,13314,tool_use
+a160c0d7-25c8-44b1-aa73-c50b6460a210,anthropic,claude-sonnet-5,2,28126,7448,72763,end_turn
+3959938b-9862-4017-9758-f184f0279215,anthropic,claude-sonnet-5,1,6984,135,2733,tool_use
+3959938b-9862-4017-9758-f184f0279215,anthropic,claude-sonnet-5,2,16091,12954,123869,end_turn
+e7ad279f-2782-453a-b897-31fd7b980c7a,anthropic,claude-sonnet-5,1,6970,411,4320,tool_use
+e7ad279f-2782-453a-b897-31fd7b980c7a,anthropic,claude-sonnet-5,2,15658,358,4254,tool_use
+e7ad279f-2782-453a-b897-31fd7b980c7a,anthropic,claude-sonnet-5,3,21060,4011,36263,end_turn
+df30c999-14e9-4561-b464-8123738dc2ec,anthropic,claude-sonnet-5,1,7056,2026,17195,tool_use
+df30c999-14e9-4561-b464-8123738dc2ec,anthropic,claude-sonnet-5,2,32910,9759,96275,end_turn
+98bdede8-f290-4804-a16d-149e9a665e7f,anthropic,claude-sonnet-5,1,7256,230,2925,tool_use
+98bdede8-f290-4804-a16d-149e9a665e7f,anthropic,claude-sonnet-5,2,14333,1040,9271,tool_use
+98bdede8-f290-4804-a16d-149e9a665e7f,anthropic,claude-sonnet-5,3,32573,1718,16955,end_turn
