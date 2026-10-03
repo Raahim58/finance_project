@@ -18,8 +18,8 @@ function invalidateCache(path: string) {
   for (const key of Array.from(pendingRequests.keys())) if (key.includes(portfolioScope)) pendingRequests.delete(key);
 }
 export function getToken() { return typeof window === "undefined" ? null : window.localStorage.getItem(TOKEN_KEY); }
-export function setToken(token: string) { clearApiCache(); window.localStorage.setItem(TOKEN_KEY, token); }
-export function clearToken() { clearApiCache(); window.localStorage.removeItem(TOKEN_KEY); }
+export function setToken(token: string) { clearApiCache(); window.localStorage.setItem(TOKEN_KEY, token); window.dispatchEvent(new Event("psx-auth-change")); }
+export function clearToken() { clearApiCache(); window.localStorage.removeItem(TOKEN_KEY); window.dispatchEvent(new Event("psx-auth-change")); }
 
 async function ensureSampleToken(): Promise<string> {
   const existing = getToken();

@@ -34,11 +34,12 @@ from app.services.market_ingestion import generate_mock_market_data
 
 
 def _anthropic_tool_results(payload):
-    return [
-        json.loads(block["content"])
-        for block in payload["messages"][-1]["content"]
-        if block["type"] == "tool_result"
-    ]
+    # Phase 11 may append a final-answer instruction after the latest tool results.
+    for message in reversed(payload["messages"]):
+        content = message.get("content")
+        if isinstance(content, list) and any(block.get("type") == "tool_result" for block in content):
+            return [json.loads(block["content"]) for block in content if block["type"] == "tool_result"]
+    return []
 
 
 def _mock_market(monkeypatch):
@@ -465,6 +466,12 @@ def test_parallel_tool_workers_are_bounded_to_four_and_keep_call_order(client, m
 
 
 def test_request_categories_use_real_registry_services_and_pagination(client, monkeypatch):
+    # This fixture verifies registry/service coverage; budget exhaustion has separate
+    # Phase 11 fixtures. Its full mock universe is intentionally verbose.
+    from app.services import assistant_policy
+    fixture_policy = assistant_policy.selected_policy() | {"input": 200000, "cumulative_input": 1000000}
+    monkeypatch.setattr(assistant_policy, "execution_policy", lambda: fixture_policy)
+    monkeypatch.setattr(assistant_policy, "selected_policy", lambda: fixture_policy)
     headers, _ = _auth_with_anthropic(client, monkeypatch, email="categories@example.com")
     instruments = _mock_market(monkeypatch)
     first, second = instruments[:2]
@@ -515,6 +522,9 @@ def test_request_categories_use_real_registry_services_and_pagination(client, mo
         },
     ]
 
+    # Keep six provider calls including the final answer: batch the final two reads.
+    responses[4]["content"].extend(responses.pop(5)["content"])
+
     async def fake_post(_url, _key, payload):
         captured.append(payload)
         return responses.pop(0)
@@ -532,7 +542,8 @@ def test_request_categories_use_real_registry_services_and_pagination(client, mo
     )
 
     assert response.status_code == 201, response.text
-    results = [_anthropic_tool_results(payload)[0] for payload in captured[1:7]]
+    results = [result for payload in captured[1:] for result in _anthropic_tool_results(payload)]
+    assert len(results) == 6, response.json()["synthesis"]
     assert results[0]["coverage"]["returned"] >= 2
     assert results[1]["coverage"]["returned"] == 1
     assert results[1]["coverage"]["remaining"] == len(instruments) - 1

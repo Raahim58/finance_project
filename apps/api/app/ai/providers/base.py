@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Callable, Awaitable
 
 
 BlockType = Literal["text", "tool_call", "tool_result", "image"]
@@ -77,6 +77,10 @@ class ProviderTool:
     input_schema: dict[str, Any]
 
 
+class ProviderQueueTimeout(TimeoutError):
+    """The request never acquired its credential slot."""
+
+
 class ProviderRequestError(RuntimeError):
     """Sanitized non-success response metadata from an external LLM provider."""
 
@@ -149,10 +153,10 @@ class LLMProvider(ABC):
 
     async def chat_with_options(self, api_key, messages, model=None, *, options):
         import asyncio
-
+        from app.core.config import settings
         token = call_options.set(options)
         try:
-            async with asyncio.timeout(options.deadline_seconds):
+            async with asyncio.timeout(options.deadline_seconds + (settings.assistant_queue_timeout_seconds if self.name == "zai" else 0)):
                 return await self.chat(api_key, messages, model)
         finally:
             call_options.reset(token)
@@ -192,10 +196,18 @@ class LLMProvider(ABC):
     ) -> LLMProviderResult:
         import asyncio
 
+        from app.core.config import settings
         token = call_options.set(options)
         try:
-            async with asyncio.timeout(options.deadline_seconds):
-                return await self.tool_chat(api_key, turns, tools, model)
+            async with asyncio.timeout(options.deadline_seconds + (settings.assistant_queue_timeout_seconds if self.name == "zai" else 0)):
+                result = await self.tool_chat(api_key, turns, tools, model)
+                if options.on_event:
+                    for block in result.turn.content if result.turn else []:
+                        if block.type == "tool_call":
+                            await emit_provider_event(ProviderEvent("tool_call", tool=block))
+                    await emit_provider_event(ProviderEvent("usage", usage={"input_tokens": result.input_tokens, "output_tokens": result.output_tokens}))
+                    await emit_provider_event(ProviderEvent("completion", result=result))
+                return result
         finally:
             call_options.reset(token)
 
@@ -209,12 +221,43 @@ class LLMProvider(ABC):
         messages: list[dict[str, str]],
         model: str | None = None,
     ) -> AsyncIterator[str]:
-        result = await self.chat(api_key=api_key, messages=messages, model=model)
-        yield result.content
+        turns = [ProviderTurn(item["role"], [ContentBlock("text", text=item["content"])]) for item in messages]
+        async for event in self.stream_tool_chat(api_key, turns, [], model):
+            if event.kind == "text_delta":
+                yield event.text or ""
+
+    async def stream_tool_chat(self, api_key, turns, tools, model=None, *, options=None):
+        import asyncio
+        from dataclasses import replace
+        queue = asyncio.Queue()
+        async def emit(event):
+            await queue.put(event)
+        async def produce():
+            try:
+                await self.tool_chat_with_options(api_key, turns, tools, model,
+                    options=replace(options or ProviderCallOptions(), stream=True, on_event=emit))
+            finally:
+                await queue.put(None)
+        task = asyncio.create_task(produce())
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    await task
+                    return
+                yield event
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 @dataclass(frozen=True)
 class ProviderCallOptions:
+    stream: bool = False
+    thinking: bool = False
+    on_event: Callable[["ProviderEvent"], Awaitable[None]] | None = None
+    request_guard: Callable[[dict], None] | None = None
     response_schema: dict | None = None
     max_output_tokens: int = 4096
     deadline_seconds: float = 30
@@ -233,3 +276,18 @@ class ProviderCapabilities:
 call_options: ContextVar[ProviderCallOptions] = ContextVar(
     "provider_call_options", default=ProviderCallOptions()
 )
+
+
+@dataclass(frozen=True)
+class ProviderEvent:
+    kind: Literal["text_delta", "tool_call", "usage", "completion", "waiting", "started"]
+    text: str | None = None
+    tool: ContentBlock | None = None
+    result: LLMProviderResult | None = None
+    usage: dict[str, Any] = field(default_factory=dict)
+
+
+async def emit_provider_event(event):
+    callback = call_options.get().on_event
+    if callback:
+        await callback(event)

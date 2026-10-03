@@ -21,6 +21,7 @@ from app.ai.providers.base import (
     LLMProviderResult,
     ProviderCallOptions,
     ProviderRequestError,
+    ProviderQueueTimeout,
     ProviderTool,
     ProviderTurn,
 )
@@ -43,6 +44,7 @@ from app.tools.registry import expand_model_data, normalize_json, tool_result
 CITATION_RE = re.compile(r"\[\[([A-Za-z][A-Za-z0-9_-]{0,63})\]\]")
 logger = logging.getLogger(__name__)
 TRUNCATED_REASONS = {
+    "length",
     "max_tokens",
     "model_context_window_exceeded",
     "MAX_TOKENS",
@@ -90,6 +92,8 @@ def _turns(checkpoint: dict[str, Any]) -> list[ProviderTurn]:
 
 
 def _company_tool_allowed(name: str, arguments=None) -> bool:
+    if name == "search_conversation_history":
+        return True
     if not name.startswith(("market.", "research.", "documents.")):
         return False
     arguments = arguments or {}
@@ -102,7 +106,11 @@ def _company_tool_allowed(name: str, arguments=None) -> bool:
 
 def _catalog(company_only=False) -> list[ProviderTool]:
     return [ProviderTool(**item) for item in build_tool_registry().model_catalog()
-            if not company_only or _company_tool_allowed(item["name"])]
+            if not company_only or _company_tool_allowed(item["name"])] + [ProviderTool(
+                "search_conversation_history", "Retrieve older discussion in this conversation. Historical claims are not current evidence.",
+                {"type": "object", "properties": {"query": {"type": "string", "maxLength": 300},
+                 "before_message_id": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 20}},
+                 "additionalProperties": False})]
 
 
 def _update_allowance(checkpoint: dict[str, Any]) -> None:
@@ -171,6 +179,8 @@ def _persist_final_message(
                     id=message_id,
                     conversation_id=owned_conversation,
                     role="assistant",
+                    execution_id=identifier,
+                    context_json=(message_db.scalar(select(AssistantMessage.context_json).where(AssistantMessage.execution_id == identifier, AssistantMessage.role == "user")) or "{}"),
                     content=answer,
                     evidence_json=evidence_json,
                     tool_trace_json=tool_trace_json,
@@ -248,28 +258,7 @@ def _initial_checkpoint(
             {"instrument_id": row.id, "symbol": row.symbol, "name": row.name} for row in mentioned
         ],
     }
-    history_rows = list(
-        db.scalars(
-            select(AssistantMessage)
-            .where(AssistantMessage.conversation_id == conversation_id)
-            .order_by(AssistantMessage.created_at, AssistantMessage.id)
-        )
-    )
-    if (
-        history_rows
-        and history_rows[-1].role == "user"
-        and history_rows[-1].content == payload.question
-    ):
-        history_rows = history_rows[:-1]
     history: list[ProviderTurn] = []
-    used = 0
-    for row in reversed(history_rows):
-        size = len(row.content)
-        if len(history) >= 12 or used + size > 12_000:
-            break
-        history.append(ProviderTurn(row.role, [ContentBlock("text", text=row.content)]))
-        used += size
-    history.reverse()
     turns = [
         ProviderTurn(
             "system",
@@ -349,51 +338,94 @@ def _request_record(turns: list[ProviderTurn], tools: list[ProviderTool]) -> lis
     ]
 
 
+def _deduplicate_tool_evidence(turns):
+    """Project exact repeated results as references; retain complete originals."""
+    from dataclasses import replace
+    seen = {}
+    projected = []
+    for turn in turns:
+        blocks = []
+        for block in turn.content:
+            if block.type == "tool_result" and not block.is_error:
+                fingerprint = json.dumps(block.result, sort_keys=True, default=str)
+                if len(fingerprint) > 256 and fingerprint in seen:
+                    block = replace(block, result={"duplicate_of_tool_call_id": seen[fingerprint],
+                        "note": "Exact same evidence as the earlier complete tool result; reuse that record."})
+                elif block.id:
+                    seen[fingerprint] = block.id
+            blocks.append(block)
+        projected.append(replace(turn, content=blocks))
+    return projected
+
+
 async def _provider_turn(
     provider, api_key, model, turns, tools, continuation_id=None
 ) -> LLMProviderResult:
-    logical_record = _request_record(turns, tools)
-    estimated = estimate_tokens(json.loads(logical_record[0]["content"]))
-    options = ProviderCallOptions(
-        max_output_tokens=4096,
-        deadline_seconds=settings.assistant_execution_deadline_seconds,
-        continuation_id=continuation_id,
-    )
-    request_record = logical_record
-    schema_version = "phase8-native-tool-turn-1"
-    if hasattr(provider, "interaction_payload"):
-        transport_payload = provider.interaction_payload(
-            turns, tools, model, options=options
-        )
-        request_record = [
-            {
-                "role": "user",
-                "content": json.dumps(
-                    transport_payload, default=str, separators=(",", ":")
-                ),
-            }
-        ]
-        schema_version = "gemini-interactions-v1beta-1"
-    transmitted_bytes = len(request_record[0]["content"].encode())
-    cached = diagnostics.recovered_response(
-        "tool_loop_turn", provider.name, model or provider.default_model, request_record
-    )
-    if cached is not None:
-        return cached
-    try:
-        attempt_id = diagnostics.begin_attempt(
-            "tool_loop_turn",
-            provider.name,
-            model or provider.default_model,
-            request_record,
-            estimated,
-            transmitted_input_bytes=transmitted_bytes,
-            schema_version=schema_version,
-        )
-    except ValueError as exc:
-        raise AssistantTerminalError(str(exc)) from exc
-    except Exception as exc:
-        raise AssistantTerminalError("attempt_persistence_failed") from exc
+    from app.services.assistant_policy import execution_policy
+    from app.services.assistant_events import StreamBatch
+    from app.ai.providers.http_placeholders import HTTPProvider
+    policy = execution_policy()
+    identifier = diagnostics.execution_id.get()
+    # A response committed before a checkpoint crash is local recovery, never
+    # another provider request. Usage in the checkpoint marks consumed responses.
+    from app.models.assistant_execution import AssistantAttempt
+    with SessionLocal() as recovery_db:
+        row = recovery_db.get(AssistantExecution, identifier)
+        saved = json.loads(decrypt_secret(row.transcript_encrypted)) if row.transcript_encrypted else {}
+        completed = list(recovery_db.scalars(select(AssistantAttempt).where(
+            AssistantAttempt.execution_id == identifier, AssistantAttempt.operation == "tool_loop_turn",
+            AssistantAttempt.status == "completed").order_by(AssistantAttempt.created_at)))
+        if len(completed) > saved.get("usage", {}).get("model_calls", 0):
+            pending = completed[-1]
+            if not pending.payload_encrypted:
+                raise AssistantTerminalError("provider_attempt_uncertain")
+            recorded = json.loads(decrypt_secret(pending.payload_encrypted))
+            recovered = diagnostics.recovered_response("tool_loop_turn", provider.name,
+                model or provider.default_model, recorded.get("messages", []))
+            if recovered is None:
+                raise AssistantTerminalError("provider_attempt_uncertain")
+            return recovered
+    with SessionLocal() as budget_db:
+        execution = budget_db.get(AssistantExecution, identifier)
+        accounting = json.loads(execution.accounting_json)
+        elapsed = (datetime.now(UTC) - execution.started_at.replace(tzinfo=UTC)).total_seconds() if execution.started_at else 0
+        remaining_deadline = settings.assistant_execution_deadline_seconds - elapsed + accounting.get("queue_ms", 0) / 1000
+    if remaining_deadline <= 0:
+        raise AssistantTerminalError("execution_deadline_exhausted")
+    calls = accounting.get("calls", 0)
+    output_used = accounting.get("output", 0)
+    if calls >= policy["calls"] or output_used >= policy["cumulative_output"]:
+        raise AssistantTerminalError("question_budget_exhausted")
+    output_cap = min(policy["output"], policy["cumulative_output"] - output_used)
+    turns = _deduplicate_tool_evidence(turns)
+    stream = StreamBatch(identifier)
+    attempt_id = None
+    estimated = 0
+    transmitted_bytes = 0
+    def guard(payload):
+        nonlocal attempt_id, estimated, transmitted_bytes
+        estimated = estimate_tokens(payload)
+        transmitted_bytes = len(json.dumps(payload, default=str, separators=(",", ":")).encode())
+        if estimated > policy["input"]:
+            raise AssistantTerminalError("question_budget_exhausted")
+        with SessionLocal.begin() as budget_db:
+            row = budget_db.get(AssistantExecution, identifier, with_for_update=True)
+            if row.cancel_requested_at:
+                raise asyncio.CancelledError()
+            if row.reserved_input_tokens + estimated > policy["cumulative_input"]:
+                raise AssistantTerminalError("question_budget_exhausted")
+            current = json.loads(row.accounting_json)
+            current["calls"] = current.get("calls", 0) + 1
+            row.accounting_json = json.dumps(current)
+        record = [{"role": "user", "content": json.dumps(payload, default=str, separators=(",", ":"))}]
+        attempt_id = diagnostics.begin_attempt("tool_loop_turn", provider.name, model or provider.default_model,
+                                              record, estimated, transmitted_input_bytes=transmitted_bytes,
+                                              schema_version="phase11-serialized-request-v1")
+    options = ProviderCallOptions(max_output_tokens=output_cap,
+        deadline_seconds=remaining_deadline, continuation_id=continuation_id,
+        thinking=True, stream=True, on_event=stream, request_guard=guard)
+    if not isinstance(provider, HTTPProvider):
+        guard(json.loads(_request_record(turns, tools)[0]["content"]))
     started = time.perf_counter()
     try:
         result = await provider.tool_chat_with_options(
@@ -403,7 +435,13 @@ async def _provider_turn(
             model,
             options=options,
         )
+    except asyncio.CancelledError:
+        stream.close()
+        raise
     except Exception as exc:
+        stream.close()
+        if isinstance(exc, AssistantTerminalError):
+            raise
         try:
             diagnostics.finish_attempt(
                 attempt_id,
@@ -422,11 +460,22 @@ async def _provider_turn(
                 )
             )
             code = "provider_interaction_expired" if expired else f"provider_http_{exc.status_code}"
+        elif isinstance(exc, ProviderQueueTimeout):
+            code = "provider_queue_timeout"
         elif isinstance(exc, TimeoutError):
             code = "provider_timeout"
         else:
             code = "provider_transport_error"
         raise AssistantTerminalError(code) from exc
+    stream.close()
+    if result.output_tokens is None:
+        from dataclasses import replace
+        result = replace(result, output_tokens=estimate_tokens(result.turn.to_dict() if result.turn else result.content))
+    with SessionLocal.begin() as budget_db:
+        row = budget_db.get(AssistantExecution, identifier, with_for_update=True)
+        accounting = json.loads(row.accounting_json)
+        accounting["output"] = accounting.get("output", 0) + (result.output_tokens if result.output_tokens is not None else output_cap)
+        row.accounting_json = json.dumps(accounting)
     try:
         diagnostics.finish_attempt(
             attempt_id,
@@ -446,6 +495,8 @@ def _definitions():
 
 def _cost_units(name: str) -> int:
     definition = _definitions().get(name)
+    if name == "search_conversation_history":
+        return 1
     if definition is None:
         return 0
     return {"low": 1, "medium": 3, "high": 6}.get(definition.cost_class, 6)
@@ -462,6 +513,20 @@ def _reserve_calls(checkpoint: dict[str, Any], calls: list[ContentBlock]) -> Non
 
 
 def _sync_tool(user_id: str, call: ContentBlock) -> dict[str, Any]:
+    if call.name == "search_conversation_history":
+        from app.services.assistant_memory import search
+        from pydantic import BaseModel, Field, ConfigDict
+        class Arguments(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            query: str = Field(default="", max_length=300)
+            before_message_id: str | None = None
+            limit: int = Field(default=8, ge=1, le=20)
+        arguments = Arguments.model_validate(call.arguments or {})
+        with SessionLocal() as db:
+            execution = db.get(AssistantExecution, diagnostics.execution_id.get())
+            if not execution or execution.user_id != user_id:
+                return tool_result("unavailable", error={"code": "conversation_not_owned"})
+            return tool_result("ok", data={"historical_messages": search(db, user_id, execution.conversation_id, **arguments.model_dump())})
     registry = build_tool_registry()
     definition = _definitions().get(call.name or "")
     if definition is None:
@@ -756,6 +821,12 @@ async def run_tool_loop(
         checkpoint["model"] = model or provider.default_model
         _save_checkpoint(identifier, checkpoint)
 
+    if not checkpoint.get("memory_prepared"):
+        from app.services.assistant_memory import prepare
+        history = await prepare(identifier, user.id, conversation_id, provider, api_key, model)
+        checkpoint["turns"] = [checkpoint["turns"][0], *[t.to_dict() for t in history], checkpoint["turns"][-1]]
+        checkpoint["memory_prepared"] = True
+
     while True:
         turns = _turns(checkpoint)
         pending_calls = (
@@ -824,9 +895,22 @@ async def run_tool_loop(
                 )
             ):
                 raise AssistantTerminalError("provider_continuation_missing")
-            result = await _provider_turn(
-                provider, api_key, model, turns, tools, continuation_id
-            )
+            from app.services.assistant_policy import execution_policy
+            policy = execution_policy()
+            if checkpoint["usage"]["model_calls"] >= policy["calls"] - 1 or checkpoint["usage"]["output_tokens"] >= policy["cumulative_output"] - policy["output"]:
+                tools = []
+                instruction = ContentBlock("text", text="Use the available evidence to give the final grounded answer now; state unresolved gaps. No more tools are available.")
+                # Keep the continuation's tool results in its final user turn.
+                # Gemini requires these results alongside previous_interaction_id.
+                turns[-1] = ProviderTurn("user", [*turns[-1].content, instruction], turns[-1].opaque)
+            try:
+                result = await _provider_turn(provider, api_key, model, turns, tools, continuation_id)
+            except AssistantTerminalError as exc:
+                if exc.code != "question_budget_exhausted":
+                    raise
+                facts = [json.dumps(item, default=str) for item in list(checkpoint["evidence"].values())[:4]]
+                result = LLMProviderResult(content="The question reached its context or generation limit. Available evidence (no investment conclusion):\n\n" + "\n\n".join(facts) if facts else "The question reached its context or generation limit before a grounded answer could be completed.",
+                    provider=provider.name, model=model or provider.default_model, finish_reason="budget_limit")
             assistant_turn = result.turn or ProviderTurn(
                 "assistant", [ContentBlock("text", text=result.content)]
             )
@@ -851,7 +935,10 @@ async def run_tool_loop(
         )
         generation_status = "success"
         terminal_code = None
-        if result.finish_reason in TRUNCATED_REASONS:
+        if result.finish_reason == "budget_limit":
+            generation_status = "limited"
+            terminal_code = "question_budget_exhausted"
+        elif result.finish_reason in TRUNCATED_REASONS:
             generation_status = "truncated"
             terminal_code = "output_truncated"
             raw_text = "Incomplete provider response:\n\n" + raw_text

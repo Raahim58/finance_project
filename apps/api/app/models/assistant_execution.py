@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Index, text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.session import Base
 
@@ -14,7 +14,9 @@ def now():
 
 class AssistantExecution(Base):
     __tablename__ = "assistant_executions"
-    __table_args__ = (UniqueConstraint("user_id", "client_request_id"),)
+    __table_args__ = (UniqueConstraint("user_id", "client_request_id"),
+        Index("uq_assistant_active_conversation", "conversation_id", unique=True,
+              postgresql_where=text("status IN ('queued', 'running')"), sqlite_where=text("status IN ('queued', 'running')")),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     client_request_id: Mapped[str] = mapped_column(String(100))
@@ -23,6 +25,10 @@ class AssistantExecution(Base):
     transcript_encrypted: Mapped[str | None] = mapped_column(Text)
     conversation_id: Mapped[str] = mapped_column(ForeignKey("assistant_conversations.id"))
     status: Mapped[str] = mapped_column(String(30), default="queued", index=True)
+    event_sequence: Mapped[int] = mapped_column(Integer, default=0)
+    policy_json: Mapped[str] = mapped_column(Text, default="{}")
+    accounting_json: Mapped[str] = mapped_column(Text, default="{}")
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     response_json: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String(80))
     retry_count: Mapped[int] = mapped_column(Integer, default=0)

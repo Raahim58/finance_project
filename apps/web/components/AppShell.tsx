@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { AssistantWorkspaceProvider } from "@/components/AssistantWorkspace";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Icon, IconName } from "@/components/Icon";
@@ -13,7 +14,6 @@ const groups: Array<{ label: string; items: NavEntry[] }> = [
     ["Portfolios", "/portfolios", "briefcase"],
     ["Markets", "/markets", "market"],
     ["Research", "/research", "search"],
-    ["Assistant", "/assistant", "assistant"],
   ] },
   { label: "Oversight", items: [
     ["Recommendations", "/recommendations", "lightbulb"],
@@ -106,7 +106,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (publicRoute) return <>{children}</>;
 
   return (
-    <div className="app-shell">
+    <AssistantWorkspaceProvider><div className="app-shell">
       <aside className="app-sidebar" aria-label="Primary navigation">
         <Link href="/dashboard" className="flex h-[76px] w-full items-center gap-3 px-5 max-lg:justify-center max-lg:px-0">
           <span className="brand-mark">PX</span>
@@ -150,6 +150,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <main>{children}</main>
       </div>
       {menuOpen ? <MobileNavDrawer pathname={pathname} onClose={closeMenu} /> : null}
-    </div>
+    </div></AssistantWorkspaceProvider>
   );
 }

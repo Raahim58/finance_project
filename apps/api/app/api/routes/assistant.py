@@ -144,7 +144,7 @@ async def create_run(
         payload.client_request_id, payload.conversation_id)
     if row.status == "queued":
         execution_service.schedule(row.id)
-    return {"execution_id": row.id, "status": row.status}
+    return {"execution_id": row.id, "conversation_id": row.conversation_id, "status": row.status}
 
 
 @router.get("/assistant/runs/{execution_id}")

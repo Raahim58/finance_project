@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Annotated
+from typing import Literal, Annotated
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -8,6 +8,9 @@ PRODUCTION_APP_ENVS = {"production", "prod"}
 
 
 class Settings(BaseSettings):
+    assistant_token_trial: Literal["trial1", "trial2"] = "trial1"
+    assistant_queue_timeout_seconds: int = Field(default=120, ge=1, le=600)
+
     app_name: str = "psx-ai-portfolio-agent"
     app_env: str = "local"
     database_url: str = "sqlite+pysqlite:///./psx_ai_local.db"

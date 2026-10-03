@@ -128,7 +128,7 @@ def begin_attempt(
             execution.request_encrypted = encrypt_secret(json.dumps(payload))
         if (
             execution.reserved_input_tokens + estimated_tokens
-            > settings.assistant_execution_input_token_limit
+            > json.loads(execution.policy_json).get("cumulative_input", settings.assistant_execution_input_token_limit)
         ):
             raise ValueError("execution_input_budget_exhausted")
         capacity = cleanup(db, settings.phase8_diagnostic_payload_bytes)
@@ -318,6 +318,8 @@ def inspect_execution(db, execution):
         "repair_count": execution.repair_count,
         "revision_count": execution.revision_count,
         "reserved_input_tokens": execution.reserved_input_tokens,
+        "policy": json.loads(execution.policy_json),
+        "accounting": json.loads(execution.accounting_json),
         "usage": {
             "input_tokens": sum(
                 int(item.get("input_tokens") or item.get("estimated_input_tokens") or 0)

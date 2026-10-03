@@ -68,6 +68,7 @@ async def test_postgres_slot_waits_and_unlocks_on_error(monkeypatch):
         def __enter__(self): return self
         def __exit__(self, *args): pass
         def commit(self): pass
+        def close(self): pass
         def execute(self, statement, parameters):
             statements.append(str(statement))
             return Result()

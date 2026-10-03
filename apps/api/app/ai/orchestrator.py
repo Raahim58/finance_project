@@ -45,7 +45,7 @@ def _resolved_portfolio(
     conversation: Conversation,
     requested_portfolio_id: str | None,
 ) -> Portfolio | None:
-    trusted_id = requested_portfolio_id or conversation.portfolio_id
+    trusted_id = requested_portfolio_id
     if trusted_id:
         portfolio = get_portfolio_or_404(db, user, trusted_id)
         if portfolio.archived_at is not None:

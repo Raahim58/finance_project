@@ -156,7 +156,7 @@ def test_restart_does_not_replay_uncertain_external_provider_request(execution):
     with SessionLocal() as db:
         assert reconcile(db) == []
         row = db.get(AssistantExecution, identifier)
-        assert row.status == "failed"
+        assert row.status == "interrupted"
         assert row.error_code == "provider_attempt_uncertain"
         assert db.scalar(select(AssistantAttempt)).status == "uncertain"
 

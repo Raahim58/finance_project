@@ -838,6 +838,7 @@ class Conversation(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
     portfolio_id: Mapped[str | None] = mapped_column(ForeignKey("portfolios.id"), index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary_failure: Mapped[str | None] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -850,6 +851,9 @@ class AssistantMessage(Base):
     conversation_id: Mapped[str] = mapped_column(
         ForeignKey("assistant_conversations.id"), index=True, nullable=False
     )
+    context_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    execution_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    outcome: Mapped[str | None] = mapped_column(String(30))
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     message_kind: Mapped[str] = mapped_column(String(30), default="answer", nullable=False)

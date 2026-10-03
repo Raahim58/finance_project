@@ -147,3 +147,5 @@ __all__ = [
 from app.models.assistant_execution import AssistantExecution, AssistantAttempt
 
 from app.models.research_intelligence import (CompanyExposureProfile, CompanyEventBrief, PortfolioEventSnapshot, ResearchJob, ResearchAttempt)
+
+from app.models.assistant_workspace import ExecutionEvent, ConversationSummary, ProviderQueueEntry

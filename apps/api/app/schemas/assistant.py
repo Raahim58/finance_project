@@ -67,7 +67,14 @@ class ConversationCreate(BaseModel):
     portfolio_id: str | None = None
 
 
+class AssistantPageContext(BaseModel):
+    page: Literal["workspace", "company", "portfolio"] = "workspace"
+    instrument_id: str | None = None
+    portfolio_id: str | None = None
+
+
 class AssistantMessageCreate(BaseModel):
+    page_context: AssistantPageContext | None = None
     company_only: bool = False
     question: str = Field(min_length=1, max_length=8000)
     portfolio_id: str | None = None

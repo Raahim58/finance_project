@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { AskAssistant } from "@/components/AssistantWorkspace";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { CompanyIntelligencePanel, CompanyPurposeEvidence } from "@/components/ResearchIntelligence";
@@ -210,7 +211,7 @@ function DecisionWorkbench({ symbol, instrumentId, portfolios }: { symbol: strin
   }
 
   return <section className="panel mt-4">
-    <div className="panel-head"><div><h2 className="panel-title">Evaluate for my portfolio</h2><p className="mt-1 text-[11px] text-muted">Creates a proposal for review. Your holdings never change here.</p></div><Link className="btn btn-secondary" href={`/assistant?portfolio_id=${encodeURIComponent(portfolioId)}&instrument_id=${encodeURIComponent(instrumentId ?? "")}&question=${encodeURIComponent(`Does ${symbol} fit my portfolio? What evidence contradicts the case?`)}`}>Ask about {symbol}</Link></div>
+    <div className="panel-head"><div><h2 className="panel-title">Evaluate for my portfolio</h2><p className="mt-1 text-[11px] text-muted">Creates a proposal for review. Your holdings never change here.</p></div><AskAssistant question={`Does ${symbol} fit my portfolio? What evidence contradicts the case?`}>Ask about {symbol}</AskAssistant></div>
     <div className="panel-body grid gap-4">
       {!portfolios.length ? <Unavailable text="Create a portfolio before evaluating a security." /> : <div className="grid gap-3 md:grid-cols-4">
         <label className="field-label">Portfolio<select className="field" value={portfolioId} onChange={event => setPortfolioId(event.target.value)}>{portfolios.map(row => <option value={row.id} key={row.id}>{row.name}</option>)}</select></label>

@@ -45,7 +45,37 @@ class HTTPProvider(LLMProvider):
         except httpx.HTTPError:
             return False
 
+    async def _send(self, url: str, api_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+        options = call_options.get()
+        if options.stream:
+            payload = {**payload, "stream": True}
+            if self.name not in {"gemini", "anthropic"}:
+                payload["stream_options"] = {"include_usage": True}
+        if options.request_guard:
+            options.request_guard(payload)
+        import asyncio
+        try:
+            async with asyncio.timeout(options.deadline_seconds):
+                return await self._post(url, api_key, payload)
+        except httpx.TimeoutException as exc:
+            raise TimeoutError(f"{self.name} API request timed out") from exc
+
     async def _post(self, url: str, api_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+        options = call_options.get()
+        if options.stream:
+            from app.ai.providers.streaming import StreamAssembler, sse_json
+            from app.ai.providers.base import ProviderEvent, emit_provider_event
+            assembler = StreamAssembler(self.name)
+            async with httpx.AsyncClient(timeout=options.deadline_seconds) as client:
+                async with client.stream("POST", url, headers=self._headers(api_key), json=payload) as response:
+                    if response.status_code >= 400:
+                        await response.aread()
+                        raise ProviderRequestError(provider=self.name, status_code=response.status_code,
+                                                   request_id=response.headers.get("x-request-id"))
+                    await emit_provider_event(ProviderEvent("started"))
+                    async for event in sse_json(response.aiter_lines()):
+                        await assembler.feed(event)
+            return assembler.result()
         try:
             async with httpx.AsyncClient(timeout=call_options.get().deadline_seconds) as client:
                 response = await client.post(url, headers=self._headers(api_key), json=payload)
@@ -160,10 +190,10 @@ class OpenAICompatibleProvider(HTTPProvider):
         self, api_key: str, messages: list[dict[str, str]], model: str | None = None
     ) -> LLMProviderResult:
         selected_model = model or self.default_model
-        data = await self._post(
+        data = await self._send(
             self.chat_url,
             api_key,
-            {"model": selected_model, "messages": messages, "temperature": 0},
+            {"model": selected_model, "messages": messages, "temperature": 0, "max_tokens": call_options.get().max_output_tokens},
         )
         try:
             content = data["choices"][0]["message"]["content"]
@@ -178,7 +208,62 @@ class OpenAICompatibleProvider(HTTPProvider):
             provider=self.name,
             input_tokens=usage.get("prompt_tokens"),
             output_tokens=usage.get("completion_tokens"),
+            finish_reason=data["choices"][0].get("finish_reason"),
         )
+
+    async def _completion(self, api_key, messages, tools, model):
+        import json
+        payload = {"model": model or self.default_model, "messages": messages,
+                   "max_tokens": call_options.get().max_output_tokens}
+        if tools:
+            payload.update(tools=tools, tool_choice="auto")
+        data = await self._send(self.chat_url, api_key, payload)
+        message = data["choices"][0]["message"]
+        blocks = [ContentBlock("text", text=message["content"])] if message.get("content") else []
+        for call in message.get("tool_calls") or []:
+            arguments = call["function"]["arguments"]
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments)
+            if not isinstance(arguments, dict):
+                raise RuntimeError("Invalid provider tool arguments")
+            blocks.append(ContentBlock("tool_call", id=call["id"], name=call["function"]["name"], arguments=arguments))
+        usage = data.get("usage") or {}
+        return LLMProviderResult(content=message.get("content") or "", provider=self.name,
+            model=data.get("model") or model or self.default_model, input_tokens=usage.get("prompt_tokens"),
+            output_tokens=usage.get("completion_tokens"), finish_reason=data["choices"][0].get("finish_reason"),
+            reasoning_tokens=(usage.get("completion_tokens_details") or {}).get("reasoning_tokens"),
+            turn=ProviderTurn("assistant", blocks, {"reasoning_content": message.get("reasoning_content")}))
+
+    async def tool_chat(self, api_key, turns, tools, model=None):
+        import json
+        messages = []
+        for turn in turns:
+            content = "\n".join(b.text for b in turn.content if b.type == "text" and b.text)
+            calls = [b for b in turn.content if b.type == "tool_call"]
+            results = [b for b in turn.content if b.type == "tool_result"]
+            if content or calls:
+                message = {"role": turn.role, "content": content or None}
+                if turn.opaque.get("reasoning_content"):
+                    message["reasoning_content"] = turn.opaque["reasoning_content"]
+                if calls:
+                    message["tool_calls"] = [
+                        {"id": b.id, "type": "function", "function": {
+                            "name": wire_tool_name(b.name), "arguments": json.dumps(b.arguments)}}
+                        for b in calls
+                    ]
+                messages.append(message)
+            for result in results:
+                messages.append({"role": "tool", "tool_call_id": result.id,
+                                 "content": json.dumps(result.result, default=str)})
+        definitions = [{"type": "function", "function": {
+            "name": wire_tool_name(t.name), "description": t.description,
+            "parameters": t.input_schema}} for t in tools]
+        result = await self._completion(api_key, messages, definitions, model)
+        names = {wire_tool_name(t.name): t.name for t in tools}
+        from dataclasses import replace
+        blocks = [replace(b, name=names.get(b.name, b.name)) if b.type == "tool_call" else b
+                  for b in result.turn.content]
+        return replace(result, turn=ProviderTurn("assistant", blocks, result.turn.opaque))
 
 
 class AnthropicProvider(HTTPProvider):
@@ -211,7 +296,7 @@ class AnthropicProvider(HTTPProvider):
         }
         if system:
             payload["system"] = system
-        data = await self._post(self.chat_url, api_key, payload)
+        data = await self._send(self.chat_url, api_key, payload)
         blocks = data.get("content") or []
         content = "\n".join(
             str(block.get("text"))
@@ -282,7 +367,7 @@ class AnthropicProvider(HTTPProvider):
         messages = [
             {
                 "role": turn.role,
-                "content": [self._content_block(block) for block in turn.content],
+                "content": [*turn.opaque.get("thinking_blocks", []), *[self._content_block(block) for block in turn.content]],
             }
             for turn in turns
             if turn.role in {"user", "assistant"}
@@ -300,9 +385,11 @@ class AnthropicProvider(HTTPProvider):
                 for tool in tools
             ],
         }
+        if call_options.get().thinking:
+            payload["thinking"] = {"type": "adaptive"}
         if system:
             payload["system"] = system
-        data = await self._post(self.chat_url, api_key, payload)
+        data = await self._send(self.chat_url, api_key, payload)
         blocks = []
         names = {wire_tool_name(tool.name): tool.name for tool in tools}
         for item in data.get("content") or []:
@@ -330,7 +417,7 @@ class AnthropicProvider(HTTPProvider):
             cache_write_tokens=usage.get("cache_creation_input_tokens"),
             finish_reason=data.get("stop_reason"),
             request_id=data.get("id"),
-            turn=ProviderTurn("assistant", blocks, {"id": data.get("id")}),
+            turn=ProviderTurn("assistant", blocks, {"id": data.get("id"), "thinking_blocks": [b for b in data.get("content", []) if b.get("type") in {"thinking", "redacted_thinking"}]}),
         )
 
 
@@ -387,7 +474,7 @@ class GeminiProvider(HTTPProvider):
             )
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
-        data = await self._post(
+        data = await self._send(
             f"https://generativelanguage.googleapis.com/v1beta/models/{selected_model}:generateContent",
             api_key,
             payload,
@@ -456,8 +543,11 @@ class GeminiProvider(HTTPProvider):
                 current["result"].append(
                     {"type": "image", "mime_type": block.mime_type, "data": block.data}
                 )
-        if not results:
+        if not any(step["type"] == "function_result" for step in results):
             raise ValueError("gemini_continuation_requires_tool_results")
+        text = "\n".join(block.text or "" for block in turns[-1].content if block.type == "text")
+        if text:
+            results.append({"type": "user_input", "content": [{"type": "text", "text": text}]})
         return results
 
     def interaction_payload(
@@ -514,7 +604,7 @@ class GeminiProvider(HTTPProvider):
     ) -> LLMProviderResult:
         selected_model = model or self.default_model
         payload = self.interaction_payload(turns, tools, selected_model)
-        data = await self._post(
+        data = await self._send(
             "https://generativelanguage.googleapis.com/v1beta/interactions",
             api_key,
             payload,
@@ -602,12 +692,12 @@ class GeminiProvider(HTTPProvider):
             model=str(data.get("model") or selected_model),
             provider=self.name,
             input_tokens=usage.get("total_input_tokens"),
-            output_tokens=usage.get("total_output_tokens"),
+            output_tokens=(usage.get("total_output_tokens", 0) + usage.get("total_thought_tokens", 0)) if "total_output_tokens" in usage else None,
             cache_read_tokens=usage.get("total_cached_tokens"),
             reasoning_tokens=usage.get("total_thought_tokens"),
             finish_reason=status,
             request_id=data.get("id"),
-            turn=ProviderTurn("assistant", blocks, {"interaction_id": data.get("id")}),
+            turn=ProviderTurn("assistant", blocks, {"interaction_id": data.get("id"), "thought_steps": [step for step in data.get("steps", []) if step.get("type") == "thought"]}),
             continuation_id=data.get("id"),
             web_citations=web_citations,
             web_tool_activity=web_activity,
