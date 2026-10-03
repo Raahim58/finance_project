@@ -1,4 +1,5 @@
 import json
+from contextlib import nullcontext
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
@@ -9,6 +10,7 @@ import numpy as np
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import DBAPIError
 
 from app.core.config import settings
 from app.domain.quant import (
@@ -238,7 +240,9 @@ def list_ips_versions(db: Session, user: User, portfolio_id: str):
 def ips_compliance(db: Session, user: User, portfolio_id: str, *, persist_analysis: bool = True):
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     version = db.get(PortfolioIPSVersion, portfolio.selected_ips_version_id) if portfolio.selected_ips_version_id else None
-    if version is None:
+    if version is not None and version.portfolio_id != portfolio.id:
+        raise HTTPException(status_code=404, detail="Selected IPS not found for portfolio")
+    if version is None or version.status != "confirmed" or version.confirmed_at is None:
         missing = {"code": "missing_confirmed_ips", "label": "Confirmed IPS", "status": "NOT_EVALUATED", "message": "Confirm an IPS before evaluating compliance.", "severity": "availability"}
         return {"portfolio_id": portfolio.id, "ips_version_id": None, "context": "current", "status": "NOT_EVALUATED", "compliant": False, "checks": [missing], "violations": [], "not_evaluated": [missing], "evaluated_at": datetime.now(UTC)}
     constraints = _load(version.constraints_json)
@@ -252,8 +256,12 @@ def ips_compliance(db: Session, user: User, portfolio_id: str, *, persist_analys
         positions.append({"symbol": holding.symbol, "weight": float(holding.market_value) / total if total else 0.0, "sector": holding.sector, "shariah_eligible": shariah_eligibility(metadata), "asset_type": instrument.instrument_type if instrument else None, "currency": instrument.currency if instrument else None})
     positions.append({"symbol": "CASH", "weight": float(summary.cash_balance) / total if total else 0.0, "sector": "Cash"})
     modeled_inputs: dict[str, object] = {"liquid_assets": float(summary.cash_balance), "data_cutoff": summary.data_freshness_date, "estimator": "aligned_price_covariance_v1"}
+    modeled_availability = {"status": "available"}
     try:
-        quant = portfolio_quant(db, user, portfolio.id, persist=persist_analysis)
+        # A failed optional SQL query must not abort the session used by the
+        # deterministic cash/holding checks. No retry or alternate calculation.
+        with db.begin_nested() if not persist_analysis else nullcontext():
+            quant = portfolio_quant(db, user, portfolio.id, persist=persist_analysis)
         variance = quant.get("portfolio", {}).get("variance")
         benchmark = quant.get("benchmark") if isinstance(quant.get("benchmark"), dict) else {}
         benchmark_metrics = benchmark.get("metrics") if isinstance(benchmark.get("metrics"), dict) else {}
@@ -263,11 +271,16 @@ def ips_compliance(db: Session, user: User, portfolio_id: str, *, persist_analys
             "risk_contributions": quant.get("risk_contributions"),
             "data_cutoff": quant.get("data_cutoff"),
         })
-    except HTTPException:
-        # Availability is reported per modeled check; cash and weight checks still run.
-        pass
+    except (HTTPException, DBAPIError) as exc:
+        if persist_analysis and isinstance(exc, DBAPIError):
+            raise  # Existing write paths retain their transaction/error behavior.
+        # The savepoint restores a usable transaction after database failures,
+        # including the observed DiskFull error. Do not expose SQL or parameters.
+        original = getattr(exc, "orig", exc)
+        modeled_availability = {"status": "unavailable", "error_type": type(original).__name__,
+                                "sqlstate": getattr(original, "sqlstate", None)}
     result = evaluate_ips_constraints(constraints, positions, ips_version_id=version.id, valuation_complete=summary.valuation_complete, unpriced_symbols=summary.unpriced_symbols, context="current", modeled_inputs=modeled_inputs)
-    return {"portfolio_id": portfolio.id, **result, "evaluated_at": datetime.now(UTC), "data_cutoff": modeled_inputs.get("data_cutoff"), "price_provenance": [{"symbol": row.symbol, "source_name": row.data_source, "data_cutoff": row.latest_price_date, "artifact_id": row.artifact_id} for row in summary.holdings]}
+    return {"portfolio_id": portfolio.id, **result, "modeled_analysis": modeled_availability, "evaluated_at": datetime.now(UTC), "data_cutoff": modeled_inputs.get("data_cutoff"), "price_provenance": [{"symbol": row.symbol, "source_name": row.data_source, "data_cutoff": row.latest_price_date, "artifact_id": row.artifact_id} for row in summary.holdings]}
 
 
 def _aligned_prices(db: Session, portfolio_id: str, start: date | None, end: date | None, *, price_rows=None):

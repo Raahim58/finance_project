@@ -41,6 +41,7 @@ class CompanySectionsInput(BaseModel):
 
 
 class EventInput(BaseModel):
+    query: str | None = Field(default=None, min_length=1, max_length=120)
     entity_key: str | None = None
     period_start: date | None = None
     period_end: date | None = None
@@ -49,6 +50,8 @@ class EventInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_period(self):
+        if self.query and self.entity_key:
+            raise ValueError("Headline query is for broader events; omit entity_key")
         if self.period_start and self.period_end and self.period_end < self.period_start:
             raise ValueError("period_end must be on or after period_start")
         return self
@@ -113,6 +116,10 @@ def _normalize_event(event: dict, entity_key: str | None) -> tuple[dict, list[di
     if raw_sources is None:
         raw_sources = row.pop("sources", [])
     sources = [_event_source(item) for item in raw_sources]
+    excerpts = [{"source_ref": source["id"], "text": item["text"]}
+                for item, source in zip(raw_sources, sources) if item.get("text")]
+    if excerpts:
+        row["evidence_excerpts"] = excerpts
     row["source_refs"] = [item["id"] for item in sources]
     subjects = row.get("subjects")
     if entity_key and isinstance(subjects, list):
@@ -190,22 +197,22 @@ def _company_sections(db, user, payload: CompanySectionsInput):
         remaining = max(0, len(filtered) - offset - len(selected))
         continuation = str(offset + len(selected)) if remaining else None
     elif section_name == ContextSectionName.EVENTS:
-        from app.services.research_intelligence_service import event_views
-        fetched = event_views(db, symbol=instrument.symbol, start=payload.period_start,
-            end=payload.period_end, offset=offset, limit=payload.limit + 1)
-        event_sources = []
-        selected = []
-        for event in fetched[: payload.limit]:
+        from app.services.research_intelligence_service import company_event_page
+        page = company_event_page(db, user, instrument, start=payload.period_start,
+            end=payload.period_end, offset=offset, limit=payload.limit)
+        selected, all_sources = [], []
+        for event in page["events"]:
             normalized, sources = _normalize_event(event, instrument.symbol)
             selected.append(normalized)
-            event_sources.extend(sources)
+            all_sources.extend(sources)
         page_count = len(selected)
-        selected_refs = {ref for item in selected for ref in item.get("source_refs", [])}
-        all_sources = [item for item in event_sources if item["id"] in selected_refs]
         section["data"] = selected
-        has_more = len(fetched) > len(selected)
-        continuation = str(offset + len(selected)) if has_more else None
-        remaining = None if has_more else 0
+        section["as_of"] = max((row["occurred_at"] for row in selected), default=None)
+        section["errors"] = []
+        section["provenance"] = {**section.get("provenance", {}), "event_coverage": page["coverage"]}
+        section["state"] = "stale" if selected and all(row.get("freshness_status") == "stale" for row in selected) else "current" if selected else "missing"
+        continuation = page["coverage"]["continuation"]
+        remaining = None if page["coverage"]["has_more"] else 0
     section["evidence_refs"] = [
         source.get("evidence_id") or source.get("id") for source in all_sources
     ]
@@ -247,32 +254,37 @@ def _company_sections(db, user, payload: CompanySectionsInput):
     )
 
 
-def _events(db, _user, payload: EventInput):
+def _events(db, user, payload: EventInput):
     offset = int(payload.cursor or 0)
-    fetched = list_events(
-        db,
-        entity_key=payload.entity_key,
-        occurred_start=payload.period_start,
-        occurred_end=payload.period_end,
-        offset=offset,
-        limit=payload.limit + 1,
-    )
-    selected = fetched[: payload.limit]
-    events = []
-    sources = []
-    for event in selected:
+    if payload.entity_key:
+        from app.services.research_intelligence_service import company_event_page, resolve_company
+        instrument = resolve_company(db, payload.entity_key)
+        page = company_event_page(db, user, instrument, start=payload.period_start,
+            end=payload.period_end, offset=offset, limit=payload.limit)
+        fetched = page["events"]
+        coverage = page["coverage"]
+        has_more = coverage["has_more"]
+    else:
+        # Broad market/geopolitical retrieval has no three-factor or issuer gate.
+        arguments = {"entity_key": None, "occurred_start": payload.period_start,
+                     "occurred_end": payload.period_end, "offset": offset, "limit": payload.limit + 1}
+        if payload.query:
+            arguments["query"] = payload.query
+        fetched = list_events(db, **arguments)
+        has_more = len(fetched) > payload.limit
+        fetched = fetched[:payload.limit]
+        coverage = {"query": payload.query, "period_start": payload.period_start,
+                    "period_end": payload.period_end, "scope": "broader_stored_events",
+                    "relationship": "For model analysis; not a stored company exposure match."}
+    events, sources = [], []
+    for event in fetched:
         normalized, event_sources = _normalize_event(event, payload.entity_key)
         events.append(normalized)
         sources.extend(event_sources)
-    has_more = len(fetched) > len(selected)
-    return tool_result(
-        "ok" if events else "missing",
-        {"events": events},
-        sources=list({item["id"]: item for item in sources}.values()),
-        returned=len(events),
+    return tool_result("ok" if events else "missing", {"events": events, "search_coverage": coverage},
+        sources=list({item["id"]: item for item in sources}.values()), returned=len(events),
         remaining=None if has_more else 0,
-        continuation=str(offset + len(events)) if has_more else None,
-    )
+        continuation=str(offset + len(events)) if has_more else None)
 
 
 def _instruments(db, _user, payload: InstrumentSearchInput):
@@ -322,7 +334,7 @@ def register_research_tools(registry: ToolRegistry) -> None:
         ToolDefinition(
             "research.events",
             "1.0",
-            "Observed events with source links and entity filters",
+            "Stored events with citations and pagination: company symbol includes direct/stored indirect relevance; omit symbol for broader geopolitical/macro news and optional headline query",
             EventInput,
             "research:read",
             True,
@@ -348,14 +360,18 @@ def register_research_tools(registry: ToolRegistry) -> None:
 
 class EventRelevanceInput(BaseModel):
     symbol: str = Field(min_length=1, max_length=30)
+    period_start: date | None = None
+    period_end: date | None = None
+    cursor: str | None = Field(default=None, pattern=r"^[0-9]+$")
     limit: int = Field(default=5, ge=1, le=20)
+
+    @model_validator(mode="after")
+    def validate_period(self):
+        if self.period_start and self.period_end and self.period_end < self.period_start:
+            raise ValueError("period_end must be on or after period_start")
+        return self
 
 
 def _event_relevance(db, user, payload):
-    from app.services.research_intelligence_service import resolve_company, company_events
-    instrument = resolve_company(db, payload.symbol)
-    events = company_events(db, user, instrument, limit=payload.limit)
-    sources = {e["id"]: {k: v for k, v in e.items() if k != "text"}
-               for event in events for e in event["evidence"]}
-    return tool_result("ok" if events else "missing", {"events": events},
-        sources=list(sources.values()), returned=len(events), remaining=None)
+    return _events(db, user, EventInput(entity_key=payload.symbol, period_start=payload.period_start,
+        period_end=payload.period_end, cursor=payload.cursor, limit=payload.limit))

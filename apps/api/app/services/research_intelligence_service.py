@@ -289,8 +289,8 @@ def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=Non
     return merged
 
 
-def company_events(db, user, instrument, *, limit=5, window_days=90, candidate_events=None):
-    direct = event_views(db, symbol=instrument.symbol, window_days=window_days, limit=limit)
+def _company_event_matches(db, user, instrument, *, limit=5, window_days=90, candidate_events=None, start=None, end=None):
+    direct = event_views(db, symbol=instrument.symbol, window_days=window_days, limit=limit, start=start, end=end)
     for row in direct:
         row["relationship_kind"] = "direct"
     profile = current_profile(db, user, instrument) if user else None
@@ -302,7 +302,7 @@ def company_events(db, user, instrument, *, limit=5, window_days=90, candidate_e
         for candidate in (
             candidate_events
             if candidate_events is not None
-            else event_views(db, window_days=window_days, limit=1000)
+            else event_views(db, window_days=window_days, limit=1000, start=start, end=end)
         ):
             row = dict(candidate)
             matched = factors.intersection(row["factors"])
@@ -312,6 +312,60 @@ def company_events(db, user, instrument, *, limit=5, window_days=90, candidate_e
                 row["relationship_kind"] = "ai_proposed_indirect"
                 row["relationships"] = [r for r in relationships if r["factor"] in matched]
                 indirect.append(row)
+    return direct, indirect, profile is not None
+
+
+def company_event_page(db, user, instrument, *, offset=0, limit=5, start=None, end=None):
+    """One bounded matching query for Assistant readers; no model generation.
+
+    Reuse the company page's exposure matching, preserve legacy directly linked
+    source events, then deduplicate and paginate AFTER matching. Digest admission
+    remains separate and unchanged.
+    """
+    from app.services.research_service import list_events
+
+    candidate_limit = 1000  # Existing indirect candidate bound, not an evidence budget.
+    direct, indirect, profile_available = _company_event_matches(
+        db, user, instrument, limit=candidate_limit, start=start, end=end)
+    raw_direct = list_events(db, entity_key=instrument.symbol, occurred_start=start,
+                            occurred_end=end, limit=candidate_limit)
+    matched = {}
+    for event in direct + indirect:
+        row = dict(event)
+        row["relevance_reason"] = ("Stored issuer link to " + instrument.symbol
+            if row["relationship_kind"] == "direct" else
+            "Stored AI-proposed exposure: " + ", ".join(sorted(r["factor"] for r in row["relationships"])))
+        matched[row["id"]] = row
+    for raw in raw_direct:
+        if raw["id"] not in matched:
+            row = dict(raw)
+            row.update(event_key="raw:" + row["id"], relationship_kind="direct",
+                       relevance_reason="Stored issuer link to " + instrument.symbol)
+            matched[row["id"]] = row
+    # Rich normalized/source rows take precedence over legacy raw rows. Cluster
+    # members already merged by event_views must not reappear as raw duplicates.
+    clustered = {raw_id for row in matched.values() for raw_id in row.get("raw_event_ids", [])}
+    rows = [row for row in matched.values() if row["id"] not in clustered or row.get("raw_event_ids")]
+    rows.sort(key=lambda row: (-int(row.get("materiality") == "high"), -utc(row["occurred_at"]).timestamp(), row["event_key"]))
+    selected = rows[offset:offset + limit]
+    more = offset + len(selected) < len(rows)
+    return {"events": selected, "coverage": {
+        "symbol": instrument.symbol, "period_start": str(start) if start else None,
+        "period_end": str(end) if end else None,
+        "indirect_window_days": 90 if start is None else None,
+        "direct_window": "explicit_dates" if start else "stored_history",
+        "exposure_profile_available": profile_available,
+        "indirect_factors": ["oil_price", "pk_policy_rate", "usd_pkr"],
+        "candidate_limit": candidate_limit, "completeness": "bounded_scan",
+        "matched_in_scan": len(rows), "returned": len(selected), "has_more": more,
+        "continuation": str(offset + len(selected)) if more else None,
+        "empty_meaning": "No matches on this page within the stated window and bounded candidate scan.",
+    }}
+
+
+def company_events(db, user, instrument, *, limit=5, window_days=90, candidate_events=None):
+    direct, indirect, _ = _company_event_matches(db, user, instrument, limit=limit,
+        window_days=window_days, candidate_events=candidate_events)
     # Digest admission: up to three direct and two indirect, then fill remaining slots.
     chosen = direct[: min(3, limit)] + indirect[: min(2, max(0, limit - 3))]
     seen = {r["event_key"] for r in chosen}

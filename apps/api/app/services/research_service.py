@@ -437,10 +437,14 @@ def list_events(
     occurred_start: date | None = None,
     occurred_end: date | None = None,
     offset: int = 0,
+    query: str | None = None,
 ):
     statement = select(Event)
+    if query:
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        statement = statement.where(or_(Event.title.ilike("%" + escaped + "%", escape="\\"), Event.details_json.ilike("%" + escaped + "%", escape="\\")))
     if entity_key:
-        statement = statement.join(EventEntityLink, EventEntityLink.event_id == Event.id).where(EventEntityLink.entity_key == entity_key.upper())
+        statement = statement.join(EventEntityLink, EventEntityLink.event_id == Event.id).where(func.upper(EventEntityLink.entity_key) == entity_key.upper())
     if event_type:
         statement = statement.where(Event.event_type == event_type)
     if occurred_start:

@@ -68,7 +68,7 @@ def _ips(db, user, payload: PortfolioInput):
     inputs = constraints.get("objective_inputs", {})
     method = constraints.get("required_return_method", {})
     data["mandate"] = {
-        "available": version is not None,
+        "available": version is not None and version.status == "confirmed" and version.confirmed_at is not None,
         "ips_version_id": version.id if version else None,
         "version": version.version if version else None,
         "goal": constraints.get("goal"),
