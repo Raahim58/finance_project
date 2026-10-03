@@ -89,8 +89,10 @@ jobs:
           docker compose -f compose.oracle.yml build api web
 
           echo "== Running database migrations =="
-          docker compose -f compose.oracle.yml run --rm api \
-            alembic upgrade head
+          # This script arrives on bash's stdin. Never let Compose consume the
+          # remaining restart/readiness commands as container input.
+          docker compose -f compose.oracle.yml run --rm -T --interactive=false api \
+            alembic upgrade head </dev/null
 
           echo "== Redeploying API and web =="
           docker compose -f compose.oracle.yml --profile research up -d api web research-worker
