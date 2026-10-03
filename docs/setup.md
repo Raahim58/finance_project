@@ -28,8 +28,9 @@ cumulative estimated input tokens. Before every provider turn the estimate inclu
 entire retained logical context, native tool schemas, and images; this remains the
 safeguard even though Gemini continuations transmit only new results. Diagnostics track
 transmitted bytes and provider-reported input/output/cache/reasoning separately, then
-reconcile the conservative reservation to reported input. `ASSISTANT_MAX_TOOL_ITERATIONS` and
-`ASSISTANT_MAX_TOOL_COST_UNITS` retain the operator-configured call and cost safeguards.
+reconcile the conservative reservation to reported input. `ASSISTANT_MAX_TOOL_ITERATIONS`
+retains the operator-configured call safeguard. Cost-unit scoring and its configuration
+have been removed; see `docs/mcp-tools.md` for concrete tool workload bounds.
 The older `PHASE8_*_DEADLINE_SECONDS` settings remain for non-Assistant compatibility
 consumers and do not select budgets in the new Assistant path.
 

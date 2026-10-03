@@ -228,10 +228,10 @@ def instrument_detail(db: Session, instrument_id: str):
     return {**serialize_instrument(row).model_dump(), "aliases": aliases}
 
 
-def market_series(db: Session, instrument_id: str, start=None, end=None):
+def market_series(db: Session, instrument_id: str, start=None, end=None, *, limit=None):
     instrument = db.get(Instrument, instrument_id)
     if instrument is None: raise HTTPException(status_code=404, detail="Instrument not found")
-    rows = price_series(db, instrument.symbol, start, end)
+    rows = price_series(db, instrument.symbol, start, end, limit=limit)
     return {"instrument_id": instrument.id, "symbol": instrument.symbol, "series": [{"date": row.trade_date, "open": row.open, "high": row.high, "low": row.low, "close": row.close, "volume": row.volume, "source": row.source, "source_url": row.source_url, "artifact_id": row.artifact_id, "artifact_sha256": row.artifact_sha256, "observed_at": row.observed_at, "quality_status": row.quality_status, "adjustment_state": row.adjustment_state} for row in rows]}
 
 

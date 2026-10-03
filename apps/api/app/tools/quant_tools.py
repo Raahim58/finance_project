@@ -79,7 +79,6 @@ def register_quant_tools(registry: ToolRegistry) -> None:
             True,
             False,
             15,
-            "medium",
             _quant,
         )
     )
@@ -93,7 +92,6 @@ def register_quant_tools(registry: ToolRegistry) -> None:
             True,
             False,
             10,
-            "medium",
             _security,
         )
     )
@@ -107,7 +105,6 @@ def register_quant_tools(registry: ToolRegistry) -> None:
             True,
             False,
             15,
-            "medium",
             _risk_budget,
         )
     )
@@ -115,13 +112,12 @@ def register_quant_tools(registry: ToolRegistry) -> None:
         ToolDefinition(
             "allocation.verify",
             "1.0",
-            "Submit provisional gross buys/funding sales. Calculates quantities, cash, capital weights, before/after metrics and IPS compliance without executing trades",
+            "Verify up to 20 provisional gross buy/sell legs over at most 100 held/proposed instruments. Uses all available aligned daily history (sample dates/count returned), with a 20-second tool deadline. Computes quantities, cash, weights and IPS compliance without executing trades.",
             AllocationVerificationInput,
             "portfolio:read",
             True,
             False,
             20,
-            "medium",
             _verify_allocation,
         )
     )

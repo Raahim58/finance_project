@@ -291,7 +291,7 @@ def _instruments(db, _user, payload: InstrumentSearchInput):
 def register_research_tools(registry: ToolRegistry) -> None:
     registry.register(ToolDefinition("research.event_relevance", "1.0",
         "Issuer-scoped direct events and three-factor AI-proposed indirect relationships with original evidence; no impact forecast",
-        EventRelevanceInput, "research:read", True, False, 12, "medium", _event_relevance))
+        EventRelevanceInput, "research:read", True, False, 12, _event_relevance))
     registry.register(
         ToolDefinition(
             "research.search",
@@ -302,7 +302,6 @@ def register_research_tools(registry: ToolRegistry) -> None:
             True,
             False,
             10,
-            "medium",
             _search,
         )
     )
@@ -316,7 +315,6 @@ def register_research_tools(registry: ToolRegistry) -> None:
             True,
             False,
             12,
-            "medium",
             _company_sections,
         )
     )
@@ -330,7 +328,6 @@ def register_research_tools(registry: ToolRegistry) -> None:
             True,
             False,
             8,
-            "low",
             _events,
         )
     )
@@ -344,7 +341,6 @@ def register_research_tools(registry: ToolRegistry) -> None:
             True,
             False,
             5,
-            "low",
             _instruments,
         )
     )

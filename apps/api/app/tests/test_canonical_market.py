@@ -87,3 +87,33 @@ def test_latest_price_queries_only_the_latest_canonical_observation():
 
     assert latest is not None and latest.trade_date == date(2026, 8, 7)
     assert historical is not None and historical.trade_date == date(2026, 8, 6)
+
+
+def test_market_tool_pagination_preserves_full_history_for_other_readers():
+    from datetime import timedelta
+    from dataclasses import replace
+    from app.tools.market_tools import MarketLatestInput, MarketSeriesInput, _latest, _series
+    from app.tools.registry import expand_model_data
+
+    first = date(2026, 6, 1)
+    rows = [replace(_row("https://dps.psx.com.pk/historical"),
+                    trade_date=first + timedelta(days=i)) for i in range(40)]
+    with SessionLocal() as db:
+        persist_market_data(db, latest_prices=rows, source="dps")
+        instrument = db.scalar(select(Instrument).where(Instrument.symbol == "TEST"))
+        assert len(price_series(db, "TEST")) == 40
+        assert [r.trade_date for r in price_series(db, "TEST", limit=2)] == [first + timedelta(days=38), first + timedelta(days=39)]
+        page = expand_model_data(_series(db, None, MarketSeriesInput(instrument_id=instrument.id)))
+        assert len(page["data"]["series"]) == 30
+        assert page["coverage"]["has_more"] is True
+        older = expand_model_data(_series(db, None, MarketSeriesInput(
+            instrument_id=instrument.id, end=date.fromisoformat(page["coverage"]["continuation"])
+        )))
+        assert len(older["data"]["series"]) == 10
+        assert older["coverage"]["has_more"] is False
+        assert older["coverage"]["continuation"] is None
+        assert {r["date"] for r in page["data"]["series"]}.isdisjoint({r["date"] for r in older["data"]["series"]})
+        latest = _latest(db, None, MarketLatestInput(instrument_id=instrument.id))
+        assert latest["data"]["date"] == (first + timedelta(days=39)).isoformat()
+        assert latest["coverage"]["returned"] == 1
+        assert len(latest["sources"]) == 1

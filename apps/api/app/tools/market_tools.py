@@ -11,6 +11,7 @@ from app.services.market_service import (
     get_top_volume, get_sectors, resolve_market_date,
 )
 from app.services.research_service import list_macro_series, macro_releases, market_series
+from app.services.canonical_market_service import latest_price
 from app.models.market import Company
 from app.models.workstation import CompanyScreeningSnapshot, Instrument
 from app.tools.registry import ToolDefinition, ToolRegistry, tool_result
@@ -21,11 +22,15 @@ class EmptyInput(BaseModel):
     pass
 
 
+class MarketLatestInput(BaseModel):
+    instrument_id: str
+
+
 class MarketSeriesInput(BaseModel):
     instrument_id: str
     start: date | None = None
     end: date | None = None
-    limit: int = Field(default=260, ge=1, le=260)
+    limit: int = Field(default=30, ge=1, le=260)
 
 
 class MacroInput(BaseModel):
@@ -98,8 +103,26 @@ def _freshness(db, _user, _payload: EmptyInput):
     )
 
 
+def _latest(db, _user, payload: MarketLatestInput):
+    instrument = db.get(Instrument, payload.instrument_id)
+    if instrument is None:
+        raise HTTPException(status_code=404, detail="Instrument not found")
+    row = latest_price(db, instrument.symbol)
+    if row is None:
+        return tool_result("missing", {"instrument_id": instrument.id, "symbol": instrument.symbol}, returned=0)
+    return tool_result("ok", {
+        "instrument_id": instrument.id, "symbol": instrument.symbol,
+        "date": row.trade_date, "close": row.close, "observed_at": row.observed_at,
+        "source_ref": "market_latest",
+    }, sources=[{
+        "id": "market_latest", "source_name": row.source, "source_url": row.source_url,
+        "artifact_id": row.artifact_id, "artifact_sha256": row.artifact_sha256,
+    }], returned=1, remaining=0)
+
+
 def _series(db, _user, payload: MarketSeriesInput):
-    data = market_series(db, payload.instrument_id, payload.start, payload.end)
+    # Fetch one lookahead row, not all history, to detect an older page.
+    data = market_series(db, payload.instrument_id, payload.start, payload.end, limit=payload.limit + 1)
     all_rows = data["series"]
     rows = all_rows[-payload.limit :]
     sources = {}
@@ -124,20 +147,22 @@ def _series(db, _user, payload: MarketSeriesInput):
             item.pop(key, None)
         normalized.append(item)
     data = {**data, "series": normalized}
-    remaining = max(0, len(all_rows) - len(rows))
+    has_more = len(all_rows) > len(rows)
     continuation = None
-    if remaining and rows:
+    if has_more and rows:
         first_date = rows[0].get("date")
         if isinstance(first_date, date):
             continuation = (first_date - timedelta(days=1)).isoformat()
-    return tool_result(
+    result = tool_result(
         "ok" if rows else "missing",
         data,
         sources=list(sources.values()),
         returned=len(rows),
-        remaining=remaining,
+        remaining=None if has_more else 0,
         continuation=continuation,
     )
+    result["coverage"]["has_more"] = has_more
+    return result
 
 
 def _macro(db, _user, payload: MacroInput):
@@ -245,7 +270,7 @@ def register_market_tools(registry: ToolRegistry) -> None:
     registry.register(ToolDefinition(
         "market.overview", "1.0",
         "Database market snapshot, gainers, losers, volume leaders and sectors. Select only needed sections; each reports dates and stored coverage.",
-        MarketOverviewInput, "market:read", True, False, 10, "low", _overview,
+        MarketOverviewInput, "market:read", True, False, 10, _overview,
     ))
     registry.register(
         ToolDefinition(
@@ -257,21 +282,24 @@ def register_market_tools(registry: ToolRegistry) -> None:
             True,
             False,
             5,
-            "low",
             _freshness,
         )
     )
+    registry.register(ToolDefinition(
+        "market.latest", "1.0",
+        "Latest stored close price, observation date and source citation for one instrument. Use for latest/current price questions, not historical analysis.",
+        MarketLatestInput, "market:read", True, False, 10, _latest,
+    ))
     registry.register(
         ToolDefinition(
             "market.series",
             "1.0",
-            "Canonical OHLCV history with observation provenance. Returns at most 260 latest observations; use the continuation date as end to request older history.",
+            "Historical OHLCV with observation provenance. Defaults to 30 latest observations; explicitly set limit up to 260 for longer history. Use continuation as end for older pages. For one latest price use market.latest.",
             MarketSeriesInput,
             "market:read",
             True,
             False,
             10,
-            "medium",
             _series,
         )
     )
@@ -285,7 +313,6 @@ def register_market_tools(registry: ToolRegistry) -> None:
             True,
             False,
             10,
-            "medium",
             _macro,
         )
     )
@@ -299,7 +326,6 @@ def register_market_tools(registry: ToolRegistry) -> None:
             True,
             False,
             10,
-            "low",
             _universe,
         )
     )

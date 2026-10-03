@@ -34,8 +34,13 @@ def _document(db, user, document_id: str) -> Document | None:
     return db.scalar(select(Document).where(Document.id == document_id, _visible(user)))
 
 
-def _citation(row: Citation) -> dict:
-    return {
+DISCOVERY_EXCERPT_CHARS = 320
+MAX_READ_PAGES = 20
+
+
+def _citation(row: Citation, *, excerpt_limit: int | None = None) -> dict:
+    quote = row.quote_snippet or ""
+    result = {
         "id": row.id,
         "document_id": row.document_id,
         "chunk_id": row.chunk_id,
@@ -43,8 +48,11 @@ def _citation(row: Citation) -> dict:
         "source_url": row.source_url,
         "title": row.title,
         "page_number": row.page_number,
-        "quote_snippet": row.quote_snippet,
+        "quote_snippet": quote[:excerpt_limit] if excerpt_limit is not None else row.quote_snippet,
     }
+    if excerpt_limit is not None:
+        result["excerpt_truncated"] = len(quote) > excerpt_limit
+    return result
 
 
 def _citations(
@@ -85,6 +93,8 @@ class DocumentReadInput(BaseModel):
                 raise ValueError("page_start and page_end are required for page reads")
             if self.page_end < self.page_start:
                 raise ValueError("page_end must be greater than or equal to page_start")
+            if self.page_end - self.page_start + 1 > MAX_READ_PAGES:
+                raise ValueError("at most 20 pages may be read at once; request another page range for more")
             if self.chunk_ids:
                 raise ValueError("chunk_ids cannot be combined with page reads")
         elif not self.chunk_ids or self.page_start is not None or self.page_end is not None:
@@ -168,10 +178,11 @@ def _discover(db, user, payload: DocumentDiscoveryInput):
                     "chunk_id": chunk.id,
                     "page_number": chunk.page_number,
                     "section_title": chunk.section_title,
-                    "snippet": " ".join(chunk.chunk_text.split())[:320],
+                    "snippet": " ".join(chunk.chunk_text.split())[:DISCOVERY_EXCERPT_CHARS],
+                    "excerpt_truncated": len(" ".join(chunk.chunk_text.split())) > DISCOVERY_EXCERPT_CHARS,
                 }
             )
-            item["sources"].append(_citation(citation))
+            item["sources"].append(_citation(citation, excerpt_limit=DISCOVERY_EXCERPT_CHARS))
     ranked = sorted(grouped.values(), key=lambda item: (-item["score"], item["document"].id))
     offset = int(payload.cursor or 0)
     selected = ranked[offset : offset + payload.limit]
@@ -399,13 +410,12 @@ def register_document_tools(registry: ToolRegistry) -> None:
         ToolDefinition(
             "documents.discover",
             "1.0",
-            "Find owned or public stored documents and short matching snippets",
+            "Find owned/public stored documents: 5 results by default, at most 10 per page, up to 3 matching 320-character excerpts per document. Source links retained; use cursor for more results and documents.read for full evidence.",
             DocumentDiscoveryInput,
             "research:read",
             True,
             False,
             12,
-            "medium",
             _discover,
         )
     )
@@ -413,13 +423,12 @@ def register_document_tools(registry: ToolRegistry) -> None:
         ToolDefinition(
             "documents.read",
             "1.0",
-            "Read complete stored physical pages or selected chunks",
+            "Read complete stored text for up to 20 physical pages or 20 selected chunks per call. Request another page range/chunk selection for more; no silent text truncation.",
             DocumentReadInput,
             "research:read",
             True,
             False,
             10,
-            "medium",
             _read,
         )
     )
@@ -433,7 +442,6 @@ def register_document_tools(registry: ToolRegistry) -> None:
             True,
             False,
             8,
-            "low",
             _navigate,
         )
     )
@@ -447,7 +455,6 @@ def register_document_tools(registry: ToolRegistry) -> None:
             True,
             False,
             25,
-            "medium",
             _page_images,
         )
     )

@@ -1245,7 +1245,8 @@ def test_accepted_allocation_delivery_and_local_recovery_do_not_repeat_provider(
         row = db.scalar(select(AssistantExecution).where(AssistantExecution.user_id == user_id))
         identifier = row.id
         checkpoint = json.loads(decrypt_secret(row.transcript_encrypted))
-        assert checkpoint["reserved_tool_cost_units"] == 5
+        assert checkpoint["reserved_tool_calls"] == 3
+        assert "cost units" not in json.dumps(captured)
         assert checkpoint["allocation_check"]["accepted"] is True
         assert "Execution allowance (not evidence)" in json.dumps(captured[1])
         from datetime import timedelta
@@ -1265,11 +1266,16 @@ def test_accepted_allocation_delivery_and_local_recovery_do_not_repeat_provider(
     assert len(captured) == 3
 
 
-def test_representative_evidence_reads_leave_verification_within_existing_budget():
+def test_tool_call_limit_applies_without_cost_units_and_accepts_old_checkpoints():
     from app.ai.tool_loop import _reserve_calls
     checkpoint = {"reserved_tool_calls": 0, "reserved_tool_cost_units": 0}
-    names = ["research.company_sections"] * 3 + ["research.events", "portfolio.summary", "ips.compliance", "quant.security"]
+    names = ["research.company_sections"] * 10
     _reserve_calls(checkpoint, [ContentBlock("tool_call", id=str(index), name=name, arguments={}) for index, name in enumerate(names)])
-    assert checkpoint["reserved_tool_cost_units"] == 15
+    assert checkpoint["reserved_tool_calls"] == 10
     _reserve_calls(checkpoint, [ContentBlock("tool_call", id="verify", name="allocation.verify", arguments={})])
-    assert checkpoint == {"reserved_tool_calls": 8, "reserved_tool_cost_units": 18}
+    assert checkpoint == {"reserved_tool_calls": 11, "reserved_tool_cost_units": 0}
+    _reserve_calls(checkpoint, [ContentBlock("tool_call", id="last", name="quant.security", arguments={})])
+    from app.ai.tool_loop import AssistantTerminalError
+    with pytest.raises(AssistantTerminalError, match="tool_call_limit_exhausted"):
+        _reserve_calls(checkpoint, [ContentBlock("tool_call", id="overflow", name="quant.security", arguments={})])
+    assert checkpoint["reserved_tool_calls"] == 12

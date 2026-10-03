@@ -64,7 +64,6 @@ class Settings(BaseSettings):
     retrieval_min_semantic_score: float = Field(default=0.25, ge=-1, le=1)
     retrieval_min_lexical_score: float = Field(default=0.50, ge=0, le=1)
     assistant_max_tool_iterations: int = 12
-    assistant_max_tool_cost_units: int = 18
     assistant_max_retrieved_chunks: int = 8
     assistant_timeout_seconds: int = 30
     assistant_execution_deadline_seconds: int = Field(default=300, ge=1)

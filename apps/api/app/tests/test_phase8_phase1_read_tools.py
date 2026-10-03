@@ -302,7 +302,7 @@ def test_document_discovery_reads_full_pages_enforces_ownership_and_handles_gaps
         document = create_document_from_pages(
             db,
             [
-                ParsedPage(1, "Revenue table\nRevenue PKR 100 million\nQualification: unaudited."),
+                ParsedPage(1, "Revenue table\nRevenue PKR 100 million" + " Full evidence preserved." * 40 + "\nQualification: unaudited."),
                 ParsedPage(2, "Adjacent note\nThe amount excludes discontinued operations."),
                 ParsedPage(4, "Later page after an extraction gap."),
             ],
@@ -326,6 +326,9 @@ def test_document_discovery_reads_full_pages_enforces_ownership_and_handles_gaps
         discovery_data = expand_model_data(discovery["data"])
         assert discovery["coverage"]["returned"] == 1
         assert discovery_data["documents"][0]["document_id"] == document_id
+        assert all(len(source["quote_snippet"] or "") <= 320 for source in discovery["sources"])
+        assert all(len(match["snippet"]) <= 320 for match in discovery_data["documents"][0]["matches"])
+        assert any(match["excerpt_truncated"] for match in discovery_data["documents"][0]["matches"])
         chunk_id = discovery_data["documents"][0]["matches"][0]["chunk_id"]
         chunk_read = registry.invoke(
             "documents.read",
@@ -336,6 +339,7 @@ def test_document_discovery_reads_full_pages_enforces_ownership_and_handles_gaps
         chunk_data = expand_model_data(chunk_read["data"])
         assert chunk_data["chunks"][0]["chunk_id"] == chunk_id
         assert "Qualification: unaudited." in chunk_data["chunks"][0]["text"]
+        assert len(chunk_data["chunks"][0]["text"]) > 320
         assert {source["chunk_id"] for source in chunk_read["sources"]} == {chunk_id}
         first = registry.invoke(
             "documents.read",

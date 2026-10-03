@@ -11,7 +11,7 @@ class EmptyInput(BaseModel):
     pass
 
 
-def _definition(*, name: str = "test.tool", timeout: int = 5, cost: str = "low", confirmation: bool = False):
+def _definition(*, name: str = "test.tool", timeout: int = 5, confirmation: bool = False):
     return ToolDefinition(
         name=name,
         version="1.0",
@@ -21,19 +21,18 @@ def _definition(*, name: str = "test.tool", timeout: int = 5, cost: str = "low",
         read_only=True,
         requires_confirmation=confirmation,
         timeout_seconds=timeout,
-        cost_class=cost,
         handler=lambda _db, _user, _payload: {"ok": True},
     )
 
 
-def test_tool_registry_enforces_cost_and_confirmation_budgets():
+def test_tool_registry_preserves_confirmation_without_cost_units():
     registry = ToolRegistry()
     registry.register(_definition(name="test.low"))
     registry.register(_definition(name="test.confirm", confirmation=True))
 
-    assert registry.invoke("test.low", None, None, {}, max_cost_units=1) == {"ok": True}
-    with pytest.raises(PermissionError, match="cost budget"):
-        registry.invoke("test.low", None, None, {}, max_cost_units=1)
+    for _ in range(20):
+        assert registry.invoke("test.low", None, None, {}) == {"ok": True}
+    assert all("cost" not in item["description"].lower() for item in registry.model_catalog())
     with pytest.raises(PermissionError, match="explicit confirmation"):
         registry.invoke("test.confirm", None, None, {}, confirmed=False)
 
@@ -45,6 +44,53 @@ def test_sync_registry_does_not_claim_post_return_timeout_cancellation(monkeypat
     registry.register(_definition(timeout=1))
 
     assert registry.invoke("test.tool", None, None, {}) == {"ok": True}
+
+
+def test_document_and_allocation_workload_inputs_reject_oversized_requests():
+    from pydantic import ValidationError
+    from app.tools.document_tools import DocumentDiscoveryInput, DocumentReadInput
+    from app.tools.quant_tools import AllocationVerificationInput
+    with pytest.raises(ValidationError):
+        DocumentDiscoveryInput(query="earnings", limit=11)
+    with pytest.raises(ValidationError):
+        DocumentReadInput(document_id="d", mode="pages", page_start=1, page_end=21)
+    assert DocumentReadInput(document_id="d", mode="pages", page_start=21, page_end=40)
+    with pytest.raises(ValidationError):
+        DocumentReadInput(document_id="d", mode="chunks", chunk_ids=[str(i) for i in range(21)])
+    with pytest.raises(ValidationError):
+        AllocationVerificationInput(portfolio_id="p", allowed_instrument_ids=["i"],
+            proposal={"legs": [{"instrument_id": str(i), "side": "buy", "gross_amount": "100"} for i in range(21)]})
+
+
+def test_allocation_workload_rejects_too_many_held_and_proposed_instruments(monkeypatch):
+    from types import SimpleNamespace
+    from app.services.allocation_verification import verify_allocation
+    from app.reasoning.allocation import AllocationProposal
+    instruments = [SimpleNamespace(id=str(i), symbol=str(i)) for i in range(101)]
+    summary = SimpleNamespace(holdings=[SimpleNamespace(symbol=str(i), quantity=1) for i in range(101)])
+    monkeypatch.setattr("app.services.allocation_verification.get_portfolio_summary", lambda *_args: summary)
+    db = SimpleNamespace(scalars=lambda _query: instruments)
+    result = verify_allocation(db, None, "p", AllocationProposal(), ["0"])
+    assert result["errors"] == ["allocation_instrument_limit_exceeded"]
+    assert result["financial_state_mutated"] is False
+
+
+@pytest.mark.asyncio
+async def test_tool_timeout_returns_specific_failure_without_cost_scoring(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import app.ai.tool_loop as loop
+    from app.ai.providers.base import ContentBlock
+    async def blocked(*_args):
+        await asyncio.Event().wait()
+    monkeypatch.setattr(loop, "_definitions", lambda: {
+        "allocation.verify": SimpleNamespace(name="allocation.verify", timeout_seconds=0.01)
+    })
+    monkeypatch.setattr(loop.asyncio, "to_thread", blocked)
+    monkeypatch.setattr(loop.diagnostics, "record_tool_failure", lambda *_args: None)
+    result = await loop._execute_tool("u", ContentBlock("tool_call", id="t", name="allocation.verify", arguments={}))
+    assert result.envelope["status"] == "unavailable"
+    assert result.envelope["data"]["error"]["code"] == "tool_timeout"
 
 
 def test_market_series_bounds_model_payload_and_returns_older_history_cursor(monkeypatch):
@@ -62,15 +108,19 @@ def test_market_series_bounds_model_payload_and_returns_older_history_cursor(mon
     ]
     monkeypatch.setattr(
         "app.tools.market_tools.market_series",
-        lambda *_args: {"instrument_id": "instrument-1", "symbol": "TEST", "series": rows},
+        lambda *_args, limit: {"instrument_id": "instrument-1", "symbol": "TEST", "series": rows[-limit:]},
     )
 
     result = _series(None, None, MarketSeriesInput(instrument_id="instrument-1"))
 
-    assert result["coverage"]["returned"] == 260
-    assert result["coverage"]["remaining"] == 40
-    assert result["coverage"]["continuation"] == (first + timedelta(days=39)).isoformat()
-    assert len(result["data"]["series"]["rows"]) == 260
+    assert result["coverage"]["returned"] == 30
+    assert result["coverage"]["remaining"] is None
+    assert result["coverage"]["has_more"] is True
+    assert result["coverage"]["continuation"] == (first + timedelta(days=269)).isoformat()
+    assert len(result["data"]["series"]["rows"]) == 30
+    explicit = _series(None, None, MarketSeriesInput(instrument_id="instrument-1", limit=260))
+    assert explicit["coverage"]["returned"] == 260
+    assert explicit["coverage"]["continuation"] == (first + timedelta(days=39)).isoformat()
 
 
 def test_market_series_accepts_single_latest_row(monkeypatch):
@@ -80,7 +130,7 @@ def test_market_series_accepts_single_latest_row(monkeypatch):
     ]
     monkeypatch.setattr(
         "app.tools.market_tools.market_series",
-        lambda *_args: {"instrument_id": "instrument-1", "symbol": "TEST", "series": rows},
+        lambda *_args, limit: {"instrument_id": "instrument-1", "symbol": "TEST", "series": rows[-limit:]},
     )
 
     result = _series(

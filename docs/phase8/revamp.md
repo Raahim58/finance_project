@@ -217,10 +217,11 @@ percentiles compare sector peers, not unrelated business models. Company sector 
 returns the selected sector by default; `sector_comparison_limit` explicitly requests up
 to 20 extra sector rows. Events apply offsets once and expose continuation correctly.
 
-Budgets remain 12 backend calls and 18 cost units, with the existing cumulative input
-safeguard and history limits. Catalog descriptions disclose costs; continuations disclose
-remaining allowances outside citation evidence. Allocation work is instructed to preserve
-three units for verification. This guides model selection without promising live model
+The budget remains 12 backend calls, with the existing cumulative input
+safeguard and history limits. Cost-unit scoring was removed on 2026-10-03; tool contracts
+instead declare concrete workload bounds (see `docs/mcp-tools.md`). Continuations disclose
+remaining calls outside citation evidence. Allocation work is instructed to preserve
+one call for verification. This guides model selection without promising live model
 quality or adding routing/model repair calls.
 
 ### Offline checks and local recovery

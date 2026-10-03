@@ -340,6 +340,8 @@ def compare_portfolio(db: Session, user: User, portfolio_id: str, payload: Portf
         "portfolio_id": portfolio.id,
         "label": payload.label,
         "data_cutoff": days[-1],
+        "risk_sample": {"basis": "all_available_aligned_daily_prices", "start": days[0],
+                        "end": days[-1], "return_observations": len(days) - 1, "annualization": 252},
         "assumptions": {"expected_return_method": expected.method, "expected_return": expected.assumptions, "covariance": "diagonal_shrinkage", "risk_free": risk_free, "cash": {"instrument": "operational_cash", "annual_return": cash_return, "basis": "nominal", "effective_date": days[-1].isoformat()}, "cash_covariance": 0.0},
         "current_weights": current,
         "proposed_weights": proposed,

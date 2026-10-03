@@ -115,7 +115,6 @@ def register_portfolio_tools(registry: ToolRegistry) -> None:
             True,
             False,
             5,
-            "low",
             _summary,
         )
     )
@@ -129,7 +128,6 @@ def register_portfolio_tools(registry: ToolRegistry) -> None:
             True,
             False,
             10,
-            "medium",
             _performance,
         )
     )
@@ -143,7 +141,6 @@ def register_portfolio_tools(registry: ToolRegistry) -> None:
             True,
             False,
             8,
-            "low",
             _ips,
         )
     )
@@ -157,7 +154,6 @@ def register_portfolio_tools(registry: ToolRegistry) -> None:
             True,
             False,
             8,
-            "low",
             _scenario_history,
         )
     )

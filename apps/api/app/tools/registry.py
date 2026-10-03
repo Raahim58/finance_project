@@ -111,14 +111,12 @@ class ToolDefinition:
     read_only: bool
     requires_confirmation: bool
     timeout_seconds: int
-    cost_class: str
     handler: ToolHandler
 
     def model_schema(self) -> dict[str, Any]:
-        units = {"low": 1, "medium": 3, "high": 6}.get(self.cost_class, 6)
         return {
             "name": self.name,
-            "description": f"{self.description} Cost: {units} units.",
+            "description": self.description,
             "input_schema": self.input_model.model_json_schema(),
         }
 
@@ -126,7 +124,6 @@ class ToolDefinition:
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolDefinition] = {}
-        self._cost_units_spent = 0
 
     def register(self, definition: ToolDefinition) -> None:
         if definition.name in self._tools:
@@ -149,16 +146,12 @@ class ToolRegistry:
         arguments: dict[str, Any],
         *,
         confirmed: bool = False,
-        max_cost_units: int | None = None,
     ) -> dict[str, Any]:
         if name not in self._tools:
             raise KeyError(f"Tool is not allowlisted: {name}")
         definition = self._tools[name]
         if definition.requires_confirmation and not confirmed:
             raise PermissionError(f"Tool {name} requires explicit confirmation")
-        units = {"low": 1, "medium": 3, "high": 6}.get(definition.cost_class, 6)
-        if max_cost_units is not None and self._cost_units_spent + units > max_cost_units:
-            raise PermissionError(f"Tool {name} exceeds the assistant cost budget")
         try:
             payload = definition.input_model.model_validate(arguments)
         except ValidationError as exc:
@@ -187,7 +180,6 @@ class ToolRegistry:
             diagnostics.record_tool_failure(name, exc, "handler_unavailable")
             return tool_result("unavailable", error={"code": "handler_unavailable"})
         elapsed = monotonic() - started
-        self._cost_units_spent += units
         if isinstance(result, dict) and set(result) == {"status", "data", "sources", "coverage"}:
             encoded = json.dumps(result, allow_nan=False, separators=(",", ":")).encode()
             result["coverage"].update(

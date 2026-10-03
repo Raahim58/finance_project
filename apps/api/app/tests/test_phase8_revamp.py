@@ -199,7 +199,7 @@ def test_tool_failure_keeps_safe_type_and_location_in_internal_stage(execution):
         raise TypeError("PRIVATE HOLDINGS secret key")
     registry = ToolRegistry()
     registry.register(ToolDefinition("test.failure", "1", "offline", Input,
-        "test:read", True, False, 1, "low", failed_handler))
+        "test:read", True, False, 1, failed_handler))
     token = diagnostics.execution_id.set(identifier)
     try:
         with SessionLocal() as db:

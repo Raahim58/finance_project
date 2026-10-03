@@ -24,6 +24,9 @@ def verify_allocation(db, user, portfolio_id, proposal, allowed_ids):
     ))))
     by_symbol = {row.symbol: row for row in instruments}
     held = {by_symbol[row.symbol].id: row.quantity for row in summary.holdings if row.symbol in by_symbol}
+    if len(set(held) | requested) > 100:
+        return {"accepted": False, "errors": ["allocation_instrument_limit_exceeded"],
+                "workload_limit": {"instruments": 100}, "financial_state_mutated": False}
     requested = {leg.instrument_id for leg in proposal.legs}
     eligible = set(allowed_ids) | set(held)
     if requested - eligible:
@@ -70,6 +73,7 @@ def verify_allocation(db, user, portfolio_id, proposal, allowed_ids):
     try:
         comparison = compare_portfolio(db, user, portfolio_id, PortfolioComparisonRequest(target_weights=weights), persist_analysis=False)
         result["comparison"] = comparison
+        result["risk_sample"] = comparison.get("risk_sample")
         result["current_compliance"] = comparison["current_compliance"]
         # Re-evaluate with instrument metadata, which older comparison does not include.
         metrics = {row["key"]: row["proposed"] for row in comparison["metrics"]}

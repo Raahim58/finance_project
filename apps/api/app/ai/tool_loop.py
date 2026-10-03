@@ -66,7 +66,7 @@ ALLOCATION RULES — MANDATORY
 2. You may quote current capital weights and recorded IPS targets from delivered database evidence without verification.
 3. When asked to recommend an allocation, formulate provisional gross purchases and funding sales yourself from available portfolio and company evidence. A user-supplied trade proposal is not required. Do not invent prices or expected returns.
 4. Before presenting a proposed allocation, call allocation.verify for that exact gross-amount proposal. It calculates lot-rounded quantities, cash, resulting capital weights, before/after metrics and IPS compliance. Present its calculated values only.
-5. Preserve three cost units for allocation.verify when doing allocation work. Use the smallest relevant reads; do not fetch redundant quantitative outputs.
+5. Preserve one backend call for allocation.verify when doing allocation work. Use the smallest relevant reads; do not fetch redundant quantitative outputs.
 6. If verification is unavailable or rejected, explain the checks and gaps; do not present the proposal as verified. Arithmetic acceptance does not establish freshness, goal feasibility, optimality or guaranteed returns.
 7. Never claim that a trade, portfolio, IPS, ingestion, or refresh was changed or executed.
 
@@ -120,8 +120,7 @@ def _update_allowance(checkpoint: dict[str, Any]) -> None:
     base = block["text"].split("\nExecution allowance (not evidence):", 1)[0]
     block["text"] = base + (
         "\nExecution allowance (not evidence): "
-        f"{settings.assistant_max_tool_iterations - checkpoint['reserved_tool_calls']} backend calls, "
-        f"{settings.assistant_max_tool_cost_units - checkpoint['reserved_tool_cost_units']} cost units remaining."
+        f"{settings.assistant_max_tool_iterations - checkpoint['reserved_tool_calls']} backend calls remaining."
     )
 
 
@@ -282,7 +281,6 @@ def _initial_checkpoint(
         "next_evidence": 1,
         "tool_trace": [],
         "reserved_tool_calls": 0,
-        "reserved_tool_cost_units": 0,
         "reserved_tool_call_ids": [],
         "completed_tool_call_ids": [],
         "allocation_check": {"status": "not_requested"},
@@ -496,23 +494,10 @@ def _definitions():
     return {item.name: item for item in build_tool_registry().definitions()}
 
 
-def _cost_units(name: str) -> int:
-    definition = _definitions().get(name)
-    if name == "search_conversation_history":
-        return 1
-    if definition is None:
-        return 0
-    return {"low": 1, "medium": 3, "high": 6}.get(definition.cost_class, 6)
-
-
 def _reserve_calls(checkpoint: dict[str, Any], calls: list[ContentBlock]) -> None:
     if checkpoint["reserved_tool_calls"] + len(calls) > settings.assistant_max_tool_iterations:
         raise AssistantTerminalError("tool_call_limit_exhausted")
-    added_cost = sum(_cost_units(call.name or "") for call in calls)
-    if checkpoint["reserved_tool_cost_units"] + added_cost > settings.assistant_max_tool_cost_units:
-        raise AssistantTerminalError("tool_cost_limit_exhausted")
     checkpoint["reserved_tool_calls"] += len(calls)
-    checkpoint["reserved_tool_cost_units"] += added_cost
 
 
 def _sync_tool(user_id: str, call: ContentBlock) -> dict[str, Any]:

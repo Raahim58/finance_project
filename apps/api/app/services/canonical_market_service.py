@@ -325,7 +325,10 @@ def price_series(
     end: date | None = None,
     *,
     allow_legacy_fallback: bool = True,
+    limit: int | None = None,
 ) -> list[CanonicalPrice]:
+    if limit is not None and limit < 1:
+        raise ValueError("Price-series limit must be positive")
     normalized_symbol = symbol.strip().upper()
     instrument = db.scalar(select(Instrument).where(Instrument.symbol == normalized_symbol))
     if instrument:
@@ -349,7 +352,12 @@ def price_series(
             statement = statement.where(MarketObservation.effective_at >= datetime.combine(start, datetime.min.time()))
         if end:
             statement = statement.where(MarketObservation.effective_at < datetime.combine(end, datetime.max.time()))
-        rows = list(db.execute(statement.order_by(MarketObservation.effective_at)))
+        statement = statement.order_by(MarketObservation.effective_at.desc() if limit else MarketObservation.effective_at)
+        if limit:
+            statement = statement.limit(limit)
+        rows = list(db.execute(statement))
+        if limit:
+            rows.reverse()
         if rows:
             return [
                 _from_observation_parts(observation, artifact, source, instrument.symbol)
@@ -367,7 +375,12 @@ def price_series(
         statement = statement.where(MarketPrice.trade_date >= start)
     if end:
         statement = statement.where(MarketPrice.trade_date <= end)
-    legacy = list(db.scalars(statement.order_by(MarketPrice.trade_date)))
+    statement = statement.order_by(MarketPrice.trade_date.desc() if limit else MarketPrice.trade_date)
+    if limit:
+        statement = statement.limit(limit)
+    legacy = list(db.scalars(statement))
+    if limit:
+        legacy.reverse()
     return [
         CanonicalPrice(
             instrument_id=instrument.id if instrument else None,
