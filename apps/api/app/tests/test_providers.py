@@ -19,4 +19,4 @@ async def test_mock_provider_contract():
 
 
 def test_expected_provider_names_are_registered():
-    assert list_provider_names() == ["anthropic", "gemini", "mock", "openai", "openrouter"]
+    assert list_provider_names() == ["anthropic", "gemini", "mock", "openai", "openrouter", "zai"]

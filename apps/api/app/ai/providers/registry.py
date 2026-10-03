@@ -6,11 +6,13 @@ from app.ai.providers.http_placeholders import (
     OpenRouterProvider,
 )
 from app.ai.providers.mock import MockProvider
+from app.ai.providers.zai import ZaiProvider
 
 _PROVIDERS: dict[str, LLMProvider] = {
     provider.name: provider
     for provider in [
         MockProvider(),
+        ZaiProvider(),
         AnthropicProvider(),
         OpenAIProvider(),
         GeminiProvider(),
