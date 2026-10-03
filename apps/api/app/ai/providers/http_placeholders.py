@@ -65,13 +65,12 @@ class HTTPProvider(LLMProvider):
         if options.stream:
             from app.ai.providers.streaming import StreamAssembler, sse_json
             from app.ai.providers.base import ProviderEvent, emit_provider_event
-            assembler = StreamAssembler(self.name)
+            assembler = StreamAssembler(self.name, api_key)
             async with httpx.AsyncClient(timeout=options.deadline_seconds) as client:
                 async with client.stream("POST", url, headers=self._headers(api_key), json=payload) as response:
                     if response.status_code >= 400:
                         await response.aread()
-                        raise ProviderRequestError(provider=self.name, status_code=response.status_code,
-                                                   request_id=response.headers.get("x-request-id"))
+                        _raise_provider_response_error(self.name, response, api_key)
                     await emit_provider_event(ProviderEvent("started"))
                     async for event in sse_json(response.aiter_lines()):
                         await assembler.feed(event)
@@ -84,52 +83,51 @@ class HTTPProvider(LLMProvider):
         except httpx.HTTPError as exc:
             raise RuntimeError(f"{self.name} API request failed") from exc
         if response.status_code >= 400:
-            error_type = None
-            provider_message = None
-            quota_violations: list[dict[str, Any]] = []
-            retry_delay = None
-            try:
-                error_payload = response.json()
-            except ValueError:
-                error_payload = None
-            if isinstance(error_payload, dict):
-                error = error_payload.get("error")
-                if isinstance(error, dict):
-                    if isinstance(error.get("type"), str):
-                        error_type = error["type"][:120]
-                    elif isinstance(error.get("status"), str):
-                        error_type = error["status"][:120]
-                    provider_message = _safe_provider_message(error.get("message"), api_key)
-                    quota_violations, retry_delay = _safe_google_error_details(
-                        error.get("details"), api_key
-                    )
-                else:
-                    if isinstance(error_payload.get("type"), str):
-                        error_type = error_payload["type"][:120]
-                    provider_message = _safe_provider_message(
-                        error_payload.get("message"), api_key
-                    )
-            request_id = response.headers.get("request-id") or response.headers.get("x-request-id")
-            raise ProviderRequestError(
-                provider=self.name,
-                status_code=response.status_code,
-                error_type=error_type,
-                provider_message=provider_message,
-                request_id=None if request_id is None else request_id[:255],
-                quota_violations=quota_violations,
-                retry_delay=retry_delay,
-            )
+            _raise_provider_response_error(self.name, response, api_key)
         try:
             return response.json()
         except ValueError as exc:
             raise RuntimeError(f"{self.name} API returned invalid JSON") from exc
 
 
-def _safe_provider_message(value: Any, api_key: str) -> str | None:
-    """Retain a useful provider diagnostic without retaining credentials or bodies."""
+def _raise_provider_response_error(provider, response, api_key):
+    """Retain sanitized business codes for streaming and ordinary HTTP errors."""
+    error_type = None
+    provider_message = None
+    quota_violations = []
+    retry_delay = None
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            code = error.get("type") or error.get("status") or error.get("code")
+            if isinstance(code, (str, int)):
+                error_type = str(code)[:120]
+            provider_message = _safe_provider_message(error.get("message"), api_key)
+            quota_violations, retry_delay = _safe_google_error_details(error.get("details"), api_key)
+        else:
+            if isinstance(payload.get("type"), str):
+                error_type = payload["type"][:120]
+            provider_message = _safe_provider_message(payload.get("message"), api_key)
+    request_id = response.headers.get("request-id") or response.headers.get("x-request-id")
+    body = _redact_provider_credentials(response.text, api_key)
+    body_bytes = body.encode("utf-8")
+    safe_headers = {name: _redact_provider_credentials(value, api_key) for name, value in response.headers.items()
+                    if name.lower() in {"request-id", "x-request-id", "retry-after", "content-type"}
+                    or name.lower().startswith(("x-ratelimit-", "ratelimit-"))}
+    response_payload = {"status": response.status_code, "headers": safe_headers,
+                        "body": body_bytes[:65536].decode("utf-8", errors="replace"),
+                        "body_bytes": len(body_bytes), "body_truncated": len(body_bytes) > 65536}
+    raise ProviderRequestError(provider=provider, status_code=response.status_code,
+        error_type=error_type, provider_message=provider_message,
+        request_id=None if request_id is None else request_id[:255],
+        quota_violations=quota_violations, retry_delay=retry_delay, response_payload=response_payload)
 
-    if not isinstance(value, str) or not value.strip():
-        return None
+
+def _redact_provider_credentials(value: str, api_key: str) -> str:
     message = value.replace(api_key, "[REDACTED]") if api_key else value
     message = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", message)
     message = re.sub(
@@ -137,7 +135,14 @@ def _safe_provider_message(value: Any, api_key: str) -> str | None:
         r"\1\2[REDACTED]",
         message,
     )
-    return " ".join(message.split())[:1000]
+    return message
+
+
+def _safe_provider_message(value: Any, api_key: str) -> str | None:
+    """Retain a useful diagnostic without credentials or an unbounded body."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return " ".join(_redact_provider_credentials(value, api_key).split())[:1000]
 
 
 def _safe_google_error_details(

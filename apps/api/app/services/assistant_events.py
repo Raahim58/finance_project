@@ -117,4 +117,4 @@ def save_terminal_partial(db, row):
                         AssistantMessage.role == "user")) or "{}"
     db.add(AssistantMessage(id=identifier, conversation_id=row.conversation_id, execution_id=row.id,
         role="assistant", content=text or "No answer was completed.", context_json=context,
-        outcome=row.status, evidence_json=json.dumps({"sources": [], "provisional": True})))
+        outcome=row.status, evidence_json=json.dumps({"sources": [], "provisional": True, "error_code": row.error_code})))

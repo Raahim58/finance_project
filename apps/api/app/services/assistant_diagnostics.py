@@ -35,6 +35,9 @@ SAFE_FIELDS = {
     "error_type",
     "provider_message",
     "provider_request_id",
+    "provider_error_payload_retained",
+    "provider_error_payload_bytes",
+    "provider_error_payload_truncated",
     "quota_violations",
     "retry_delay",
     "interaction_id",
@@ -251,6 +254,13 @@ def finish_attempt(identifier, *, response=None, error=None, latency_ms=0):
                 metadata["provider_request_id"] = error.request_id
                 metadata["quota_violations"] = error.quota_violations
                 metadata["retry_delay"] = error.retry_delay
+                if error.response_payload is not None and row.payload_encrypted:
+                    payload = json.loads(decrypt_secret(row.payload_encrypted))
+                    payload["error_response"] = error.response_payload
+                    row.payload_encrypted = encrypt_secret(json.dumps(payload))
+                    metadata["provider_error_payload_retained"] = True
+                    metadata["provider_error_payload_bytes"] = error.response_payload.get("body_bytes")
+                    metadata["provider_error_payload_truncated"] = error.response_payload.get("body_truncated", False)
             row.status = "failed"
         row.metadata_json = json.dumps(metadata)
         row.completed_at = now()

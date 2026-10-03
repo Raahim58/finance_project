@@ -26,8 +26,9 @@ async def sse_json(lines):
 
 
 class StreamAssembler:
-    def __init__(self, provider):
+    def __init__(self, provider, api_key=""):
         self.provider = provider
+        self.api_key = api_key
         self.data = {}
         self.blocks = {}
         self.arguments = {}
@@ -35,7 +36,9 @@ class StreamAssembler:
 
     async def feed(self, event):
         if event.get("error") or event.get("type") == "error" or event.get("event_type") == "error":
-            raise RuntimeError("Provider returned a stream error")
+            import httpx
+            from app.ai.providers.http_placeholders import _raise_provider_response_error
+            _raise_provider_response_error(self.provider, httpx.Response(200, json=event), self.api_key)
         if self.provider == "anthropic":
             text = self._anthropic(event)
         elif self.provider == "gemini":

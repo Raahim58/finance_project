@@ -459,7 +459,10 @@ async def _provider_turn(
                     or "previous_interaction" in (exc.provider_message or "").lower()
                 )
             )
-            code = "provider_interaction_expired" if expired else f"provider_http_{exc.status_code}"
+            zai_errors = {"1305": "provider_overloaded", "1302": "provider_rate_limited", "1113": "provider_quota_exhausted"}
+            code = ("provider_stream_error" if exc.status_code == 200 else "provider_interaction_expired" if expired else
+                    zai_errors.get(exc.error_type, f"provider_http_{exc.status_code}") if provider.name == "zai" else
+                    f"provider_http_{exc.status_code}")
         elif isinstance(exc, ProviderQueueTimeout):
             code = "provider_queue_timeout"
         elif isinstance(exc, TimeoutError):

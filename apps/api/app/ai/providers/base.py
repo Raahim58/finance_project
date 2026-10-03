@@ -94,6 +94,7 @@ class ProviderRequestError(RuntimeError):
         request_id: str | None = None,
         quota_violations: list[dict[str, Any]] | None = None,
         retry_delay: str | None = None,
+        response_payload: dict[str, Any] | None = None,
     ) -> None:
         self.provider = provider
         self.status_code = status_code
@@ -102,6 +103,9 @@ class ProviderRequestError(RuntimeError):
         self.request_id = request_id
         self.quota_violations = quota_violations or []
         self.retry_delay = retry_delay
+        # Private diagnostic material: encrypted by the attempt ledger. Never
+        # interpolate into exception messages, logs or frontend exports.
+        self.response_payload = response_payload
         detail = f"{provider} API request failed with HTTP {status_code}"
         if error_type:
             detail += f" ({error_type})"

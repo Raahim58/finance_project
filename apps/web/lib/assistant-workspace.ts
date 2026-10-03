@@ -18,6 +18,7 @@ export type ChatMessage = {
   created_at: string;
   evidence?: {
     provisional?: boolean;
+    error_code?: string | null;
     sources?: Array<Record<string, unknown>>;
     synthesis?: Record<string, unknown>;
   };

@@ -3,6 +3,13 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage } from "@/lib/assistant-workspace";
 export function outcomeLabel(status: string, error?: string | null) {
+  const providerErrors: Record<string, string> = {
+    provider_overloaded: "Z.ai reports temporary overload (1305). Try again later.",
+    provider_rate_limited: "Z.ai’s request limit was reached. Try again later.",
+    provider_quota_exhausted: "Z.ai reports insufficient balance or no resource package.",
+    provider_http_429: "The model provider rejected this request (429). Try again later.",
+  };
+  if (error && providerErrors[error]) return providerErrors[error];
   return (
     (
       {
@@ -51,9 +58,9 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
         </small>
       </div>
       <Markdown text={message.content} />
-      {message.outcome && message.outcome !== "completed" ? (
+      {message.role === "assistant" && message.outcome && message.outcome !== "completed" ? (
         <p className="assistant-warning">
-          {outcomeLabel(message.outcome)}
+          {outcomeLabel(message.outcome, message.evidence?.error_code)}
           {message.evidence?.provisional
             ? " · Partial answer wasn’t verified"
             : ""}
