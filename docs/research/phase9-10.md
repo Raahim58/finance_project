@@ -99,6 +99,8 @@ For continuous manual-worker service:
 
 Oracle Compose includes an opt-in research worker. The GitHub deployment workflow starts it with the API and frontend on each push to `main`; the default local Compose stack leaves it opt-in. Paid research generation still requires an explicit batch request. Manual operation:
 
+The API Docker image installs PyTorch 2.10.0's CPU-only wheel from the official CPU index and constrains subsequent requirements resolution with `apps/api/constraints.cpu.txt`. Oracle performs document embeddings on CPU. Default PyPI GPU dependencies can exhaust the server disk during image extraction; they are not needed for this workload. This Docker-specific constraint does not change local macOS dependency installation.
+
 ```sh
 docker compose -f compose.oracle.yml exec api alembic upgrade head
 docker compose -f compose.oracle.yml --profile research up -d --build research-worker

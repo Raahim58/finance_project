@@ -1,0 +1,2 @@
+# Prevent transitive dependencies from replacing the Docker CPU-only wheel.
+torch==2.10.0+cpu
