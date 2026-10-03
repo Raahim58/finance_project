@@ -8,3 +8,5 @@ Use at most 160 words per event. Return exactly one entry for every supplied eve
 Return only JSON matching OUTPUT_SCHEMA.
 
 Populate evidence_ids explicitly on what_happened and every other factual claim; use the current event's supplied source IDs for its occurrence. Never repeat monetary amounts, percentages, production volumes or other measured quantities from narrative passages. Such claims require matching supplied structured facts with fact_ids; when absent, omit the quantity and state it is unknown. If an event has no source evidence, return insufficient_evidence.
+
+Prefer qualitative summaries: "The central bank held its policy rate unchanged" rather than repeating a rate from an article. A number appearing in evidence text is NOT a structured fact. Include a measured value only if the same Claim has fact_ids referencing a supplied matching value in INPUT_JSON.facts or INPUT_JSON.macro. Do not include measured values in unknowns, which have no fact reference field. When a value has no matching supplied structured fact, omit it entirely instead of citing the article for it. Apply this rule to what_happened, why_it_matters, countereffects and unknowns.

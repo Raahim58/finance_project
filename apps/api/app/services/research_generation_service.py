@@ -7,45 +7,51 @@ from app.domain.research_relevance import canonical, fingerprint
 from app.schemas.research_intelligence import ProfileOutput, DigestOutput
 from app.models.research_intelligence import CompanyExposureProfile, CompanyEventBrief
 
-PROFILE_VERSION = "exposure-v3"
-DIGEST_VERSION = "digest-v2"
+PROFILE_VERSION = "exposure-v4"
+DIGEST_VERSION = "digest-v3"
 PROMPTS = Path(__file__).resolve().parents[1] / "ai" / "prompts"
+
+
+def profile_quote_options(payload):
+    """Provider selects a short ID; persisted quotes always come from source text."""
+    quotes = {}
+    for evidence in payload.get("evidence", []):
+        words = list(re.finditer(r"\S+", evidence["text"]))
+        positions = [0]
+        focus = next(
+            (
+                i
+                for i, word in enumerate(words)
+                if re.search(
+                    r"oil|crude|interest|borrow|exchange|currency|import|export",
+                    word.group(),
+                    re.I,
+                )
+            ),
+            None,
+        )
+        if focus is not None:
+            positions.append(max(0, focus - 5))
+        for start in positions:
+            if words:
+                end = min(len(words), start + 20)
+                quote = evidence["text"][words[start].start() : words[end - 1].end()]
+                if not any(q["evidence_id"] == evidence["id"] and q["text"] == quote for q in quotes.values()):
+                    quotes[f"q{len(quotes)}"] = {"evidence_id": evidence["id"], "text": quote}
+    return quotes
 
 
 def generation_request(kind, payload):
     schema = ProfileOutput if kind == "profile" else DigestOutput
     output_schema = schema.model_json_schema()
-    if kind == "profile" and payload.get("evidence"):
-        quotes = []
-        for evidence in payload["evidence"]:
-            words = list(re.finditer(r"\S+", evidence["text"]))
-            positions = [0]
-            focus = next(
-                (
-                    i
-                    for i, word in enumerate(words)
-                    if re.search(
-                        r"oil|crude|interest|borrow|exchange|currency|import|export",
-                        word.group(),
-                        re.I,
-                    )
-                ),
-                None,
-            )
-            if focus is not None:
-                positions.append(max(0, focus - 5))
-            for start in positions:
-                if words:
-                    end = min(len(words), start + 20)
-                    quotes.append(evidence["text"][words[start].start() : words[end - 1].end()])
-        output_schema["$defs"]["SupportingQuote"]["properties"]["quote"]["enum"] = sorted(
-            set(quotes)
-        )
+    quotes = profile_quote_options(payload) if kind == "profile" else {}
+    if quotes:
+        output_schema["$defs"]["SupportingQuote"]["properties"]["quote"]["enum"] = list(quotes)
     prompt = (
         PROMPTS
         / ("company_exposure_profile.md" if kind == "profile" else "company_event_digest.md")
     ).read_text()
-    data = canonical(payload)
+    data = canonical({**payload, "quote_options": quotes} if kind == "profile" else payload)
     cap = 32000 if kind == "profile" else 40000
     if len(data.encode()) > cap:
         raise ValueError("research_input_budget_exceeded")
@@ -58,9 +64,9 @@ def generation_request(kind, payload):
     ]
     if len(canonical(messages).encode()) > cap:
         raise ValueError("research_input_budget_exceeded")
-    # Long quote enums remain in the prompt: Gemini rejects their schema complexity.
-    # Provider constraints use the compact shape; local validation still checks exact source text.
-    return messages, schema.model_json_schema()
+    # Short IDs avoid large provider quote enums and character-copy errors.
+    # The server resolves them to unchanged source slices before persistence.
+    return messages, output_schema
 
 
 def evidence_map(payload):
@@ -81,6 +87,7 @@ def validate_output(kind, content, payload):
     fact_rows = {f["id"]: f for f in payload.get("facts", []) + payload.get("macro", [])}
     facts = set(fact_rows)
     if kind == "profile":
+        quote_options = profile_quote_options(payload)
         for relationship in result.relationships:
             if set(relationship.evidence_ids) - evidence.keys():
                 raise ValueError("unknown_evidence_id")
@@ -88,6 +95,11 @@ def validate_output(kind, content, payload):
             for quote in relationship.supporting_quotes:
                 if quote.evidence_id not in relationship.evidence_ids:
                     raise ValueError("quote_evidence_mismatch")
+                if quote.quote in quote_options:
+                    option = quote_options[quote.quote]
+                    if option["evidence_id"] != quote.evidence_id:
+                        raise ValueError("quote_evidence_mismatch")
+                    quote.quote = option["text"]
                 if quote.quote not in evidence[quote.evidence_id]["text"]:
                     raise ValueError("quote_not_in_source")
                 quoted.add(quote.evidence_id)

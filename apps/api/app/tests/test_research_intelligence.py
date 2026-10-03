@@ -658,9 +658,22 @@ def test_profile_schema_quotes_are_contiguous_source_excerpts():
     )
     prompt_schema = json.loads(messages[1]["content"].split("OUTPUT_SCHEMA\n")[1])
     quotes = prompt_schema["$defs"]["SupportingQuote"]["properties"]["quote"]["enum"]
-    assert "enum" not in schema["$defs"]["SupportingQuote"]["properties"]["quote"]
-    assert quotes and all(q in source for q in quotes)
+    assert schema["$defs"]["SupportingQuote"]["properties"]["quote"]["enum"] == quotes
+    supplied = json.loads(messages[1]["content"].split("INPUT_JSON\n")[1].split("\nOUTPUT_SCHEMA\n")[0])["quote_options"]
+    assert quotes and all(supplied[q]["text"] in source for q in quotes)
+    assert all(supplied[q]["evidence_id"] == "chunk:real" for q in quotes)
     assert len(messages) == 2
+
+
+def test_profile_quote_selection_resolves_source_text_and_rejects_wrong_source():
+    payload = {"evidence": [{"id": "chunk:a", "text": "Floating-rate debt exposes financing costs."}, {"id": "chunk:b", "text": "Foreign currency deposits carry translation risk."}]}
+    relationship = {"factor": "pk_policy_rate", "channel": "financing", "mechanism": "Debt financing costs may change.", "evidence_ids": ["chunk:a"], "supporting_quotes": [{"evidence_id": "chunk:a", "quote": "q0"}], "status": "ai_proposed"}
+    output = validate_output("profile", json.dumps({"relationships": [relationship], "coverage_gaps": []}), payload)
+    assert output["relationships"][0]["supporting_quotes"][0]["quote"] == payload["evidence"][0]["text"]
+    relationship["evidence_ids"] = ["chunk:b"]
+    relationship["supporting_quotes"][0]["evidence_id"] = "chunk:b"
+    with pytest.raises(ValueError, match="quote_evidence_mismatch"):
+        validate_output("profile", json.dumps({"relationships": [relationship], "coverage_gaps": []}), payload)
 
 
 def test_events_without_current_source_chunks_are_excluded():
