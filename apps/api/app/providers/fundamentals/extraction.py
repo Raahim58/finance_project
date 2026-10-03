@@ -1,6 +1,7 @@
 """Deterministic, layout-aware normalization of text-native statement rows."""
 
 import re
+import unicodedata
 import io
 import logging
 import shutil
@@ -14,16 +15,18 @@ from decimal import Decimal, InvalidOperation
 
 
 ALIASES = {
-    "revenue": {"revenue", "sales", "net sales", "turnover"},
+    "revenue": {"revenue", "sales", "turnover"},
+    "gross_revenue": {"gross revenue", "gross sales"},
+    "net_revenue": {"net revenue", "net sales"},
     "gross_profit": {"gross profit"},
     "ebit": {"operating profit", "profit from operations", "operating income"},
     "net_income": {"profit after taxation", "profit after tax", "net profit", "profit for the year", "profit for the period"},
     "assets": {"total assets"},
     "liabilities": {"total liabilities"},
     "equity": {"total equity", "shareholders equity", "shareholders' equity"},
-    "cash": {"cash and cash equivalents", "cash & cash equivalents"},
+    "cash": {"cash and cash equivalents", "cash & cash equivalents", "cash and cash equivalents at the end of the year"},
     "debt": {"total debt", "borrowings"},
-    "earnings_per_share": {"eps", "earnings per share", "basic earnings per share"},
+    "earnings_per_share": {"eps", "earnings per share", "basic earnings per share", "earnings per share - basic and diluted"},
     "dividend_per_share": {"dividend per share", "cash dividend per share"},
 }
 LABELS = {alias: canonical for canonical, aliases in ALIASES.items() for alias in aliases}
@@ -31,7 +34,7 @@ NUMBER = re.compile(r"\(?-?\d[\d,]*(?:\.\d+)?\)?")
 STATEMENT_SIGNALS = ("financial position", "balance sheet", "profit and loss", "income statement", "profit or loss", "cash flow")
 MAX_OCR_PAGES = 80
 OCR_PAGE_TIMEOUT_SECONDS = 30
-FINANCIAL_EXTRACTION_VERSION = "financial-layout-v3-ocr"
+FINANCIAL_EXTRACTION_VERSION = "financial-layout-v4-validated-columns"
 
 
 class _MalformedPdfColorFilter(logging.Filter):
@@ -160,7 +163,7 @@ def _ocr_financial_pages(content: bytes, page_count: int) -> tuple[list[Financia
 
 
 def _scale(text: str) -> Decimal | None:
-    lowered = text.lower()
+    lowered = unicodedata.normalize("NFKC", text).lower().replace("‘", "\'").replace("’", "\'")
     if re.search(r"(?:rs\.?|rupees|pkr)\s*(?:in)?\s*(?:'000|000s|thousand)", lowered): return Decimal("1000")
     if re.search(r"(?:rs\.?|rupees|pkr)\s*(?:in)?\s*(?:million|mn)", lowered): return Decimal("1000000")
     if re.search(r"(?:rs\.?|rupees|pkr)\s*(?:in)?\s*(?:billion|bn)", lowered): return Decimal("1000000000")
@@ -168,76 +171,174 @@ def _scale(text: str) -> Decimal | None:
     return None
 
 
+def resolve_report_period(pages: list[object], fallback: date) -> date:
+    """Prefer explicit reporting dates for the catalog year, never posting dates."""
+    candidates = []
+    for page in pages:
+        text = " ".join(str(getattr(page, "text", "")).split())
+        for match in re.finditer(r"(?:year|period|quarter)\s+end(?:ed|ing)\s+((?:[A-Za-z]+\s+\d{1,2}|\d{1,2}\s+[A-Za-z]+)[, ]+20\d{2})", text, re.I):
+            value = parse_period_end(match.group(1))
+            if value and value.year == fallback.year:
+                candidates.append(value)
+    if not candidates:
+        return fallback
+    counts = {value: candidates.count(value) for value in set(candidates)}
+    best = max(counts.values())
+    winners = [value for value, count in counts.items() if count == best]
+    return winners[0] if len(winners) == 1 else fallback
+
+
 def extract_facts(
-    pages: list[object],
-    period_end: date,
-    *,
-    extraction_method: str = "text_layout",
+    pages: list[object], period_end: date, *, extraction_method: str = "text_layout",
     confidence: Decimal = Decimal("0.900000"),
 ) -> tuple[list[ExtractedFact], list[str]]:
-    facts: list[ExtractedFact] = []
-    diagnostics: list[str] = []
-    seen: set[tuple[str, date]] = set()
-    statement_signals = ("statement of financial position", "balance sheet", "profit and loss", "income statement", "statement of profit or loss", "cash flow statement")
+    facts, diagnostics = [], []
+    seen = {}
+    period_end = resolve_report_period(pages, period_end)
+    consolidated = True
+    notes_scope = False
     for page in pages:
         page_number = int(getattr(page, "page_number", 0))
-        page_text = str(getattr(page, "text", ""))
-        lowered_page = page_text.lower()
-        scale = _scale(page_text) or _scale("\n".join(str(getattr(candidate, "text", "")) for candidate in pages[max(0, page_number - 2):page_number + 1]))
-        if scale is None and any(alias in lowered_page for alias in LABELS):
-            diagnostics.append(f"Page {page_number}: reporting scale unknown; rows were not promoted.")
+        page_text = unicodedata.normalize("NFKC", str(getattr(page, "text", "")))
+        heading = " ".join(page_text[:1400].lower().split())
+        primary_statement = bool(re.search(r"statement of.{0,30}(?:financial position|profit or loss|cash flows)", heading))
+        if primary_statement:
+            notes_scope = False
+        elif re.search(r"notes to.{0,100}financial statements", heading):
+            notes_scope = True
+        if re.search(r"(?:party-wise details|name of related party)", page_text, re.I):
+            diagnostics.append(f"Page {page_number}: related-party transaction table excluded from company totals.")
             continue
-        # Known financial row labels plus a dense numeric layout are sufficient
-        # when PDF extraction drops the statement heading onto an adjacent page.
-        known_labels = sum(alias in lowered_page for alias in LABELS)
-        if not any(signal in lowered_page for signal in statement_signals) and known_labels < 2:
-            continue
-        if scale is None:
-            diagnostics.append(f"Page {page_number}: reporting scale unknown; rows were not promoted.")
-            continue
-        unconsolidated = "unconsolidated" in lowered_page and "consolidated" not in lowered_page.replace("unconsolidated", "")
+        scale = _scale(page_text)
+        columns = None
+        calendar_columns = False
+        header_dates = None
+        month_days = []
+        percentage_scope = False
         for raw_line in page_text.splitlines():
             line = " ".join(raw_line.strip().split())
             lowered = line.lower().rstrip(":")
-            label = next((alias for alias in sorted(LABELS, key=len, reverse=True) if lowered == alias or lowered.startswith(f"{alias} ")), None)
-            if label is None:
+            if re.search(r"analysis.*%", lowered):
+                percentage_scope = True
+            elif _scale(line) is not None:
+                percentage_scope = False
+            if len(line) < 160:
+                if (re.match(r"^(?:notes to the )?(?:unconsolidated|standalone)\b", lowered)
+                    or "financial performance - unconsolidated" in lowered):
+                    consolidated = False
+                elif (re.match(r"^(?:notes to the )?consolidated\b", lowered)
+                      or "performance - consolidated" in lowered
+                      or re.search(r"Consolidated Financial Performance\s*$", line)):
+                    consolidated = True
+            date_labels = re.findall(r"\b([A-Za-z]+\s+\d{1,2}),?", line)
+            parsed_days = []
+            for text in date_labels:
+                try:
+                    parsed_days.append(datetime.strptime(text + " 2000", "%B %d %Y"))
+                except ValueError:
+                    pass
+            if len(parsed_days) >= 2:
+                month_days = parsed_days
+            label = next((alias for alias in sorted(LABELS, key=len, reverse=True)
+                          if re.match(re.escape(alias) + r"(?:\s|\*|$)", lowered)), None)
+            years = re.findall(r"\b20\d{2}\b", line)
+            fiscal = re.findall(r"(?:1H|[369]M|FY)\s*(?:FY)?\s*(20\d{2}|\d{2})(?!\d)", line, re.I)
+            if label is None and len(years) >= 2 and all(1900 < int(y) <= period_end.year for y in years):
+                columns = [int(y) for y in years]
+                calendar_columns = True
+                try:
+                    header_dates = [date(year, md.month, md.day) for year, md in zip(columns, month_days)] if len(month_days) == len(columns) else None
+                except ValueError:
+                    header_dates = None
+            elif label is None and len(fiscal) >= 2:
+                columns = [int(y) if len(y) == 4 else 2000 + int(y) for y in fiscal]
+                calendar_columns = False
+                header_dates = None
+            if label is None or percentage_scope:
                 continue
             suffix = line[len(label):]
-            values = NUMBER.findall(suffix)
-            if not values:
+            # Statement labels must be followed by numeric cells, not prose,
+            # volume descriptions, embedded dates or narrative snippets.
+            cleaned = re.sub(r"\((?:PKR|Rs\.?|rupees)\)", "", suffix, flags=re.I)
+            cleaned = cleaned.replace("*", "")
+            if re.search(r"[A-Za-z]", cleaned):
+                diagnostics.append(f"Page {page_number}: narrative/ambiguous {LABELS[label]} row not promoted.")
+                continue
+            tokens = [m.group() for m in NUMBER.finditer(cleaned)
+                      if not cleaned[m.end():].lstrip().startswith("%")]
+            if not tokens:
                 continue
             taxonomy = LABELS[label]
-            # Comparative financial statements conventionally display current
-            # then prior period. We only accept two columns; note-reference
-            # integers are discarded when three numeric tokens are present.
-            value_tokens = values[-2:] if len(values) >= 2 else values
-            try:
-                comparative_end = date(period_end.year - 1, period_end.month, period_end.day)
-            except ValueError:
-                comparative_end = date(period_end.year - 1, period_end.month, 28)
-            periods = [period_end, comparative_end] if len(value_tokens) == 2 else [period_end]
-            for token, fact_period in zip(value_tokens, periods, strict=True):
-                key = (taxonomy, fact_period)
-                if key in seen:
+            # A statement explicitly deducting sales tax/excise from "Revenue"
+            # identifies that top line as gross, not net revenue.
+            if taxonomy == "revenue" and label == "revenue" and primary_statement and re.search(r"less:\s*sales tax", page_text, re.I):
+                taxonomy = "gross_revenue"
+            if notes_scope and taxonomy != "debt":
+                continue
+            per_share = taxonomy in {"earnings_per_share", "dividend_per_share"}
+            if scale is None and (not per_share or not re.search(r"\b(?:PKR|Rs\.?|rupees)\b", page_text, re.I)):
+                diagnostics.append(f"Page {page_number}: reporting scale unknown; {taxonomy} row not promoted.")
+                continue
+            if columns:
+                if len(set(columns)) != len(columns) and (not header_dates or len(set(header_dates)) != len(header_dates)):
+                    diagnostics.append(f"Page {page_number}: duplicate-year date columns need explicit dates; {taxonomy} row not promoted.")
                     continue
-                negative = token.startswith("(") and token.endswith(")")
+                # A leading note reference is allowed only in addition to every
+                # declared year column, never inferred by taking the last two.
+                if len(tokens) == len(columns) + 1 and re.fullmatch(r"\d{1,2}(?:\.\d{1,2})?", tokens[0]):
+                    tokens = tokens[1:]
+                if len(tokens) != len(columns):
+                    diagnostics.append(f"Page {page_number}: ambiguous {taxonomy} columns not promoted.")
+                    continue
+                anchor = max(columns)
+                periods = []
+                for index, year in enumerate(columns):
+                    mapped_year = year if calendar_columns else period_end.year - (anchor - year)
+                    try:
+                        periods.append(header_dates[index] if header_dates else period_end.replace(year=mapped_year))
+                    except ValueError:
+                        periods.append(date(mapped_year, period_end.month, 28))
+            else:
+                # Preserve the existing simple single/two-column contract.
+                # Multi-column rows require explicit header mapping.
+                if len(tokens) > 2:
+                    diagnostics.append(f"Page {page_number}: missing year header for {taxonomy} row.")
+                    continue
                 try:
-                    value = Decimal(token.strip("()").replace(",", "")) * scale
+                    prior = period_end.replace(year=period_end.year - 1)
+                except ValueError:
+                    prior = date(period_end.year - 1, period_end.month, 28)
+                periods = [period_end, prior][:len(tokens)]
+            for token, fact_period in zip(tokens, periods, strict=True):
+                key = (taxonomy, fact_period, consolidated)
+                rank = 2 if primary_statement else 1
+                if key in seen and seen[key][1] >= rank:
+                    continue
+                try:
+                    amount = Decimal(token.strip("()").replace(",", ""))
                 except InvalidOperation:
                     continue
-                if taxonomy in {"earnings_per_share", "dividend_per_share"}:
-                    value /= scale
-                facts.append(ExtractedFact(taxonomy, -value if negative else value, "PKR", "PKR", fact_period, page_number, line[:255], extraction_method=extraction_method, confidence=confidence, consolidated=not unconsolidated))
-                seen.add(key)
+                value = amount * (Decimal(1) if per_share else scale)
+                if token.startswith("("):
+                    value = -value
+                fact = ExtractedFact(taxonomy, value, "PKR", "PKR", fact_period,
+                    page_number, line[:255], extraction_method=extraction_method,
+                    confidence=confidence, consolidated=consolidated)
+                if key in seen:
+                    facts[seen[key][0]] = fact
+                else:
+                    seen[key] = (len(facts), rank)
+                    facts.append(fact)
+                seen[key] = (seen[key][0], rank)
     if not facts:
-        diagnostics.append("No sufficiently unambiguous known financial-statement rows were found; facts remain unavailable.")
-    # Reconciliation is diagnostic only; it never manufactures a balancing fact.
-    latest = {fact.taxonomy_key: fact.value for fact in facts if fact.period_end == period_end}
-    if all(key in latest for key in ("assets", "liabilities", "equity")):
-        delta = abs(latest["assets"] - latest["liabilities"] - latest["equity"])
-        tolerance = max(abs(latest["assets"]) * Decimal("0.03"), Decimal("1"))
-        if delta > tolerance:
-            diagnostics.append("Assets did not approximately reconcile with liabilities plus equity; retained facts require review.")
+        diagnostics.append("No sufficiently unambiguous financial rows were found; facts remain unavailable.")
+    for basis in (True, False):
+        latest = {fact.taxonomy_key: fact.value for fact in facts
+                  if fact.period_end == period_end and fact.consolidated == basis}
+        if all(key in latest for key in ("assets", "liabilities", "equity")):
+            delta = abs(latest["assets"] - latest["liabilities"] - latest["equity"])
+            if delta > max(abs(latest["assets"]) * Decimal("0.03"), Decimal(1)):
+                diagnostics.append("Assets did not approximately reconcile with liabilities plus equity; retained facts require review.")
     return facts, diagnostics
 
 

@@ -189,11 +189,11 @@ def _refresh_psx_financials(db: Session, symbols: list[str] | None = None, limit
                 period_end = parse_period_end(item.period_ended)
                 instrument = db.scalar(select(Instrument).where(Instrument.symbol == symbol))
                 if period_end and instrument:
-                    extracted, _ = extract_facts(pages, period_end)
+                    extracted, diagnostics = extract_facts(pages, period_end)
                     for fact in extracted:
-                        exists = db.scalar(select(FinancialFact.id).where(FinancialFact.instrument_id == instrument.id, FinancialFact.taxonomy_key == fact.taxonomy_key, FinancialFact.period_end == fact.period_end, FinancialFact.document_id == document.id))
+                        exists = db.scalar(select(FinancialFact.id).where(FinancialFact.instrument_id == instrument.id, FinancialFact.taxonomy_key == fact.taxonomy_key, FinancialFact.period_end == fact.period_end, FinancialFact.document_id == document.id, FinancialFact.consolidated == fact.consolidated))
                         if not exists:
-                            db.add(FinancialFact(instrument_id=instrument.id, taxonomy_key=fact.taxonomy_key, period_type="annual" if document_type == "annual_report" else "interim", period_end=fact.period_end, filing_date=item.posting_date, value=fact.value, unit=fact.unit, currency=fact.currency, consolidated=True, document_id=document.id, page_number=fact.page_number))
+                            db.add(FinancialFact(instrument_id=instrument.id, taxonomy_key=fact.taxonomy_key, period_type="annual" if document_type == "annual_report" else "interim", period_end=fact.period_end, filing_date=item.posting_date, value=fact.value, unit=fact.unit, currency=fact.currency, consolidated=fact.consolidated, document_id=document.id, page_number=fact.page_number, source_label=fact.source_label, extraction_method=fact.extraction_method, confidence=fact.confidence, diagnostics_json=json.dumps({"messages": diagnostics})))
                 db.commit()
                 accepted += 1; remaining -= 1
                 latest_date = max(latest_date or item.posting_date, item.posting_date)

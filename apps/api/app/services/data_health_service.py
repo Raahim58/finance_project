@@ -267,6 +267,7 @@ def company_completeness(db: Session, symbol: str) -> dict[str, object]:
         .join(Document, Document.id == FinancialFact.document_id)
         .where(
             FinancialFact.instrument_id == instrument.id,
+            or_(FinancialFact.confidence.is_(None), FinancialFact.confidence > 0),
             Document.source_url.is_not(None),
             ~func.lower(Document.source_url).like("demo://%"),
             ~func.lower(Document.source_name).contains("demo"),

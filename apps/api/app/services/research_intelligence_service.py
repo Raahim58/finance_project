@@ -336,6 +336,7 @@ def exact_facts(db, instrument, limit=12):
             .where(
                 FinancialFact.instrument_id == instrument.id,
                 FinancialFact.period_end <= today,
+                or_(FinancialFact.confidence.is_(None), FinancialFact.confidence > 0),
                 or_(FinancialFact.filing_date.is_(None), FinancialFact.filing_date <= today),
             )
             .order_by(
@@ -351,6 +352,9 @@ def exact_facts(db, instrument, limit=12):
             "value": str(f.value),
             "unit": f.unit,
             "currency": f.currency,
+            "period_type": f.period_type,
+            "period_start": str(f.period_start) if f.period_start else None,
+            "accounting_basis": "consolidated" if f.consolidated else "standalone",
             "period_end": str(f.period_end),
             "document_id": f.document_id,
             "page_number": f.page_number,

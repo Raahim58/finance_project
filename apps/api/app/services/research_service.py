@@ -34,7 +34,7 @@ from app.schemas.research import EventStudyRequest
 
 
 FACT_ALIASES = {
-    "revenue": {"revenue", "sales", "net_sales"},
+    "revenue": {"revenue", "sales", "net_sales", "net_revenue"},
     "ebit": {"ebit", "operating_profit", "profit_from_operations"},
     "net_income": {"net_income", "profit_after_tax", "profit_for_the_year"},
     "eps": {"eps", "earnings_per_share", "basic_eps"},
@@ -56,9 +56,11 @@ def _display_facts(rows: list[FinancialFact]) -> list[FinancialFact]:
     result: list[FinancialFact] = []
     seen: set[tuple[object, ...]] = set()
     for row in sorted(rows, key=lambda item: (item.period_end, item.version, item.filing_date or item.period_end), reverse=True):
+        if row.confidence is not None and row.confidence <= 0:
+            continue
         normalized = _normalized_taxonomy(row.taxonomy_key)
         canonical = next((name for name, aliases in FACT_ALIASES.items() if normalized in aliases), normalized)
-        key = (canonical, row.period_type, row.period_end, row.unit, row.currency, row.consolidated)
+        key = (canonical, row.period_type, row.period_start, row.period_end, row.unit, row.currency, row.consolidated)
         if key not in seen:
             result.append(row)
             seen.add(key)
@@ -118,6 +120,15 @@ def _group_provenance(provenance: dict[str, dict[str, object]], document_ids: li
     }
 
 
+def _same_duration(left: FinancialFact, right: FinancialFact) -> bool:
+    if left.period_start is None or right.period_start is None:
+        # Annual periods can be aligned by year-end. Unknown interim durations
+        # must not conflate quarterly and year-to-date observations.
+        return left.period_type == right.period_type == "annual" and left.period_start is right.period_start
+    return (left.period_start.month, left.period_start.day, left.period_end.month, left.period_end.day) == (
+        right.period_start.month, right.period_start.day, right.period_end.month, right.period_end.day)
+
+
 def _derived_fundamentals(facts: list[FinancialFact], provenance: dict[str, dict[str, object]] | None = None) -> dict[str, object]:
     provenance = provenance or {}
     grouped: dict[str, list[FinancialFact]] = {}
@@ -128,9 +139,13 @@ def _derived_fundamentals(facts: list[FinancialFact], provenance: dict[str, dict
     latest: dict[str, FinancialFact] = {}
     growth: dict[str, object] = {}
     for key, rows in grouped.items():
-        rows.sort(key=lambda row: (row.period_end, row.version), reverse=True)
+        rows.sort(key=lambda row: (row.period_end, row.consolidated, row.version, row.filing_date or row.period_end), reverse=True)
         latest[key] = rows[0]
-        comparable = next((row for row in rows[1:] if row.unit == rows[0].unit and row.currency == rows[0].currency and row.period_type == rows[0].period_type), None)
+        comparable = next((row for row in rows[1:] if row.unit == rows[0].unit and row.currency == rows[0].currency and row.period_type == rows[0].period_type
+            and row.consolidated == rows[0].consolidated
+            and row.period_end < rows[0].period_end
+            and (row.period_end.month, row.period_end.day) == (rows[0].period_end.month, rows[0].period_end.day)
+            and _same_duration(row, rows[0])), None)
         if comparable and comparable.value != 0:
             growth[key] = {
                 "value": float((rows[0].value / comparable.value) - 1),
@@ -147,7 +162,10 @@ def _derived_fundamentals(facts: list[FinancialFact], provenance: dict[str, dict
     equity = latest.get("equity")
 
     def compatible(left: FinancialFact | None, right: FinancialFact | None) -> bool:
-        return bool(left and right and left.period_end == right.period_end and left.unit == right.unit and left.currency == right.currency and right.value != 0)
+        return bool(left and right and left.period_end == right.period_end and left.unit == right.unit and left.currency == right.currency and left.consolidated == right.consolidated
+            and left.period_type == right.period_type
+            and (right.taxonomy_key in {"assets", "equity"} or _same_duration(left, right))
+            and right.value != 0)
 
     if compatible(ebit, revenue):
         ratios["operating_margin"] = {"value": float(ebit.value / revenue.value), "period_end": revenue.period_end, "document_ids": [ebit.document_id, revenue.document_id]}
@@ -162,7 +180,7 @@ def _derived_fundamentals(facts: list[FinancialFact], provenance: dict[str, dict
     for entry in ratios.values():
         entry["provenance"] = _group_provenance(provenance, entry["document_ids"])
     return {
-        "latest": {key: {"value": value.value, "unit": value.unit, "currency": value.currency, "period_end": value.period_end, "document_id": value.document_id, "page_number": value.page_number, "provenance": _fact_provenance(provenance, value.document_id)} for key, value in latest.items()},
+        "latest": {key: {"value": value.value, "unit": value.unit, "currency": value.currency, "period_start": value.period_start, "period_end": value.period_end, "accounting_basis": "consolidated" if value.consolidated else "standalone", "document_id": value.document_id, "page_number": value.page_number, "provenance": _fact_provenance(provenance, value.document_id)} for key, value in latest.items()},
         "growth": growth,
         "ratios": ratios,
         "valuation": {"available": False, "reason": "Canonical share-count and fully diluted valuation inputs are not available."},
@@ -287,7 +305,8 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
     instrument = db.get(Instrument, instrument_id)
     if instrument is None: raise HTTPException(status_code=404, detail="Instrument not found")
     latest = latest_price(db, instrument.symbol)
-    all_facts = list(db.scalars(select(FinancialFact).where(FinancialFact.instrument_id == instrument.id).order_by(FinancialFact.period_end.desc(), FinancialFact.version.desc()).limit(200)))
+    all_facts = list(db.scalars(select(FinancialFact).where(FinancialFact.instrument_id == instrument.id,
+        or_(FinancialFact.confidence.is_(None), FinancialFact.confidence > 0)).order_by(FinancialFact.period_end.desc(), FinancialFact.version.desc()).limit(200)))
     all_provenance = _document_provenance(db, {fact.document_id for fact in all_facts if fact.document_id})
     observed_facts = [
         fact
@@ -347,7 +366,7 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
         "market": None if latest is None else {"date": latest.trade_date, "close": latest.close, "volume": latest.volume, "change_percent": latest.change_percent, "source": latest.source, "source_url": latest.source_url, "artifact_id": latest.artifact_id, "artifact_sha256": latest.artifact_sha256, "quality_status": latest.quality_status, "adjustment_state": latest.adjustment_state},
         "market_research": market_research,
         "fundamentals": [
-            *[{"taxonomy_key": fact.taxonomy_key, "period_type": fact.period_type, "period_end": fact.period_end, "filing_date": fact.filing_date, "value": fact.value, "unit": fact.unit, "currency": fact.currency, "document_id": fact.document_id, "page_number": fact.page_number, "classification": "filing_extracted", "source_url": provenance.get(fact.document_id or "", {}).get("source_url"), "provenance": _fact_provenance(provenance, fact.document_id)} for fact in facts],
+            *[{"taxonomy_key": fact.taxonomy_key, "period_type": fact.period_type, "period_start": fact.period_start, "accounting_basis": "consolidated" if fact.consolidated else "standalone", "period_end": fact.period_end, "filing_date": fact.filing_date, "value": fact.value, "unit": fact.unit, "currency": fact.currency, "document_id": fact.document_id, "page_number": fact.page_number, "classification": "filing_extracted", "source_url": provenance.get(fact.document_id or "", {}).get("source_url"), "provenance": _fact_provenance(provenance, fact.document_id)} for fact in facts],
             *[
                 {
                     "taxonomy_key": fact.metric,

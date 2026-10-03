@@ -381,6 +381,7 @@ class ContextBuilder:
                         FinancialFact.value,
                         FinancialFact.filing_date,
                         FinancialFact.period_end,
+                        FinancialFact.confidence,
                     ).where(FinancialFact.instrument_id == instrument.id)
                 )
             ]
@@ -705,6 +706,7 @@ class ContextBuilder:
             db.scalars(
                 select(FinancialFact)
                 .where(FinancialFact.instrument_id == instrument.id, FinancialFact.period_end <= date.today(),
+                    or_(FinancialFact.confidence.is_(None), FinancialFact.confidence > 0),
                     or_(FinancialFact.filing_date.is_(None), FinancialFact.filing_date <= date.today()))
                 .order_by(FinancialFact.period_end.desc(), FinancialFact.version.desc())
                 .limit(100)
@@ -737,6 +739,7 @@ class ContextBuilder:
                 "accounting_basis": "consolidated" if row.consolidated else "standalone",
                 "source": row.source_label,
                 "period_type": row.period_type,
+                "period_start": row.period_start,
                 "period_end": row.period_end,
                 "filing_date": row.filing_date,
                 "value": row.value,

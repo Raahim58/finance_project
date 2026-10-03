@@ -202,7 +202,7 @@ def financial_extract(document_id: str) -> dict[str, object]:
             diagnostics = parser_diagnostics + diagnostics
             if classification == "scanned_or_sparse": diagnostics.append("Normal and OCR extraction produced no deterministic financial facts; facts remain unavailable.")
             for fact in facts if classification in {"text_native", "ocr"} else []:
-                exists = db.scalar(select(FinancialFact.id).where(FinancialFact.instrument_id == instrument.id, FinancialFact.taxonomy_key == fact.taxonomy_key, FinancialFact.period_end == fact.period_end, FinancialFact.document_id == document.id))
+                exists = db.scalar(select(FinancialFact.id).where(FinancialFact.instrument_id == instrument.id, FinancialFact.taxonomy_key == fact.taxonomy_key, FinancialFact.period_end == fact.period_end, FinancialFact.document_id == document.id, FinancialFact.consolidated == fact.consolidated))
                 if not exists:
                     db.add(FinancialFact(instrument_id=instrument.id, taxonomy_key=fact.taxonomy_key, period_type="annual" if document.document_type == "annual_report" else "interim", period_end=fact.period_end, filing_date=document.published_date, value=fact.value, unit=fact.unit, currency=fact.currency, consolidated=fact.consolidated, document_id=document.id, page_number=fact.page_number, source_label=fact.source_label, extraction_method=fact.extraction_method, confidence=fact.confidence, diagnostics_json=json.dumps({"messages": diagnostics})))
             document.status = "parsed" if classification in {"text_native", "ocr"} else "needs_ocr"; document.extraction_version = FINANCIAL_EXTRACTION_VERSION; document.parsed_at = datetime.now(UTC)
