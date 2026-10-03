@@ -24,7 +24,7 @@ from app.services.event_intelligence_service import list_normalized_events
 from app.services.context_consumer_service import (
     ConsumedContext,
     company_research_response,
-    consume_company_research,
+    read_company_research as consume_company_research,
 )
 from app.services.context_builder import build_intelligence_context
 from app.services.context_deficiency_bridge import ContextDeficiencyBridge

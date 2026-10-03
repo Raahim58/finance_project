@@ -207,6 +207,18 @@ def financial_extract(document_id: str) -> dict[str, object]:
                     db.add(FinancialFact(instrument_id=instrument.id, taxonomy_key=fact.taxonomy_key, period_type="annual" if document.document_type == "annual_report" else "interim", period_end=fact.period_end, filing_date=document.published_date, value=fact.value, unit=fact.unit, currency=fact.currency, consolidated=fact.consolidated, document_id=document.id, page_number=fact.page_number, source_label=fact.source_label, extraction_method=fact.extraction_method, confidence=fact.confidence, diagnostics_json=json.dumps({"messages": diagnostics})))
             document.status = "parsed" if classification in {"text_native", "ocr"} else "needs_ocr"; document.extraction_version = FINANCIAL_EXTRACTION_VERSION; document.parsed_at = datetime.now(UTC)
             complete(state, len(facts) if classification in {"text_native", "ocr"} else 0, diagnostics); db.commit()
+            if document.status == "parsed":
+                try:
+                    financial_index.apply_async(args=[document.id], queue="financial_extract")
+                except Exception:
+                    diagnostics.append("Report narrative indexing could not be queued; exact facts remain saved.")
             return {"document_id": document.id, "status": state.status, "classification": classification, "facts": state.item_count, "diagnostics": diagnostics}
         except Exception as exc:
             db.rollback(); state = coverage(db, instrument.id, "financial_extract", document_id, "psx_financials"); fail(state, exc); db.commit(); raise
+
+
+@celery_app.task(name="phase2.financial_index")
+def financial_index(document_id: str):
+    from app.services.research_evidence_service import prepare_report
+    with SessionLocal() as db:
+        return prepare_report(db, document_id)

@@ -9,13 +9,13 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from time import perf_counter
 from typing import Any, Callable
 
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.services.company_risk import company_risk
@@ -30,8 +30,6 @@ from app.models.workstation import (
     Instrument,
     MacroObservation,
     MarketObservation,
-    NormalizedEvent,
-    NormalizedEventSubject,
     PortfolioIPSVersion,
     SourceArtifact,
     StandardizedFinancialFact,
@@ -51,7 +49,6 @@ from app.schemas.intelligence_context import (
 )
 from app.schemas.rag import RagSearchRequest
 from app.services.canonical_market_service import latest_price
-from app.services.event_intelligence_service import list_normalized_events
 from app.services.market_service import get_sectors
 from app.services.portfolio_service import get_portfolio_summary
 from app.services.rag_service import search_rag
@@ -492,26 +489,9 @@ class ContextBuilder:
             )
             return _hash(base, observations, breadth)
         if name == ContextSectionName.EVENTS:
-            rows = [
-                tuple(row)
-                for row in db.execute(
-                    select(
-                        NormalizedEvent.id,
-                        NormalizedEvent.updated_at,
-                        NormalizedEvent.materiality,
-                        NormalizedEvent.freshness_status,
-                    )
-                    .join(
-                        NormalizedEventSubject,
-                        NormalizedEventSubject.normalized_event_id == NormalizedEvent.id,
-                    )
-                    .where(
-                        NormalizedEventSubject.subject_type == "instrument",
-                        func.upper(NormalizedEventSubject.subject_key) == instrument.symbol.upper(),
-                    )
-                )
-            ]
-            return _hash(base, request.event_limit, rows)
+            from app.services.research_intelligence_service import company_events
+            rows = company_events(db, user, instrument, limit=request.event_limit)
+            return _hash(base, user.id, request.event_limit, rows)
         if name == ContextSectionName.RAG_EVIDENCE:
             query = request.question or (
                 PURPOSE_QUERIES.get(request.research_purpose) if request.research_purpose else None
@@ -724,7 +704,8 @@ class ContextBuilder:
         filing = list(
             db.scalars(
                 select(FinancialFact)
-                .where(FinancialFact.instrument_id == instrument.id)
+                .where(FinancialFact.instrument_id == instrument.id, FinancialFact.period_end <= date.today(),
+                    or_(FinancialFact.filing_date.is_(None), FinancialFact.filing_date <= date.today()))
                 .order_by(FinancialFact.period_end.desc(), FinancialFact.version.desc())
                 .limit(100)
             )
@@ -735,6 +716,7 @@ class ContextBuilder:
                 .where(
                     StandardizedFinancialFact.instrument_id == instrument.id,
                     StandardizedFinancialFact.quality_status == "observed",
+                    StandardizedFinancialFact.period_end <= date.today(),
                 )
                 .order_by(StandardizedFinancialFact.period_end.desc())
                 .limit(100)
@@ -1042,16 +1024,8 @@ class ContextBuilder:
     def _events(
         db: Session, _user: User, request: IntelligenceContextRequest, instrument: Instrument
     ):
-        events = list_normalized_events(
-            db,
-            subject_type="instrument",
-            subject_key=instrument.symbol,
-            view="company_relevant",
-            limit=request.event_limit,
-        )
-        admitted = [row for row in events if row.get("materiality") in {"medium", "high"}][
-            : request.event_limit
-        ]
+        from app.services.research_intelligence_service import company_events
+        admitted = company_events(db, _user, instrument, limit=request.event_limit)
         evidence = [
             _evidence(
                 "event",

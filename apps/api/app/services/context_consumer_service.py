@@ -54,7 +54,7 @@ ASSISTANT_SECTION_MAP = {
 @dataclass(frozen=True)
 class ConsumedContext:
     context: IntelligenceContext
-    receipt_record: IntelligenceContextReceiptRecord
+    receipt_record: IntelligenceContextReceiptRecord | None
     refresh_request: ContextRefreshRequest | None
 
 
@@ -416,6 +416,16 @@ def company_research_response(consumed: ConsumedContext) -> dict[str, object]:
         "context_contract_version": context.contract_version,
         "context": context.model_dump(mode="json"),
         "context_receipt": context.receipt.model_dump(mode="json"),
-        "context_receipt_id": consumed.receipt_record.id,
+        "context_receipt_id": consumed.receipt_record.id if consumed.receipt_record else None,
         "refresh_request_id": consumed.refresh_request.id if consumed.refresh_request else None,
     }
+
+
+def read_company_research(db, user, instrument_id, *, portfolio_id=None,
+                          research_purpose=None, question=None, active=False):
+    """Compatibility page projection; no receipts, jobs, ingestion or writes."""
+    instrument = db.get(Instrument, instrument_id)
+    if instrument is None: raise HTTPException(404, "Instrument not found")
+    request = company_context_request(instrument.symbol, portfolio_id=portfolio_id,
+        research_purpose=research_purpose, question=question)
+    return ConsumedContext(build_intelligence_context(db, user, request), None, None)

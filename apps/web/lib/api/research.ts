@@ -1,0 +1,20 @@
+import { request } from "./client";
+export type Evidence = {id:string;document_id:string;page_number:number|null;title:string;source_name:string;source_url:string|null;text:string;published_date?:string;published_at?:string};
+export type Claim = {text:string;evidence_ids:string[];fact_ids:string[]};
+export type Explanation = {event_key:string;status:"explained"|"insufficient_evidence";relationship_kind:string;what_happened:Claim;why_it_matters:Claim[];countereffects:Claim[];unknowns:string[]};
+export type SavedBrief = {explanation:Explanation;generated_at:string;evidence:Evidence[]};
+export type ResearchEventView = {id:string;event_key:string;raw_event_id:string;normalized_event_id:string;title:string;occurred_at:string;event_type:string;source_document_type:string;materiality:string;freshness_status:string;factors:string[];subjects:{subject_key:string}[];evidence:Evidence[];relationship_kind?:string;saved_brief?:SavedBrief|null};
+export type Relationship = {factor:string;channel:string;mechanism:string;conditions:string[];evidence_ids:string[];supporting_quotes:{evidence_id:string;quote:string}[];status:"ai_proposed"};
+export type CompanyIntelligence = {instrument_id:string;symbol:string;events:ResearchEventView[];reports:{document_id:string;title:string;pages:number;chunks:number;indexed:boolean}[];profile:{relationships:Relationship[];coverage_gaps:string[];generated_at:string;evidence:Evidence[]}|null};
+export type PortfolioEvent = {event:ResearchEventView;companies:{symbol:string;relationship_kind:string;saved_brief:SavedBrief|null;current_portfolio_weight:string|null}[];potentially_affected_weight:string|null};
+export type PortfolioEventIntelligence = {portfolio_id:string;portfolio_name:string;events:PortfolioEvent[];valuation_complete:boolean;coverage:{holdings:number;priced_holdings:number}};
+export type BatchRequest = {client_request_id:string;portfolio_id?:string;instrument_ids?:string[];max_companies:number;max_calls:number};
+export type BatchPreview = {companies:{instrument_id:string;symbol:string;reports_to_index:number;profile_cached:boolean;digest_cached:boolean;selected_events:number;max_calls:number}[];maximum_calls:number;budget_calls:number;within_budget:boolean;provider_config:{provider:string;model:string}|null;estimated_input_tokens_upper_bound:number;estimated_output_tokens_upper_bound:number};
+export type JobStatus = {id:string;status:string;error_code:string|null;reserved_calls:number;maximum_calls:number;actual_usage:{input_tokens:number;output_tokens:number;reasoning_tokens:number};usage_complete:boolean;companies:{id:string;instrument_id:string;status:string;error_code:string|null;result:{symbol?:string}}[]};
+export function getEventFeed(symbol?:string,cursor=0){const p=new URLSearchParams({cursor:String(cursor)});if(symbol)p.set("symbol",symbol);return request<{events:ResearchEventView[];next_cursor:number|null}>(`/research/event-feed?${p}`)}
+export function getCompanyIntelligence(symbol:string){return request<CompanyIntelligence>(`/research/companies/${encodeURIComponent(symbol)}/intelligence`)}
+export function getPortfolioEventIntelligence(id:string,limit=5){return request<PortfolioEventIntelligence>(`/portfolios/${encodeURIComponent(id)}/event-intelligence?limit=${limit}`)}
+export function previewResearchBatch(body:BatchRequest){return request<BatchPreview>("/research/batches/preview",{method:"POST",body:JSON.stringify(body)})}
+export function generateResearchBatch(body:BatchRequest){return request<JobStatus>("/research/batches",{method:"POST",body:JSON.stringify(body)})}
+export function getResearchJob(id:string){return request<JobStatus>(`/research/jobs/${encodeURIComponent(id)}`,{},0)}
+export function getEvidencePage(id:string,page:number){return request<{title:string;page_number:number;text:string}>(`/documents/${encodeURIComponent(id)}/pages/${page}`)}

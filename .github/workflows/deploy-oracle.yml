@@ -93,7 +93,7 @@ jobs:
             alembic upgrade head
 
           echo "== Redeploying API and web =="
-          docker compose -f compose.oracle.yml up -d api web
+          docker compose -f compose.oracle.yml --profile research up -d api web research-worker
 
           echo "== Waiting for application readiness =="
           curl \
@@ -105,6 +105,6 @@ jobs:
 
           echo
           echo "== Deployed services =="
-          docker compose -f compose.oracle.yml ps api web
+          docker compose -f compose.oracle.yml --profile research ps api web research-worker
           printf 'DEPLOY SUCCESSFUL: %s\n' "$deploy_sha"
           EOF

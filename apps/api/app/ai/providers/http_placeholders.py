@@ -374,6 +374,12 @@ class GeminiProvider(HTTPProvider):
                 "maxOutputTokens": call_options.get().max_output_tokens,
             },
         }
+        if call_options.get().json_mode:
+            payload["generationConfig"]["responseMimeType"] = "application/json"
+        if call_options.get().thinking_level:
+            payload["generationConfig"]["thinkingConfig"] = {
+                "thinkingLevel": call_options.get().thinking_level,
+            }
         if call_options.get().response_schema:
             payload["generationConfig"].update(
                 responseMimeType="application/json",

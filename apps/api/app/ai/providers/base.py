@@ -219,6 +219,8 @@ class ProviderCallOptions:
     max_output_tokens: int = 4096
     deadline_seconds: float = 30
     continuation_id: str | None = None
+    thinking_level: str | None = None
+    json_mode: bool = False
 
 
 @dataclass(frozen=True)

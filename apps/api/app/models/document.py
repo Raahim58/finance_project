@@ -1,7 +1,7 @@
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
 
@@ -54,6 +54,7 @@ class Document(Base):
 
 class DocumentPage(Base):
     __tablename__ = "document_pages"
+    __table_args__ = (UniqueConstraint("document_id", "page_number", name="uq_document_physical_page"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), nullable=False, index=True)

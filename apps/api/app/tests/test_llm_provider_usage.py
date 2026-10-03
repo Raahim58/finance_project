@@ -131,18 +131,27 @@ async def test_gemini_uses_native_schema_and_preserves_usage_breakdown(monkeypat
         options=ProviderCallOptions(
             response_schema={"type": "object", "properties": {"answer": {"type": "string"}}},
             max_output_tokens=2048,
+            thinking_level="minimal",
         ),
     )
 
     assert captured_payload["generationConfig"] == {
         "temperature": 0,
         "maxOutputTokens": 2048,
+        "thinkingConfig": {"thinkingLevel": "minimal"},
         "responseMimeType": "application/json",
         "responseJsonSchema": {"type": "object", "properties": {"answer": {"type": "string"}}},
     }
     assert result.content == '{"answer":"ok"}'
     assert (result.cache_read_tokens, result.reasoning_tokens) == (7, 11)
     assert (result.finish_reason, result.request_id) == ("STOP", "gemini-request")
+    await provider.chat_with_options(
+        "secret", [{"role": "user", "content": "question"}], "gemini-test",
+        options=ProviderCallOptions(json_mode=True),
+    )
+    assert captured_payload["generationConfig"]["responseMimeType"] == "application/json"
+    assert "responseJsonSchema" not in captured_payload["generationConfig"]
+
 
 
 @pytest.mark.asyncio

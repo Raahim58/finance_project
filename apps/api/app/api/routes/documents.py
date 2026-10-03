@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -70,3 +70,10 @@ async def upload_document(
 @router.get("/{document_id}", response_model=DocumentResponse)
 def document(document_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DocumentResponse:
     return get_document(db, current_user, document_id)
+
+
+@router.get("/{document_id}/pages/{page_number}")
+def page(document_id: str, page_number: int = Path(ge=1),
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.research_evidence_service import document_page
+    return document_page(db, current_user, document_id, page_number)

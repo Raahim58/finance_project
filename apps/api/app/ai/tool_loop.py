@@ -89,8 +89,20 @@ def _turns(checkpoint: dict[str, Any]) -> list[ProviderTurn]:
     return [ProviderTurn.from_dict(turn) for turn in checkpoint["turns"]]
 
 
-def _catalog() -> list[ProviderTool]:
-    return [ProviderTool(**item) for item in build_tool_registry().model_catalog()]
+def _company_tool_allowed(name: str, arguments=None) -> bool:
+    if not name.startswith(("market.", "research.", "documents.")):
+        return False
+    arguments = arguments or {}
+    if arguments.get("portfolio_id"):
+        return False
+    if set(arguments.get("sections", [])) & {"portfolio", "ips"}:
+        return False
+    return True
+
+
+def _catalog(company_only=False) -> list[ProviderTool]:
+    return [ProviderTool(**item) for item in build_tool_registry().model_catalog()
+            if not company_only or _company_tool_allowed(item["name"])]
 
 
 def _update_allowance(checkpoint: dict[str, Any]) -> None:
@@ -265,6 +277,7 @@ def _initial_checkpoint(
                 ContentBlock(
                     "text",
                     text=SYSTEM_PROMPT
+                    + ("\nCompany-only analysis: do not use portfolio holdings, IPS or portfolio tools." if payload.company_only else "")
                     + "\n\nServer-resolved identity (authoritative): "
                     + json.dumps(identity, default=str, separators=(",", ":")),
                 )
@@ -711,7 +724,7 @@ async def run_tool_loop(
             "reported_input_for_all_calls": True,
         },
     )
-    tools = _catalog()
+    tools = _catalog(payload.company_only)
     _update_allowance(checkpoint)
     with SessionLocal() as provider_db:
         owned_user = provider_db.get(User, user.id)
@@ -769,6 +782,8 @@ async def run_tool_loop(
 
             async def execute_bounded(call: ContentBlock) -> ToolExecution:
                 async with semaphore:
+                    if payload.company_only and not _company_tool_allowed(call.name or "", call.arguments):
+                        return ToolExecution(call, tool_result("invalid_arguments", error={"code": "company_scope_violation"}), 0.0)
                     return await _execute_tool(user.id, call)
 
             executions = await asyncio.gather(

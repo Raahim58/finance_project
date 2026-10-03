@@ -12,7 +12,6 @@ from app.schemas.intelligence_context import (
     IntelligenceContextRequest,
 )
 from app.services.context_builder import build_intelligence_context
-from app.services.event_intelligence_service import list_normalized_events
 from app.services.rag_service import search_rag
 from app.services.research_service import list_events, search_instruments
 from app.tools.registry import ToolDefinition, ToolRegistry, tool_result
@@ -191,16 +190,9 @@ def _company_sections(db, user, payload: CompanySectionsInput):
         remaining = max(0, len(filtered) - offset - len(selected))
         continuation = str(offset + len(selected)) if remaining else None
     elif section_name == ContextSectionName.EVENTS:
-        fetched = list_normalized_events(
-            db,
-            subject_type="instrument",
-            subject_key=instrument.symbol,
-            view="material",
-            occurred_start=payload.period_start,
-            occurred_end=payload.period_end,
-            offset=offset,
-            limit=payload.limit + 1,
-        )
+        from app.services.research_intelligence_service import event_views
+        fetched = event_views(db, symbol=instrument.symbol, start=payload.period_start,
+            end=payload.period_end, offset=offset, limit=payload.limit + 1)
         event_sources = []
         selected = []
         for event in fetched[: payload.limit]:
@@ -297,6 +289,9 @@ def _instruments(db, _user, payload: InstrumentSearchInput):
 
 
 def register_research_tools(registry: ToolRegistry) -> None:
+    registry.register(ToolDefinition("research.event_relevance", "1.0",
+        "Issuer-scoped direct events and three-factor AI-proposed indirect relationships with original evidence; no impact forecast",
+        EventRelevanceInput, "research:read", True, False, 12, "medium", _event_relevance))
     registry.register(
         ToolDefinition(
             "research.search",
@@ -353,3 +348,18 @@ def register_research_tools(registry: ToolRegistry) -> None:
             _instruments,
         )
     )
+
+
+class EventRelevanceInput(BaseModel):
+    symbol: str = Field(min_length=1, max_length=30)
+    limit: int = Field(default=5, ge=1, le=20)
+
+
+def _event_relevance(db, user, payload):
+    from app.services.research_intelligence_service import resolve_company, company_events
+    instrument = resolve_company(db, payload.symbol)
+    events = company_events(db, user, instrument, limit=payload.limit)
+    sources = {e["id"]: {k: v for k, v in e.items() if k != "text"}
+               for event in events for e in event["evidence"]}
+    return tool_result("ok" if events else "missing", {"events": events},
+        sources=list(sources.values()), returned=len(events), remaining=None)

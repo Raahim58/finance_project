@@ -345,6 +345,18 @@ def test_event_admission_is_material_bounded_and_uses_event_freshness_policy():
             )
             db.add(event)
             db.flush()
+            from app.models.workstation import Event, EventSource, EventEntityLink, NormalizedEventEvidence
+            from app.services.rag_service import create_document_from_pages, ParsedPage
+            document = create_document_from_pages(db, [ParsedPage(1, "Quarterly results and operating outlook.")],
+                title=event.title, document_type="announcement", symbol="MEBL", source_name="PSX",
+                source_url=f"https://example.test/{index}", data_status="observed", commit=False)
+            raw = Event(event_type="announcement", title=event.title, occurred_at=event.occurred_at)
+            db.add(raw); db.flush()
+            db.add(EventSource(event_id=raw.id, document_id=document.id, source_name="PSX",
+                source_url=document.source_url, selection_status="selected"))
+            db.add(EventEntityLink(event_id=raw.id, entity_type="instrument", entity_key="MEBL",
+                link_method="issuer_metadata", confidence=1))
+            db.add(NormalizedEventEvidence(normalized_event_id=event.id, raw_event_id=raw.id, evidence_role="primary"))
             db.add(NormalizedEventSubject(
                 normalized_event_id=event.id,
                 subject_type="instrument",

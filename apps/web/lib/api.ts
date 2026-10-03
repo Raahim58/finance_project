@@ -525,8 +525,8 @@ export async function resumeAssistantExecution(executionId:string):Promise<Assis
 export function acknowledgeAssistantExecution(executionId:string){
   return request<void>(`/assistant/runs/${encodeURIComponent(executionId)}/receipt`,{method:"POST"});
 }
-export async function sendAssistantMessage(question: string, portfolioId?: string, instrumentId?: string) {
-  sessionStorage.setItem(PENDING_ASSISTANT_REQUEST,JSON.stringify({client_request_id:crypto.randomUUID(),question, portfolio_id: portfolioId || null, instrument_id: instrumentId || null}));
+export async function sendAssistantMessage(question: string, portfolioId?: string, instrumentId?: string, companyOnly = false) {
+  sessionStorage.setItem(PENDING_ASSISTANT_REQUEST,JSON.stringify({client_request_id:crypto.randomUUID(),question, portfolio_id: portfolioId || null, instrument_id: instrumentId || null, company_only: companyOnly}));
   return resumeAssistantExecution("pending");
 }
 

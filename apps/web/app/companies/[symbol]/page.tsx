@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { CompanyIntelligencePanel, CompanyPurposeEvidence } from "@/components/ResearchIntelligence";
 import { Icon } from "@/components/Icon";
 import { LineChart } from "@/components/WorkstationChart";
 import { TermHelp, TermLabel } from "@/components/TermHelp";
@@ -37,17 +38,22 @@ export default function CompanyPage() {
   const [research, setResearch] = useState<CompanyResearch | null>(null);
   const [history, setHistory] = useState<MarketPrice[]>([]);
   const [portfolios, setPortfolios] = useState<Portfolio[]>([]);
+  const [selectedPortfolioId, setSelectedPortfolioId] = useState("");
+  const [portfolioContext, setPortfolioContext] = useState<CompanyResearch | null>(null);
   const [coverage, setCoverage] = useState<CompanyCompleteness | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    let active = true; setLoading(true); setError("");
     void Promise.all([getCompanyDetail(symbol), getCompanyHistory(symbol), getCompanyResearch(symbol), getPortfolios(), getCompanyCompleteness(symbol).catch(() => null)])
       .then(([company, prices, analysis, portfolioRows, completeness]) => {
-        setDetail(company); setHistory(prices); setResearch(analysis); setPortfolios(portfolioRows); setCoverage(completeness);
+        if (!active) return;
+        setDetail(company); setHistory(prices); setResearch(analysis); setPortfolios(portfolioRows); setSelectedPortfolioId(portfolioRows.find(p=>p.is_default)?.id??""); setCoverage(completeness);
       })
-      .catch((reason: Error) => setError(reason.message))
-      .finally(() => setLoading(false));
+      .catch((reason: Error) => { if(active) setError(reason.message); })
+      .finally(() => { if(active) setLoading(false); });
+    return () => { active = false; };
   }, [symbol]);
 
   useEffect(() => {
@@ -76,41 +82,52 @@ export default function CompanyPage() {
     };
   }, [research?.refresh_request_id]);
 
+  useEffect(()=>{let active=true;setPortfolioContext(null);if(selectedPortfolioId)void getCompanyResearch(symbol,{portfolioId:selectedPortfolioId}).then(value=>{if(active)setPortfolioContext(value)}).catch(()=>undefined);return()=>{active=false}},[symbol,selectedPortfolioId]);
+
   const trajectory = useMemo(() => history.length < 2 ? null : (Number(history.at(-1)?.close) / Number(history[0].close) - 1) * 100, [history]);
   if (loading) return <div className="page-wrap"><div className="panel h-96 skeleton" /></div>;
   if (error || !detail) return <div className="page-wrap"><div className="notice notice-error"><Icon name="warning" />{error || "Company not found"}</div></div>;
 
   const latest = detail.latest_price;
-  const relevance = research?.portfolio_relevance?.[0];
+  const relevance = portfolioContext?.portfolio_relevance?.[0];
   const marketRisk = (research?.market_research?.risk ?? {}) as Record<string, unknown>;
   const derived = research?.derived_fundamentals;
-  const announcements = research?.events.filter(event => event.event_type === "announcement") ?? [];
-  const news = research?.events.filter(event => event.event_type === "news") ?? [];
   return <div className="page-wrap">
     <header className="page-heading">
       <div><Link href="/markets" className="eyebrow">Markets / Security research</Link><div className="mt-2 flex flex-wrap items-baseline gap-3"><h1 className="page-title">{symbol}</h1><span className="text-[15px] font-semibold text-[#3f454b]">{detail.company.name}</span></div><p className="page-subtitle">{detail.company.sector} · {detail.company.exchange.code}</p></div>
-      {relevance ? <span className="badge badge-good">Held · {pct(Number(relevance.weight) * 100)} portfolio weight</span> : <span className="badge">Not held</span>}
+      {selectedPortfolioId&&portfolioContext ? <span className="badge">{Number(relevance?.quantity)>0?`Held · ${pct(Number(relevance?.weight)*100)}`:"Not held in selected portfolio"}</span> : <span className="badge">Company intelligence</span>}
     </header>
     {research?.has_synthetic_data ? <div className="notice notice-warn mb-4" role="alert"><Icon name="warning" /><span><strong>Demo company data.</strong> Seeded fundamentals and documents are clearly marked and must not be treated as observed filings.</span></div> : null}
     <section className="panel mb-4"><div className="panel-head"><div><h2 className="panel-title">Data coverage</h2><p className="mt-1 text-[11px] text-muted">Observed live categories only; demo data does not count.</p></div><span className={`badge ${coverage ? "" : "badge-warn"}`}>{coverage ? "Checked" : "Unavailable"}</span></div>{coverage ? <div className="grid gap-px bg-line sm:grid-cols-3 xl:grid-cols-6"><Coverage label="Price" available={coverage.price.available} note={coverage.price.latest_date}/><Coverage label="History" available={coverage.price.observations > 1} note={`${coverage.price.observations} observations`}/><Coverage label="Fundamentals" available={coverage.fundamentals.available} note={`${coverage.fundamentals.fact_count} facts`}/><Coverage label="Reports" available={coverage.reports.available} note={`${coverage.reports.count} reports`}/><Coverage label="Announcements" available={coverage.announcements.available} note={coverage.announcements.reason}/><Coverage label="News" available={coverage.news.available} note={`${coverage.news.count} linked`}/></div> : <div className="p-4 text-xs text-muted">Coverage diagnostics could not be loaded. Empty sections below are not treated as confirmed absence.</div>}</section>
     <div className="source-rail flex flex-wrap items-end justify-between gap-5 px-6 py-5"><div><p className="metric-label">Last traded price</p><p className="data-font mt-2 text-[36px] font-semibold leading-none tracking-[-.045em]">PKR {latest ? num(latest.close) : "—"}</p></div><div className="sm:text-right"><p className={`data-font text-[17px] font-semibold ${Number(latest?.change_percent) >= 0 ? "positive" : "negative"}`}>{signedPct(latest?.change_percent)}</p><p className="mt-1 text-[11px] text-muted">{latest?.trade_date ?? "Date unavailable"} · {latest?.source ?? "Source unavailable"}</p></div></div>
+    <CompanyIntelligencePanel symbol={symbol} portfolioId={selectedPortfolioId||undefined}/>
     <div className="metric-strip mt-4 grid-cols-4"><Metric label="Period trajectory" value={signedPct(trajectory)} /><Metric label="Annual volatility" term="Annual volatility" value={marketRisk.annual_volatility == null ? "—" : pct(Number(marketRisk.annual_volatility) * 100)} /><Metric label="Historical VaR 95" term="Historical VaR 95" value={marketRisk.historical_var_95 == null ? "—" : pct(Number(marketRisk.historical_var_95) * 100)} /><Metric label="Current holding value" value={relevance ? `PKR ${num(relevance.market_value, 0)}` : "Not held"} /></div>
+
     <DecisionWorkbench symbol={symbol} instrumentId={research?.instrument.id} portfolios={portfolios} />
     <section className="panel mt-4"><div className="panel-head"><h2 className="panel-title">Price history</h2><span className="text-[11px] text-muted">{history.length} daily observations</span></div><div className="panel-body"><LineChart height={260} labels={history.map(row => row.trade_date)} values={history.map(row => Number(row.close))} /></div></section>
     <div className="mt-4 grid gap-4 xl:grid-cols-2">
       <Section title="Reported fundamentals">{research?.fundamentals.length ? <Facts rows={research.fundamentals} /> : <Unavailable text="Normalized exact facts are unavailable. Documentary evidence is not substituted for numeric fundamentals." />}</Section>
+    <section className="panel mt-4"><div className="panel-head"><h2 className="panel-title">Selected portfolio relevance</h2><select aria-label="Company portfolio scope" className="field max-w-60" value={selectedPortfolioId} onChange={e=>setSelectedPortfolioId(e.target.value)}><option value="">No selected portfolio</option>{portfolios.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div><div className="p-4 text-xs text-muted">{selectedPortfolioId?portfolioContext?`${relevance?.portfolio_name??"Selected portfolio"} · ${Number(relevance?.quantity)>0?`${relevance?.quantity} shares · PKR ${num(relevance?.market_value)} · ${pct(Number(relevance?.weight)*100)} portfolio weight`:"Company not held; research and analysis remain available."}`:"Portfolio relevance loading or unavailable.":"Select a portfolio for holding exposure and IPS interpretation."}</div></section>
       <Section title="Model-derived ratios">{derived && Object.keys(derived.ratios ?? {}).length ? <Facts rows={Object.entries(derived.ratios ?? {}).map(([taxonomy_key, row]) => ({ taxonomy_key, value: String(row.value ?? "—"), unit: "ratio", period_type: "derived", period_end: String(row.period_end ?? "—"), provenance: (row.provenance as { source_name: string | null; is_synthetic: boolean } | undefined) ?? { source_name: null, is_synthetic: false } }))} /> : <Unavailable text={String(derived?.valuation?.reason ?? "Compatible normalized facts are unavailable for deterministic ratios.")} />}</Section>
-      <Section title={`Announcements (${announcements.length})`}><CompanyEvents rows={announcements} empty="No stored PSX announcements are linked to this security." /></Section>
-      <Section title={`News (${news.length})`}><CompanyEvents rows={news} empty="No stored news stories are linked to this security." /></Section>
+      <CompanyContextPanels research={research}/>
       <Section title="Company evidence">{research?.documents.length ? <div className="divider-list">{research.documents.map((document, index) => <article className="py-3 text-[13px]" key={String(document.id ?? index)}><div className="flex items-center gap-2"><strong>{String(document.title)}</strong>{document.is_synthetic ? <span className="badge badge-warn">Demo</span> : null}</div><p className="mt-1 text-[11px] text-muted">{String(document.published_date ?? "Date unavailable")} · {title(String(document.document_type ?? "document"))}</p></article>)}</div> : <Unavailable text="No company documents were returned." />}<Link href={`/research?symbol=${symbol}`} className="btn btn-secondary mt-4">Search cited evidence</Link></Section>
     </div>
+    <CompanyPurposeEvidence symbol={symbol}/>
   </div>;
+}
+
+function CompanyContextPanels({research}:{research:CompanyResearch|null}){
+  const sections=research?.context.sections as Record<string,{data?:Record<string,unknown>;state?:string}>|undefined;
+  const sector=sections?.sector?.data?.company_sector as Record<string,unknown>|undefined;
+  const macro=sections?.macro?.data;
+  const dimensions=(macro?.dimensions??{}) as Record<string,Record<string,unknown>>;
+  return <Section title="Sector and macro context"><div className="space-y-4"><div><strong className="text-xs">{String(sector?.sector??"Sector context unavailable")}</strong>{sector?<p className="mt-1 text-xs text-muted">{pct(sector.average_change_percent)} average daily change · {String(sector.trade_date??"Date unavailable")} · {String(sector.source??"Source unavailable")}</p>:null}</div>{Object.entries(dimensions).map(([key,row])=><div className="border-t border-line pt-3" key={key}><strong className="text-xs">{title(key)}</strong><p className="mt-1 text-xs text-muted">{row.value!=null?`${num(row.value)} ${String(row.unit??"")} · ${String(row.effective_date??row.trade_date??"Date unavailable")}`:String(row.status??"Unavailable")} · {String(row.series_name??"Source unavailable")}</p></div>)}{!Object.keys(dimensions).length?<Unavailable text="Structured macro observations unavailable."/>:null}</div></Section>
 }
 
 function Coverage({label,available,note}:{label:string;available:boolean;note?:string|null}){return <div className="bg-white p-3"><div className="flex items-center justify-between gap-2"><strong className="text-[12px]">{label}</strong><span className={`badge ${available?"badge-good":"badge-warn"}`}>{available?"Available":"Missing"}</span></div><p className="mt-2 line-clamp-2 text-[10px] text-muted">{note??(available?"Observed data stored":"No observed data")}</p></div>}
 
 function DecisionWorkbench({ symbol, instrumentId, portfolios }: { symbol: string; instrumentId?: string; portfolios: Portfolio[] }) {
-  const [portfolioId, setPortfolioId] = useState(portfolios.find(row => row.is_default)?.id ?? portfolios[0]?.id ?? "");
+  const [portfolioId, setPortfolioId] = useState(portfolios.find(row => row.is_default)?.id ?? "");
   const [action, setAction] = useState("add");
   const [sizing, setSizing] = useState("manual");
   const [target, setTarget] = useState("5");
@@ -120,7 +137,7 @@ function DecisionWorkbench({ symbol, instrumentId, portfolios }: { symbol: strin
   const [message, setMessage] = useState("");
   const [savedVersion, setSavedVersion] = useState<number | null>(null);
 
-  useEffect(() => { if (!portfolioId && portfolios.length) setPortfolioId(portfolios.find(row => row.is_default)?.id ?? portfolios[0].id); }, [portfolioId, portfolios]);
+  useEffect(() => { if (!portfolioId && portfolios.length) setPortfolioId(portfolios.find(row => row.is_default)?.id ?? ""); }, [portfolioId, portfolios]);
   useEffect(() => {
     setResult(null); setSavedVersion(null); setContext(null);
     if (portfolioId) void getCompanyResearch(symbol, { portfolioId }).then(value => {

@@ -70,12 +70,10 @@ def _portfolio(client, headers, name: str, *, confirm_ips: bool = True) -> str:
     return portfolio_id
 
 
-def test_company_research_uses_company_only_canonical_contract_and_persists_receipt(client):
+def test_company_research_uses_company_only_contract_without_persisting_receipts(client):
     headers = _auth(client, "phase7b-company@example.com")
     instrument_id = _instrument_and_fact()
-
     response = client.get(f"/companies/{instrument_id}/overview", headers=headers)
-
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["context_contract_version"] == "7a.v1"
@@ -83,52 +81,36 @@ def test_company_research_uses_company_only_canonical_contract_and_persists_rece
     assert "portfolio" not in body["context"]["sections"]
     assert "ips" not in body["context"]["sections"]
     assert body["context_receipt"]["content_hash"]
+    assert body["context_receipt_id"] is None
+    assert body["refresh_request_id"] is None
     with SessionLocal() as db:
-        receipt = db.get(IntelligenceContextReceiptRecord, body["context_receipt_id"])
-        assert receipt.consumer_type == "company_research"
-        assert receipt.consumer_key == f"instrument:{instrument_id}:portfolio:none"
+        assert not list(db.scalars(select(IntelligenceContextReceiptRecord)))
+        assert not list(db.scalars(select(ContextIngestionWork)))
 
 
-def test_company_view_can_deactivate_refresh_for_lazy_rebuild(client):
+def test_company_view_active_flag_never_schedules_ingestion(client):
     headers = _auth(client, "phase7b-inactive@example.com")
     instrument_id = _instrument_and_fact()
-    body = client.get(f"/companies/{instrument_id}/overview", headers=headers).json()
-    refresh_id = body["refresh_request_id"]
-    assert refresh_id
-
-    response = client.post(
-        f"/research/context-refreshes/{refresh_id}/deactivate", headers=headers
-    )
-
-    assert response.status_code == 200
-    assert response.json()["active"] is False
+    for active in ("true", "false"):
+        body = client.get(f"/companies/{instrument_id}/overview?active={active}", headers=headers).json()
+        assert body["refresh_request_id"] is None
     with SessionLocal() as db:
-        assert db.get(ContextRefreshRequest, refresh_id).active is False
+        assert not list(db.scalars(select(ContextRefreshRequest)))
+        assert not list(db.scalars(select(ContextIngestionWork)))
 
 
-def test_active_company_view_returns_rebuilt_canonical_result(client):
+def test_company_view_reads_changed_authoritative_facts_without_refresh_jobs(client):
     headers = _auth(client, "phase7b-active-company@example.com")
     instrument_id = _instrument_and_fact()
     initial = client.get(f"/companies/{instrument_id}/overview", headers=headers).json()
-    refresh_id = initial["refresh_request_id"]
-    assert refresh_id
-
     with SessionLocal() as db:
-        for work in db.scalars(select(ContextIngestionWork)):
-            work.status = "succeeded"
+        fact = db.scalar(select(StandardizedFinancialFact).where(StandardizedFinancialFact.instrument_id == instrument_id))
+        fact.value = 125
         db.commit()
-        sweep = reconcile_pending_contexts(db)
-        assert sweep.rebuilt == 1
-
-    refreshed = client.get(
-        f"/research/context-refreshes/{refresh_id}", headers=headers
-    )
-    assert refreshed.status_code == 200
-    body = refreshed.json()
-    assert body["status"] == "rebuilt"
-    assert body["result"]["context_contract_version"] == "7a.v1"
-    assert body["result"]["context_receipt_id"] != initial["context_receipt_id"]
-    assert body["result"]["context"]["scope"] == "company_intelligence"
+    refreshed = client.get(f"/companies/{instrument_id}/overview", headers=headers).json()
+    assert refreshed["context"]["scope"] == "company_intelligence"
+    assert refreshed["context_receipt"]["content_hash"] != initial["context_receipt"]["content_hash"]
+    assert refreshed["refresh_request_id"] is None
 
 
 def test_company_research_switches_exactly_one_portfolio_and_reuses_company_evidence(client):

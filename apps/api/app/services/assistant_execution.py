@@ -84,7 +84,9 @@ def accept(db, user, payload, client_request_id, conversation_id=None):
             raise HTTPException(409, "Client request ID was already used with different content")
         return existing
     conversation = _conversation(db, user, conversation_id, payload)
-    portfolio = _resolved_portfolio(db, user, conversation, payload.portfolio_id)
+    if payload.company_only and payload.portfolio_id:
+        raise HTTPException(422, "Company-only analysis cannot select a portfolio")
+    portfolio = None if payload.company_only else _resolved_portfolio(db, user, conversation, payload.portfolio_id)
     if portfolio is not None:
         payload = payload.model_copy(update={"portfolio_id": portfolio.id})
         conversation.portfolio_id = portfolio.id

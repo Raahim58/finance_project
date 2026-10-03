@@ -8,6 +8,9 @@ const pendingRequests = new Map<string, Promise<unknown>>();
 let sampleSessionPromise: Promise<string> | null = null;
 
 export function clearApiCache() { responseCache.clear(); pendingRequests.clear(); }
+export function invalidateResearchCache() {
+  for (const key of Array.from(responseCache.keys())) if (key.includes("/research/") || key.includes("/event-intelligence") || key.includes("/overview") || key.includes("/documents")) responseCache.delete(key);
+}
 function invalidateCache(path: string) {
   const portfolioScope = path.match(/^\/portfolios\/([^/]+)\//)?.[0];
   if (!portfolioScope) { clearApiCache(); return; }

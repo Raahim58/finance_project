@@ -264,6 +264,55 @@ def parse_document_content(filename: str, content: bytes) -> list[ParsedPage]:
     return parse_plain_text(content)
 
 
+def index_document_pages(db: Session, document: Document, pages: list[ParsedPage]) -> int:
+    """Index an existing document atomically without replacing its identity or financial facts.
+
+    Caller holds the document row lock. Partial indexes are repaired by rebuilding only
+    this document's reproducible pages/chunks/citations, in the same transaction.
+    """
+    from sqlalchemy import delete
+    if not any(page.text.strip() for page in pages):
+        raise ValueError("Document text is empty")
+    db.execute(delete(Citation).where(Citation.document_id == document.id))
+    db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
+    db.execute(delete(DocumentPage).where(DocumentPage.document_id == document.id))
+    metadata = {"symbol": document.symbol, "sector": document.sector,
+                "document_type": document.document_type, "fiscal_year": document.fiscal_year,
+                "quarter": document.quarter, "title": document.title,
+                "source_name": document.source_name, "source_url": document.source_url,
+                "source_tier": document.source_tier, "data_status": document.data_status,
+                "embedding_backend": settings.embedding_backend,
+                "embedding_model": active_embedding_model(),
+                "embedding_index_version": settings.embedding_index_version}
+    units = []
+    for page in pages:
+        db.add(DocumentPage(document_id=document.id, page_number=page.page_number,
+                            text=page.text, metadata_json=json.dumps(metadata)))
+        units.extend(chunk_page_text(page.text, page.page_number))
+    chunk_index = 0
+    for offset in range(0, len(units), 128):
+        batch = units[offset:offset + 128]
+        vectors = embed_texts([text for text, _page in batch])
+        for (text, page_number), vector in zip(batch, vectors, strict=True):
+            content_type = classify_chunk_content(text)
+            chunk = DocumentChunk(document_id=document.id, company_id=document.company_id,
+                symbol=document.symbol, chunk_index=chunk_index, chunk_text=text,
+                token_count=len(tokenize(text)), embedding_json=json.dumps(vector),
+                embedding_vector=vector if db.bind.dialect.name == "postgresql" else json.dumps(vector),
+                metadata_json=json.dumps({**metadata, "page_number": page_number, "content_type": content_type}),
+                source_url=document.source_url, page_number=page_number,
+                section_title=infer_section_title(text), content_type=content_type,
+                embedding_model=active_embedding_model(), embedding_index_version=settings.embedding_index_version,
+                embedding_status="indexed")
+            db.add(chunk); db.flush()
+            db.add(Citation(document_id=document.id, chunk_id=chunk.id, source_name=document.source_name,
+                source_url=document.source_url, title=document.title, page_number=page_number,
+                quote_snippet=first_snippet(text)))
+            chunk_index += 1
+    db.flush()
+    return chunk_index
+
+
 def create_document_from_pages(
     db: Session,
     pages: list[ParsedPage],
@@ -327,70 +376,7 @@ def create_document_from_pages(
     db.add(document)
     db.flush()
 
-    chunk_index = 0
-    for page in pages:
-        page_metadata = {
-            "symbol": normalized_symbol,
-            "sector": resolved_sector,
-            "document_type": canonical_type,
-            "fiscal_year": fiscal_year,
-            "quarter": quarter,
-        }
-        db.add(
-            DocumentPage(
-                document_id=document.id,
-                page_number=page.page_number,
-                text=page.text,
-                metadata_json=json.dumps(page_metadata),
-            )
-        )
-        for chunk_text, page_number in chunk_page_text(page.text, page.page_number):
-            metadata = {
-                **page_metadata,
-                "title": title,
-                "source_name": source_name,
-                "source_url": source_url,
-                "page_number": page_number,
-                "embedding_backend": settings.embedding_backend,
-                "embedding_model": active_embedding_model(),
-                "embedding_index_version": settings.embedding_index_version,
-                "content_type": classify_chunk_content(chunk_text),
-                "source_tier": resolved_tier,
-                "data_status": resolved_status,
-            }
-            vector = embed_text(chunk_text)
-            chunk = DocumentChunk(
-                document_id=document.id,
-                company_id=company.id if company else None,
-                symbol=normalized_symbol,
-                chunk_index=chunk_index,
-                chunk_text=chunk_text,
-                token_count=len(tokenize(chunk_text)),
-                embedding_json=json.dumps(vector),
-                embedding_vector=vector if db.bind and db.bind.dialect.name == "postgresql" else json.dumps(vector),
-                metadata_json=json.dumps(metadata),
-                source_url=source_url,
-                page_number=page_number,
-                section_title=infer_section_title(chunk_text),
-                content_type=classify_chunk_content(chunk_text),
-                embedding_model=active_embedding_model(),
-                embedding_index_version=settings.embedding_index_version,
-                embedding_status="indexed",
-            )
-            db.add(chunk)
-            db.flush()
-            db.add(
-                Citation(
-                    document_id=document.id,
-                    chunk_id=chunk.id,
-                    source_name=source_name,
-                    source_url=source_url,
-                    title=title,
-                    page_number=page_number,
-                    quote_snippet=first_snippet(chunk_text),
-                )
-            )
-            chunk_index += 1
+    index_document_pages(db, document, pages)
 
     if commit:
         db.commit()

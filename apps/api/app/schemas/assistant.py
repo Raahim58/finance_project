@@ -68,6 +68,7 @@ class ConversationCreate(BaseModel):
 
 
 class AssistantMessageCreate(BaseModel):
+    company_only: bool = False
     question: str = Field(min_length=1, max_length=8000)
     portfolio_id: str | None = None
     instrument_id: str | None = None

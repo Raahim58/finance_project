@@ -193,5 +193,14 @@ services:
       redis:
         condition: service_healthy
 
+  research-worker:
+    <<: *api-image
+    profiles: ["research"]
+    restart: unless-stopped
+    command: python -m app.jobs.research_worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   evidence_spool:

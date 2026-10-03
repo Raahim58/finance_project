@@ -16,3 +16,6 @@ api_router.include_router(ingestion.router, tags=["ingestion"])
 api_router.include_router(assistant.router, tags=["assistant"])
 api_router.include_router(intelligence.router, tags=["intelligence"])
 api_router.include_router(monitoring.router, tags=["monitoring"])
+
+from app.api.routes import research_intelligence
+api_router.include_router(research_intelligence.router, tags=["research intelligence"])
