@@ -114,6 +114,54 @@ async def test_native_fragmented_openai_stream_never_emits_reasoning(provider):
 
 
 @pytest.mark.asyncio
+async def test_invalid_anthropic_tool_json_retains_sanitized_stream_diagnostic(monkeypatch):
+    import httpx
+    from app.ai.providers.http_placeholders import AnthropicProvider
+    from app.ai.providers.base import ProviderRequestError
+    original = httpx.AsyncClient
+    events = [
+        {'type': 'message_start', 'message': {'id': 'm'}},
+        {'type': 'content_block_start', 'index': 0, 'content_block': {
+            'type': 'tool_use', 'id': 't', 'name': 'fixture', 'input': {}}},
+        {'type': 'content_block_delta', 'index': 0, 'delta': {
+            'type': 'input_json_delta', 'partial_json': '{"key":"secret-fixture"'}},
+        {'type': 'message_delta', 'delta': {'stop_reason': 'tool_use'}},
+        {'type': 'message_stop'},
+    ]
+    body = ''.join('data: ' + json.dumps(event) + '\n\n' for event in events)
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, text=body,
+        headers={'request-id': 'invalid-json-fixture', 'content-type': 'text/event-stream'}))
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(transport=transport, **kwargs))
+    with pytest.raises(ProviderRequestError) as failure:
+        await AnthropicProvider().tool_chat_with_options('secret-fixture',
+            [ProviderTurn('user', [ContentBlock('text', text='fixture')])], [],
+            options=ProviderCallOptions(stream=True))
+    assert failure.value.error_type == 'invalid_stream_json'
+    assert failure.value.request_id == 'invalid-json-fixture'
+    assert 'secret-fixture' not in failure.value.response_payload['body']
+    assert 'invalid_json' in failure.value.response_payload['body']
+
+
+@pytest.mark.asyncio
+async def test_anthropic_empty_tool_argument_delta_preserves_empty_input():
+    assembler = StreamAssembler('anthropic')
+    for event in [
+        {'type': 'message_start', 'message': {'id': 'm', 'usage': {'input_tokens': 10}}},
+        {'type': 'content_block_start', 'index': 0, 'content_block': {
+            'type': 'tool_use', 'id': 't', 'name': 'context__current', 'input': {}}},
+        {'type': 'content_block_delta', 'index': 0, 'delta': {
+            'type': 'input_json_delta', 'partial_json': ''}},
+        {'type': 'message_delta', 'delta': {'stop_reason': 'tool_use'}, 'usage': {'output_tokens': 9}},
+        {'type': 'message_stop'},
+    ]:
+        await assembler.feed(event)
+    result = assembler.result()
+    assert result['content'][0]['input'] == {}
+    assert result['content'][0]['id'] == 't'
+    assert result['stop_reason'] == 'tool_use'
+
+
+@pytest.mark.asyncio
 async def test_anthropic_thinking_signature_and_fragmented_arguments():
     assembler=StreamAssembler('anthropic')
     events=[{'type':'message_start','message':{'id':'m','usage':{'input_tokens':10}}},

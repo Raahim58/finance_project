@@ -133,7 +133,10 @@ class StreamAssembler:
                 self.blocks = {key: block for key, block in self.blocks.items() if block.get("type") != "tool_use"}
             for index, raw in self.arguments.items():
                 if index in self.blocks:
-                    self.blocks[index]["input"] = json.loads(raw)
+                    # Anthropic emits an empty input delta for zero-argument
+                    # tools. Keep the initial input object in that case.
+                    if raw.strip():
+                        self.blocks[index]["input"] = json.loads(raw)
             self.data["content"] = [self.blocks[key] for key in sorted(self.blocks)]
             if not self.finished:
                 self.data["stop_reason"] = "incomplete"

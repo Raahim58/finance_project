@@ -7,6 +7,7 @@ passed only in request headers, never included in exceptions or application logs
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from typing import Any
 
@@ -72,9 +73,20 @@ class HTTPProvider(LLMProvider):
                         await response.aread()
                         _raise_provider_response_error(self.name, response, api_key)
                     await emit_provider_event(ProviderEvent("started"))
-                    async for event in sse_json(response.aiter_lines()):
-                        await assembler.feed(event)
-            return assembler.result()
+                    try:
+                        async for event in sse_json(response.aiter_lines()):
+                            await assembler.feed(event)
+                        return assembler.result()
+                    except json.JSONDecodeError as exc:
+                        # Persist the rejected JSON through the same encrypted
+                        # diagnostics path as HTTP and in-stream provider errors.
+                        # It may contain private tool arguments or reasoning.
+                        _raise_provider_response_error(self.name, httpx.Response(
+                            response.status_code, headers=response.headers,
+                            json={"error": {"type": "invalid_stream_json",
+                                "message": "Provider stream contained invalid JSON",
+                                "invalid_json": exc.doc, "position": exc.pos}},
+                        ), api_key)
         try:
             async with httpx.AsyncClient(timeout=call_options.get().deadline_seconds) as client:
                 response = await client.post(url, headers=self._headers(api_key), json=payload)
