@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import inspect
 import re
 from typing import Any
 
@@ -53,7 +54,9 @@ class HTTPProvider(LLMProvider):
             if self.name not in {"gemini", "anthropic"}:
                 payload["stream_options"] = {"include_usage": True}
         if options.request_guard:
-            options.request_guard(payload)
+            checked = options.request_guard(payload)
+            if inspect.isawaitable(checked):
+                await checked
         import asyncio
         try:
             async with asyncio.timeout(options.deadline_seconds):
@@ -284,6 +287,19 @@ class OpenAICompatibleProvider(HTTPProvider):
 
 
 class AnthropicProvider(HTTPProvider):
+    async def count_input_tokens(self, api_key: str, payload: dict) -> int:
+        body = {key: payload[key] for key in (
+            "model", "messages", "system", "tools", "tool_choice", "thinking"
+        ) if key in payload}
+        async with httpx.AsyncClient(timeout=min(5, call_options.get().deadline_seconds)) as client:
+            response = await client.post(self.chat_url + "/count_tokens", headers=self._headers(api_key), json=body)
+        if response.status_code >= 400:
+            _raise_provider_response_error(self.name, response, api_key)
+        count = response.json().get("input_tokens")
+        if type(count) is not int or count < 0:
+            raise ValueError("Invalid provider token count")
+        return count
+
     name = "anthropic"
     max_context_tokens = 200_000
     supports_tool_calling = True

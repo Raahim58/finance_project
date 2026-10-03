@@ -12,6 +12,11 @@ from app.db.session import Base, engine
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    from app.ai.token_counting import local_assets
+    try:
+        await asyncio.to_thread(local_assets)
+    except (FileNotFoundError, ImportError):
+        pass  # Explicit conservative fallback until tokenizer setup is run.
     if settings.auto_create_tables:
         Base.metadata.create_all(bind=engine)
     from app.services.assistant_execution import maintenance, shutdown

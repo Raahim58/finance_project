@@ -17,6 +17,12 @@ def encode(value: object) -> str:
 
 
 def estimate_tokens(value: object) -> int:
+    from app.ai.token_counting import text_estimate
+    amount = text_estimate(value if isinstance(value, str) else encode(value))
+    return amount if amount is not None else legacy_estimate_tokens(value)
+
+
+def legacy_estimate_tokens(value: object) -> int:
     # Offline estimate: punctuation tokens plus short lexical pieces, with 25% margin.
     # Provider-reported usage remains separate; this is not an exact tokenizer.
     pieces = re.findall(r"[A-Za-z0-9_]+|[^A-Za-z0-9_\s]", encode(value))

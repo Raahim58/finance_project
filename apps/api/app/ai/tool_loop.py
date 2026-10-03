@@ -400,9 +400,14 @@ async def _provider_turn(
     attempt_id = None
     estimated = 0
     transmitted_bytes = 0
-    def guard(payload):
+    async def guard(payload):
         nonlocal attempt_id, estimated, transmitted_bytes
-        estimated = estimate_tokens(payload)
+        from app.ai.token_counting import preflight_count
+        with SessionLocal() as count_db:
+            row = count_db.get(AssistantExecution, identifier)
+            remaining_input = policy["cumulative_input"] - row.reserved_input_tokens
+        estimated, count_metadata = await preflight_count(provider, api_key, payload,
+            input_limit=policy["input"], remaining_input=remaining_input)
         transmitted_bytes = len(json.dumps(payload, default=str, separators=(",", ":")).encode())
         if estimated > policy["input"]:
             raise AssistantTerminalError("question_budget_exhausted")
@@ -418,12 +423,12 @@ async def _provider_turn(
         record = [{"role": "user", "content": json.dumps(payload, default=str, separators=(",", ":"))}]
         attempt_id = diagnostics.begin_attempt("tool_loop_turn", provider.name, model or provider.default_model,
                                               record, estimated, transmitted_input_bytes=transmitted_bytes,
-                                              schema_version="phase11-serialized-request-v1")
+                                              schema_version="phase11-provider-count-v2", count_metadata=count_metadata)
     options = ProviderCallOptions(max_output_tokens=output_cap,
         deadline_seconds=remaining_deadline, continuation_id=continuation_id,
         thinking=True, stream=True, on_event=stream, request_guard=guard)
     if not isinstance(provider, HTTPProvider):
-        guard(json.loads(_request_record(turns, tools)[0]["content"]))
+        await guard(json.loads(_request_record(turns, tools)[0]["content"]))
     started = time.perf_counter()
     try:
         result = await provider.tool_chat_with_options(

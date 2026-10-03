@@ -15,4 +15,5 @@ data/
 source_artifacts/
 uploads/
 tmp/
+storage/tokenizers/
 .DS_Store

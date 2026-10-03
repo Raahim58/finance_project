@@ -109,6 +109,7 @@ def begin_attempt(
     *,
     transmitted_input_bytes=None,
     schema_version="phase8-native-tool-turn-1",
+    count_metadata=None,
 ):
     identifier = execution_id.get()
     if identifier is None:
@@ -142,6 +143,7 @@ def begin_attempt(
             raise ValueError("diagnostic_payload_capacity_exhausted")
         execution.reserved_input_tokens += estimated_tokens
         attempt_metadata = {
+            **(count_metadata or {}),
             "estimated_input_tokens": estimated_tokens,
             "input_bytes": len(json.dumps(messages).encode()),
             "transmitted_input_bytes": transmitted_input_bytes,

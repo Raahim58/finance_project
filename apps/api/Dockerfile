@@ -9,4 +9,5 @@ COPY requirements.txt constraints.cpu.txt ./
 RUN pip install --no-cache-dir 'torch==2.10.0+cpu' --index-url https://download.pytorch.org/whl/cpu \
     && pip install --no-cache-dir -r requirements.txt -c constraints.cpu.txt
 COPY . .
+RUN python scripts/setup_glm_tokenizer.py
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

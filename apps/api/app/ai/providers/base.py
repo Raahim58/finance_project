@@ -261,7 +261,7 @@ class ProviderCallOptions:
     stream: bool = False
     thinking: bool = False
     on_event: Callable[["ProviderEvent"], Awaitable[None]] | None = None
-    request_guard: Callable[[dict], None] | None = None
+    request_guard: Callable[[dict], None | Awaitable[None]] | None = None
     response_schema: dict | None = None
     max_output_tokens: int = 4096
     deadline_seconds: float = 30

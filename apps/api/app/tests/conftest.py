@@ -12,6 +12,17 @@ from app.main import app
 
 
 @pytest.fixture(autouse=True)
+def offline_token_preflight(monkeypatch, request):
+    # Existing provider fixtures mock generation. Counting is a separate endpoint
+    # and must never leak fixture/user context to a real API during the suite.
+    if request.path.name != "test_token_counting.py":
+        from app.ai.providers.http_placeholders import AnthropicProvider
+        async def unavailable(*_args):
+            raise RuntimeError("Offline token count not explicitly mocked")
+        monkeypatch.setattr(AnthropicProvider, "count_input_tokens", unavailable)
+
+
+@pytest.fixture(autouse=True)
 def reset_database():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)

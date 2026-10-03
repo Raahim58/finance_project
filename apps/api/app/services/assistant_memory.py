@@ -86,18 +86,24 @@ async def prepare(identifier, user_id, conversation_id, provider, api_key, model
     started = time.perf_counter()
     result = None
     error = None
+    count_metadata = {}
     try:
-        if estimate_tokens(messages) > ceiling:
+        from app.ai.providers.http_placeholders import HTTPProvider
+        if not isinstance(provider, HTTPProvider) and estimate_tokens(messages) > ceiling:
             raise ValueError("summary_input_limit")
-        def guard(payload):
-            if estimate_tokens(payload) > ceiling:
+        async def guard(payload):
+            nonlocal count_metadata
+            from app.ai.token_counting import preflight_count
+            amount, count_metadata = await preflight_count(provider, api_key, payload,
+                input_limit=ceiling, remaining_input=ceiling)
+            if amount > ceiling:
                 raise ValueError("summary_input_limit")
         result = await provider.chat_with_options(api_key, messages, model,
             options=ProviderCallOptions(thinking=False, max_output_tokens=policy["summary"],
                                         deadline_seconds=90, request_guard=guard))
         if not result.content.strip() or result.finish_reason in {"length", "max_tokens", "MAX_TOKENS", "incomplete"}:
             raise ValueError("summary_incomplete")
-        if estimate_tokens(result.content) > policy["summary"]:
+        if (result.output_tokens if result.output_tokens is not None else estimate_tokens(result.content)) > policy["summary"]:
             raise ValueError("summary_output_limit")
         with SessionLocal.begin() as db:
             conversation = owned_conversation(db, user_id, conversation_id)
@@ -118,6 +124,7 @@ async def prepare(identifier, user_id, conversation_id, provider, api_key, model
             execution = db.get(AssistantExecution, identifier)
             accounting = json.loads(execution.accounting_json)
             accounting.setdefault("summaries", []).append({"latency_ms": round((time.perf_counter() - started) * 1000),
+                **count_metadata,
                 "input_tokens": result.input_tokens if result and result.input_tokens is not None else estimate_tokens(messages),
                 "output_tokens": result.output_tokens if result and result.output_tokens is not None else estimate_tokens(result.content) if result else 0,
                 "error": error})
