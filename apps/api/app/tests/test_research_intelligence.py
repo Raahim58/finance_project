@@ -676,6 +676,22 @@ def test_profile_quote_selection_resolves_source_text_and_rejects_wrong_source()
         validate_output("profile", json.dumps({"relationships": [relationship], "coverage_gaps": []}), payload)
 
 
+def test_digest_prompt_separates_narrative_numbers_from_structured_facts():
+    from app.services.research_generation_service import generation_request
+
+    payload = {"facts": [{"id": "fact:1", "value": "6268000000", "unit": "PKR"}], "macro": [{"id": "macro:1", "value": "11.5", "unit": "percent"}], "company_evidence": [{"id": "chunk:1", "text": "Net profit was 6,268 million PKR in 2025.", "page_number": 12}], "events": [{"event_key": "raw:1", "title": "Policy rate held at 11.5%", "event_date": "2026-07-28", "evidence": [{"id": "chunk:2", "text": "Inflation reached 11.7%.", "page_number": 1}]}]}
+    original = json.dumps(payload)
+    messages, _ = generation_request("digest", payload)
+    sent = json.loads(messages[1]["content"].split("INPUT_JSON\n")[1].split("\nOUTPUT_SCHEMA\n")[0])
+    assert sent["facts"] == payload["facts"] and sent["macro"] == payload["macro"]
+    assert "6,268" not in sent["company_evidence"][0]["text"]
+    assert "11.7" not in sent["events"][0]["evidence"][0]["text"]
+    assert "11.5" not in sent["events"][0]["title"]
+    assert sent["events"][0]["event_date"] == "2026-07-28"
+    assert sent["company_evidence"][0]["page_number"] == 12
+    assert json.dumps(payload) == original
+
+
 def test_events_without_current_source_chunks_are_excluded():
     from sqlalchemy import delete
     from app.models.document import Citation

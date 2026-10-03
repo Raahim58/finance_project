@@ -1,6 +1,7 @@
 """Single-turn prompts, strict evidence validation, and reusable owner-scoped outputs."""
 
 from pathlib import Path
+import json
 import re
 from decimal import Decimal, InvalidOperation
 from app.domain.research_relevance import canonical, fingerprint
@@ -8,7 +9,7 @@ from app.schemas.research_intelligence import ProfileOutput, DigestOutput
 from app.models.research_intelligence import CompanyExposureProfile, CompanyEventBrief
 
 PROFILE_VERSION = "exposure-v4"
-DIGEST_VERSION = "digest-v3"
+DIGEST_VERSION = "digest-v4"
 PROMPTS = Path(__file__).resolve().parents[1] / "ai" / "prompts"
 
 
@@ -41,6 +42,34 @@ def profile_quote_options(payload):
     return quotes
 
 
+def digest_prompt_payload(payload):
+    """Keep source numbers out of generation; exact values remain structured."""
+    projected = json.loads(canonical(payload))
+
+    def narrative(text):
+        return re.sub(r"\d[\d,]*(?:\.\d+)?", "[number omitted]", text)
+
+    evidence = projected.get("company_evidence", []) + projected.get("relationship_evidence", [])
+    relationships = list(projected.get("relationships", []))
+    for event in projected.get("events", []):
+        evidence += event.get("evidence", [])
+        relationships += event.get("relationships", [])
+        for field in ("title", "summary", "description", "text"):
+            if isinstance(event.get(field), str):
+                event[field] = narrative(event[field])
+    for source in evidence:
+        for field in ("text", "title"):
+            if isinstance(source.get(field), str):
+                source[field] = narrative(source[field])
+    for relationship in relationships:
+        relationship["mechanism"] = narrative(relationship["mechanism"])
+        relationship["conditions"] = [narrative(c) for c in relationship.get("conditions", [])]
+        for quote in relationship.get("supporting_quotes", []):
+            quote["quote"] = narrative(quote["quote"])
+    projected["narrative_number_policy"] = "Numbers in narrative are intentionally omitted. Use only facts/macro for measured values; preserve their fact IDs. Never infer or reproduce omitted values."
+    return projected
+
+
 def generation_request(kind, payload):
     schema = ProfileOutput if kind == "profile" else DigestOutput
     output_schema = schema.model_json_schema()
@@ -51,7 +80,11 @@ def generation_request(kind, payload):
         PROMPTS
         / ("company_exposure_profile.md" if kind == "profile" else "company_event_digest.md")
     ).read_text()
-    data = canonical({**payload, "quote_options": quotes} if kind == "profile" else payload)
+    data = canonical(
+        {**payload, "quote_options": quotes}
+        if kind == "profile"
+        else digest_prompt_payload(payload)
+    )
     cap = 32000 if kind == "profile" else 40000
     if len(data.encode()) > cap:
         raise ValueError("research_input_budget_exceeded")
