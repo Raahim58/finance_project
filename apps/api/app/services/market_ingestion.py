@@ -18,6 +18,7 @@ from app.models.market import (
     SectorDailyStats,
 )
 from app.services.market_numbers import safe_decimal, safe_int
+from app.services.ingestion_lock import lock_ingestion_writes
 from app.services.market_providers import LatestPriceRow
 from app.services.canonical_market_service import (
     persist_normalized_observations,
@@ -425,6 +426,7 @@ def cleanup_invalid_market_prices(db: Session) -> int:
 def persist_market_data(db: Session, *, latest_prices: list[LatestPriceRow], source: str) -> dict[str, int | date | None]:
     if not latest_prices:
         raise ValueError("latest_prices must not be empty")
+    lock_ingestion_writes(db, "market-price-write")
 
     company_count = 0
     price_count = 0
@@ -506,6 +508,7 @@ def compute_market_stats(
     source: str = "mock",
     target_date: date | None = None,
 ) -> int:
+    lock_ingestion_writes(db, "market-price-write")
     if target_date:
         db.execute(delete(SectorDailyStats).where(SectorDailyStats.source == source, SectorDailyStats.trade_date == target_date))
         db.execute(delete(MarketSnapshot).where(MarketSnapshot.source == source, MarketSnapshot.snapshot_date == target_date))

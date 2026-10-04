@@ -133,6 +133,8 @@ def persist_normalized_observations(db: Session, rows: Iterable, source_name: st
 
     The artifact explicitly records that it is normalized, not a raw-response substitute.
     """
+    from app.services.ingestion_lock import lock_ingestion_writes
+    lock_ingestion_writes(db, "market-price-write")
     rows = list(rows)
     payload = [
         {

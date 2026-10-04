@@ -115,6 +115,41 @@ def test_phase2_queueability_treats_partial_and_live_reservations_as_terminal():
     assert is_queueable(row, now) is False
 
 
+def test_partial_coverage_requires_explicit_refresh_interval():
+    now = datetime.now(UTC)
+    row = IngestionCoverage(status="partial", completed_at=now - timedelta(days=31))
+    assert not is_queueable(row, now)
+    assert is_queueable(row, now, refresh_after=timedelta(days=30))
+
+
+def test_history_catches_up_open_month_without_repointing_observations(tmp_path, monkeypatch):
+    import json
+    from app.core.config import settings
+    from app.jobs.phase2_tasks import dps_history
+    from app.models.workstation import MarketObservation, SourceArtifact
+    from app.services.market_providers import SymbolHistoryRow
+    monkeypatch.setattr(settings, "source_artifact_root", str(tmp_path))
+    with SessionLocal() as db:
+        sync_observed_dps_universe(db, [{"symbol": "AAA", "name": "A", "sector": "Cement", "is_debt": False, "is_etf": False, "is_gem": False}])
+        instrument = db.scalar(select(Instrument).where(Instrument.symbol == "AAA"))
+        db.add(IngestionCoverage(instrument_id=instrument.id, dataset_type="price_history", period_key="2025-01", source="dps", status="complete", completed_at=datetime(2025, 1, 15, tzinfo=UTC)))
+        db.commit()
+    class Provider:
+        parser_version = "fixture"
+        captured_responses = [{"content": b"source fixture", "url": "https://dps.psx.com.pk/historical", "method": "POST", "content_type": "text/html"}]
+        def fetch_symbol_history(self, *args):
+            return [SymbolHistoryRow("AAA", date(2025, 1, 31), Decimal("101"), Decimal("100"), Decimal("100"), Decimal("102"), Decimal("99"), 1000)]
+    monkeypatch.setattr("app.jobs.phase2_tasks.DpsMarketDataProvider", Provider)
+    result = dps_history.run("AAA", 2025, 1)
+    assert result["rows"] == 1 and not result.get("idempotent")
+    assert dps_history.run("AAA", 2025, 1)["idempotent"]
+    with SessionLocal() as db:
+        observation = db.scalar(select(MarketObservation))
+        artifact = db.get(SourceArtifact, observation.artifact_id)
+        assert artifact.source_url.startswith("normalized://dps/")
+        assert json.loads(artifact.response_metadata_json)["raw_artifact_ids"]
+
+
 def test_phase2_reservation_is_persisted_before_publish():
     class FakeTask:
         target_id = None

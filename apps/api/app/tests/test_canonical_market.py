@@ -89,6 +89,19 @@ def test_latest_price_queries_only_the_latest_canonical_observation():
     assert historical is not None and historical.trade_date == date(2026, 8, 6)
 
 
+def test_market_default_date_uses_observed_exchange_date():
+    from datetime import UTC, datetime
+    from app.services.market_service import get_latest_market_date
+    with SessionLocal() as db:
+        persist_market_data(db, latest_prices=[_row("https://dps.psx.com.pk")], source="dps")
+        observation = db.scalar(select(MarketObservation))
+        # PostgreSQL returns the UTC instant for Pakistan midnight. The explicit
+        # source trade date must win over the preceding UTC calendar day.
+        observation.effective_at = datetime(2026, 8, 6, 19, tzinfo=UTC)
+        db.flush()
+        assert get_latest_market_date(db) == date(2026, 8, 7)
+
+
 def test_market_tool_pagination_preserves_full_history_for_other_readers():
     from datetime import timedelta
     from dataclasses import replace

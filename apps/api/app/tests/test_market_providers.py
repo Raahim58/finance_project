@@ -94,6 +94,18 @@ def test_dps_symbol_contract_fixture():
     assert rows[0]["is_debt"] is False
 
 
+def test_dps_session_uses_public_page_request_header(monkeypatch):
+    real_client = httpx.Client
+    def respond(request):
+        if request.url.path == "/historical":
+            return httpx.Response(200, text='window.__ps = {"_k":"fixture-public-session"};')
+        assert request.headers["X-Req-Id"] == "fixture-public-session"
+        assert request.headers["X-Requested-With"] == "XMLHttpRequest"
+        return httpx.Response(200, json=json.loads((DPS_FIXTURES / "symbols.sample.json").read_text()))
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: real_client(transport=httpx.MockTransport(respond), **kwargs))
+    assert DpsMarketDataProvider().health_check()["symbols"] == 3
+
+
 def test_dps_datewise_history_contract_and_debt_filter():
     html = (DPS_FIXTURES / "historical_date.sample.html").read_text()
     rows = DpsMarketDataProvider.parse_datewise_history(html, date(2026, 8, 7))

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 import logging
+import json
+import re
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -194,8 +198,9 @@ class DpsMarketDataProvider(MarketDataProvider):
             "request_content": response.request.content,
         })
 
-    def _client(self) -> httpx.Client:
-        return httpx.Client(
+    @contextmanager
+    def _client(self) -> Iterator[httpx.Client]:
+        with httpx.Client(
             base_url=self.base_url,
             timeout=30,
             follow_redirects=True,
@@ -203,7 +208,19 @@ class DpsMarketDataProvider(MarketDataProvider):
                 "User-Agent": "psx-ai-portfolio-agent/0.1 (personal research; low-rate ingestion)",
                 "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
             },
-        )
+        ) as client:
+            page = client.get("/historical")
+            page.raise_for_status()
+            match = re.search(r"window\.__ps\s*=\s*(\{[^;]+\})", page.text)
+            if match is None:
+                raise ValueError("DPS public session bootstrap is missing")
+            request_id = json.loads(match.group(1)).get("_k")
+            if not isinstance(request_id, str) or not request_id:
+                raise ValueError("DPS public session request identifier is missing")
+            # Match the site's published $.ajaxSetup contract. This transient
+            # identifier comes from an ordinary public page, not a stored key.
+            client.headers.update({"X-Req-Id": request_id, "X-Requested-With": "XMLHttpRequest", "Referer": str(page.url)})
+            yield client
 
     @staticmethod
     def parse_symbols(payload: Any) -> list[dict[str, Any]]:

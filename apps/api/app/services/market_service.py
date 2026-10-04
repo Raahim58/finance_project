@@ -95,11 +95,14 @@ def serialize_sector_stats(stats: SectorDailyStats) -> SectorDailyStatsResponse:
 
 def get_latest_market_date(db: Session) -> date | None:
     from app.models.workstation import DataSource, MarketObservation, SourceArtifact
+    from app.services.canonical_market_service import observation_trade_date
     statement = (
-        select(func.max(MarketObservation.effective_at))
+        select(MarketObservation)
         .join(SourceArtifact, SourceArtifact.id == MarketObservation.artifact_id)
         .join(DataSource, DataSource.id == SourceArtifact.data_source_id)
-        .where(MarketObservation.is_selected.is_(True), MarketObservation.frequency == "daily")
+        .where(MarketObservation.is_selected.is_(True), MarketObservation.frequency == "daily", MarketObservation.instrument_id.is_not(None))
+        .order_by(MarketObservation.effective_at.desc())
+        .limit(1)
     )
     if not settings.is_synthetic_environment:
         statement = statement.where(func.lower(DataSource.name) != "mock")
@@ -107,7 +110,7 @@ def get_latest_market_date(db: Session) -> date | None:
     legacy = select(func.max(MarketPrice.trade_date))
     if not settings.is_synthetic_environment:
         legacy = legacy.where(func.lower(MarketPrice.source) != "mock")
-    return observed.date() if observed else db.scalar(legacy)
+    return observation_trade_date(observed) if observed else db.scalar(legacy)
 
 
 def resolve_market_date(db: Session, requested_date: date | None) -> date:

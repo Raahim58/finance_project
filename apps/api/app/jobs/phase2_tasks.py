@@ -5,7 +5,7 @@ import json
 from zoneinfo import ZoneInfo
 
 import httpx
-from sqlalchemy import Date, cast, select
+from sqlalchemy import select
 
 from app.celery_app import celery_app
 from app.db.session import SessionLocal
@@ -14,7 +14,6 @@ from app.models.workstation import FinancialFact, Instrument, MarketObservation,
 from app.providers.fundamentals.dps_standardized import DpsStandardizedFundamentalsProvider
 from app.providers.fundamentals.psx_financials import PsxFinancialsProvider, ReportCatalogItem
 from app.providers.fundamentals.extraction import FINANCIAL_EXTRACTION_VERSION, extract_facts, parse_financial_pdf, parse_period_end
-from app.services.canonical_market_service import reconcile_market_observations
 from app.services.coverage_service import begin, complete, coverage, fail, is_queueable, reserve_and_publish
 from app.services.ingestion_persistence import source, store_artifact
 from app.services.market_ingestion import persist_market_data
@@ -71,11 +70,14 @@ def dps_history(symbol: str, year: int, month: int) -> dict[str, object]:
     with SessionLocal() as db:
         instrument = _instrument(db, symbol)
         state = coverage(db, instrument.id, "price_history", period_key, "dps")
-        if state.status == "complete":
+        month_end = date(year, month, monthrange(year, month)[1])
+        # A month marked complete while it was still open must be caught up
+        # once the month closes. A mid-month snapshot is not full coverage.
+        if state.status == "complete" and state.completed_at is not None and state.completed_at.date() >= month_end:
             return {"symbol": instrument.symbol, "period": period_key, "status": "complete", "idempotent": True, "rows": state.item_count}
         begin(state); db.commit()
         try:
-            start = date(year, month, 1); end = date(year, month, monthrange(year, month)[1])
+            start = date(year, month, 1); end = min(month_end, datetime.now(ZoneInfo("Asia/Karachi")).date())
             provider = DpsMarketDataProvider()
             rows = provider.fetch_symbol_history(instrument.symbol, start, end)
             if not rows:
@@ -84,23 +86,25 @@ def dps_history(symbol: str, year: int, month: int) -> dict[str, object]:
             raw_artifacts = [store_artifact(db, data_source, captured["content"], url=captured["url"], method=captured["method"], parser_version=provider.parser_version, content_type=captured["content_type"] or "text/html", effective_at=datetime.combine(start, datetime.min.time(), tzinfo=UTC)) for captured in provider.captured_responses]
             result = persist_market_data(db, latest_prices=rows, source="dps")
             if raw_artifacts:
-                for observation in db.scalars(select(MarketObservation).join(SourceArtifact, SourceArtifact.id == MarketObservation.artifact_id).where(
+                # Keep observation identity stable. Repointing all observations
+                # to the first downloaded artifact can collide on the source
+                # uniqueness key and misattribute current-month rows to the
+                # previous-month lookback response.
+                for artifact in db.scalars(select(SourceArtifact).join(MarketObservation, MarketObservation.artifact_id == SourceArtifact.id).where(
                     MarketObservation.instrument_id == instrument.id,
-                    cast(MarketObservation.effective_at, Date) >= start,
-                    cast(MarketObservation.effective_at, Date) <= end,
+                    MarketObservation.effective_at >= datetime.combine(start, datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi")),
+                    MarketObservation.effective_at < datetime.combine(end.fromordinal(end.toordinal() + 1), datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi")),
                     MarketObservation.frequency == "daily",
                     SourceArtifact.source_url.like("normalized://dps/%"),
-                )):
-                    observation.artifact_id = raw_artifacts[0].id
-                db.flush()
-                for row in rows:
-                    reconcile_market_observations(
-                        db,
-                        instrument_id=instrument.id,
-                        effective_at=datetime.combine(row.trade_date, datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi")),
-                    )
-            complete(state, len(rows), [f"canonical_observations={result.get('canonical_observations', 0)}", f"raw_artifacts={len(raw_artifacts)}"]); db.commit()
-            return {"symbol": instrument.symbol, "period": period_key, "status": "complete", "rows": len(rows)}
+                )).unique():
+                    metadata = json.loads(artifact.response_metadata_json or "{}")
+                    metadata["raw_artifact_ids"] = sorted(set(metadata.get("raw_artifact_ids", [])) | {a.id for a in raw_artifacts})
+                    artifact.response_metadata_json = json.dumps(metadata, sort_keys=True)
+            complete(state, len(rows), [f"canonical_observations={result.get('canonical_observations', 0)}", f"raw_artifacts={len(raw_artifacts)}"])
+            if end < month_end:
+                state.status = "partial"
+            db.commit()
+            return {"symbol": instrument.symbol, "period": period_key, "status": state.status, "rows": len(rows)}
         except Exception as exc:
             db.rollback(); state = coverage(db, instrument.id, "price_history", period_key, "dps"); fail(state, exc); db.commit(); raise
 

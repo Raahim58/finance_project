@@ -9,6 +9,8 @@ from app.core.config import settings
 
 
 def coverage(db: Session, instrument_id: str, dataset_type: str, period_key: str, source: str) -> IngestionCoverage:
+    from app.services.ingestion_lock import lock_ingestion_writes
+    lock_ingestion_writes(db, f"coverage:{instrument_id}:{dataset_type}:{period_key}:{source}")
     row = db.scalar(select(IngestionCoverage).where(
         IngestionCoverage.instrument_id == instrument_id,
         IngestionCoverage.dataset_type == dataset_type,
@@ -51,7 +53,7 @@ def is_queueable(row: IngestionCoverage, now: datetime, *, refresh_after: timede
         return attempted is None or attempted <= now - timedelta(minutes=15)
     if row.status == "running":
         return attempted is None or attempted <= now - timedelta(hours=1)
-    if row.status == "complete" and refresh_after is not None:
+    if row.status in {"complete", "partial"} and refresh_after is not None:
         return row.completed_at is not None and row.completed_at <= now - refresh_after
     return False
 
