@@ -2,6 +2,8 @@
 
 Audit date: 2026-10-03 (Asia/Karachi). Scope: the first ordered follow-up in [the roadmap](PHASE_11_AND_FOLLOW_UP_ROADMAP.md), not Phase 11 Assistant implementation.
 
+For precise file changes, Oracle configuration, deployment/start commands and financial extraction/index backlog sequencing, use the [October 4 activation runbook](ORACLE_INGESTION_ACTIVATION_RUNBOOK.md). It distinguishes commands supported today from prerequisite modules/settings that still need implementation, and records the freshly verified v4 extractor and report-index backlog.
+
 ## Decision
 
 The next work is to restore current coverage and sustain it: Pakistani business/policy news, geopolitical and global-market evidence, sector drivers, structured macro observations, market prices and index/session snapshots. More PSX announcements alone will not repair the coverage gap.

@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.ingestion.evidence import Candidate, CandidateStatus, EvidenceSource, ParsedEvidence
-from app.ingestion.evidence_catalog import SECTOR_DRIVERS, SOURCE_SPECS
+from app.ingestion.evidence_catalog import SECTOR_DRIVERS, SOURCE_SPECS, source_is_allowlisted
 from app.models.evidence import DiscoveryCandidate, EvidenceSourceConfig, EvidenceSourceState
 from app.models.workstation import (
     DataSource,
@@ -105,6 +105,8 @@ def ensure_source_config(db: Session, source_key: str) -> tuple[DataSource, Evid
     spec = next((item for item in SOURCE_SPECS if item.key == source_key), None)
     if spec is None:
         raise KeyError(f"No source specification for {source_key!r}")
+    selected = source_is_allowlisted(source_key)
+    enabled = spec.enabled and selected
     data_source = db.scalar(select(DataSource).where(DataSource.name == spec.name))
     if data_source is None:
         data_source = DataSource(
@@ -113,7 +115,7 @@ def ensure_source_config(db: Session, source_key: str) -> tuple[DataSource, Evid
             base_url=spec.base_url,
             priority={"official": 10, "reporting": 20, "specialist": 25}.get(spec.tier, 50),
             freshness_sla_minutes=max(1, spec.poll_seconds // 60 * 3),
-            enabled=spec.enabled,
+            enabled=enabled,
             use_notes=(
                 "Phase 4 official evidence canary; exact numerical facts remain in structured tables."
                 if spec.canary_group
@@ -123,7 +125,7 @@ def ensure_source_config(db: Session, source_key: str) -> tuple[DataSource, Evid
         db.add(data_source)
         db.flush()
     data_source.base_url = spec.base_url
-    data_source.enabled = spec.enabled
+    data_source.enabled = enabled
     data_source.use_notes = (
         "Phase 4 official evidence canary; exact numerical facts remain in structured tables."
         if spec.canary_group
@@ -511,6 +513,9 @@ def run_source_once(db: Session, evidence_source: EvidenceSource, *, limit: int 
     """Run one source transactionally; Pass 2 will invoke equivalent stages via queues."""
 
     data_source, config, state = ensure_source_config(db, evidence_source.key)
+    if not source_is_allowlisted(evidence_source.key):
+        db.commit()
+        return PipelineResult()
     now = datetime.now(UTC)
     state.last_attempted_at = now
     cursor = json.loads(state.cursor_json or "{}")

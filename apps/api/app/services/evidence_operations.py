@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.ingestion.evidence_catalog import source_is_allowlisted
 from app.ingestion.evidence import Candidate, CandidateStatus, EvidenceSource, ParsedEvidence, RawContent
 from app.models.evidence import (
     DiscoveryCandidate,
@@ -229,6 +230,9 @@ def discover_stage(
     request_id: str | None = None,
 ) -> DiscoveryStageResult:
     _, config, state = ensure_source_config(db, evidence_source.key)
+    if not source_is_allowlisted(evidence_source.key):
+        db.commit()
+        return DiscoveryStageResult((), 0, 0)
     now = datetime.now(UTC)
     state.last_attempted_at = now
     cursor = dict(cursor_override if cursor_override is not None else json.loads(state.cursor_json or "{}"))
@@ -314,6 +318,14 @@ def fetch_stage(
     row = db.get(DiscoveryCandidate, candidate_id)
     if row is None:
         raise ValueError("Evidence candidate not found")
+    if row.status not in {CandidateStatus.FAILED.value, CandidateStatus.FETCH_READY.value}:
+        return FetchStageResult(row.id, f"idempotent_{row.status}")
+    if not source_is_allowlisted(evidence_source.key):
+        row.next_attempt_at = next_utc_day()
+        row.lease_expires_at = None
+        row.scoring_reasons_json = '["source_not_allowlisted"]'
+        db.commit()
+        return FetchStageResult(row.id, "source_not_allowlisted")
     if row.status == CandidateStatus.FAILED.value:
         _transition(row, CandidateStatus.FETCH_READY)
     if row.status != CandidateStatus.FETCH_READY.value:

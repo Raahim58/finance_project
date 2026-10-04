@@ -134,7 +134,7 @@ def test_scheduler_reconstructs_live_before_historical_from_postgres(tmp_path, m
                 f"https://www.dawn.com/news/{suffix}",
                 f"Pakistan policy rate {suffix}",
                 "Dawn",
-                NOW,
+                datetime.now(UTC),
                 "rss_atom",
                 external_id=suffix,
                 metadata={"priority_class": priority},

@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
     evidence_enabled: bool = False
+    # None preserves catalog behavior; an explicitly empty value allows no sources.
+    evidence_source_allowlist: str | None = None
     evidence_scheduler_seconds: int = Field(default=30, ge=5, le=3600)
     evidence_discovery_queue_target: int = Field(default=20, ge=1, le=1000)
     evidence_fetch_queue_target: int = Field(default=80, ge=1, le=5000)

@@ -109,6 +109,18 @@ SECTOR_DRIVERS = {
 }
 
 
+def source_is_allowlisted(source_key: str) -> bool:
+    """Validate explicit selection before ingestion mutates source configuration."""
+    selection = settings.evidence_source_allowlist
+    if selection is None:
+        return True
+    requested = {key.strip() for key in selection.split(",") if key.strip()}
+    unknown = requested - {spec.key for spec in SOURCE_SPECS}
+    if unknown:
+        raise ValueError("Unknown evidence source keys: " + ", ".join(sorted(unknown)))
+    return source_key in requested
+
+
 def build_pass1_registry() -> EvidenceSourceRegistry:
     registry = EvidenceSourceRegistry()
     registry.register(PsxAnnouncementSource())
