@@ -1,5 +1,22 @@
 """Transparent material-news selection; no model calls or financial fact extraction."""
 import re
+from dataclasses import replace
+from datetime import timedelta
+
+MATERIAL_NEWS_SOURCES = frozenset({'dawn', 'business_recorder', 'bbc_world', 'guardian_world',
+    'gcaptain', 'freightwaves', 'world_fertilizer', 'world_cement', 'oilprice', 'cotton_grower',
+    'metalminer', 'semiconductor_engineering', 'medium_kahloon'})
+
+
+def prepare_material_candidate(candidate):
+    if candidate.source_key not in MATERIAL_NEWS_SOURCES:
+        return candidate
+    selection = classify_news(candidate.headline, str(candidate.metadata.get('summary') or ''))
+    previous = candidate.metadata.get('curated_news') or {}
+    selection.update({key:previous[key] for key in ('date_from','date_to') if key in previous})
+    if candidate.metadata.get('priority_class', 'live') == 'live':
+        selection.update(date_from=str(candidate.discovered_at.date()-timedelta(days=7)), date_to=str(candidate.discovered_at.date()))
+    return replace(candidate,metadata={**candidate.metadata,'curated_news':selection})
 
 SECTOR_TERMS = {
     "cement": ("cement", "concrete", "construction demand"),

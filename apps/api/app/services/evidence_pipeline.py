@@ -6,7 +6,7 @@ import gzip
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -127,6 +127,10 @@ def ensure_source_config(db: Session, source_key: str) -> tuple[DataSource, Evid
     spec = next((item for item in SOURCE_SPECS if item.key == source_key), None)
     if spec is None:
         raise KeyError(f"No source specification for {source_key!r}")
+    from app.core.config import settings
+    from app.ingestion.news_selection import MATERIAL_NEWS_SOURCES
+    if settings.evidence_material_news_enabled and source_key in MATERIAL_NEWS_SOURCES:
+        spec = replace(spec, daily_discovery_budget=300, daily_fetch_budget=40, daily_selected_budget=20)
     selected = source_is_allowlisted(source_key)
     enabled = spec.enabled and selected
     data_source = db.scalar(select(DataSource).where(DataSource.name == spec.name))
@@ -217,6 +221,10 @@ def ensure_source_config(db: Session, source_key: str) -> tuple[DataSource, Evid
 
 
 def persist_candidate(db: Session, config: EvidenceSourceConfig, candidate: Candidate) -> tuple[DiscoveryCandidate, bool]:
+    from app.core.config import settings
+    from app.ingestion.news_selection import prepare_material_candidate
+    if settings.evidence_material_news_enabled:
+        candidate = prepare_material_candidate(candidate)
     canonical = normalize_url(candidate.canonical_url or candidate.observed_url)
     url_hash = _hash(canonical)
     filters = [DiscoveryCandidate.canonical_url_hash == url_hash]
@@ -236,6 +244,7 @@ def persist_candidate(db: Session, config: EvidenceSourceConfig, candidate: Cand
             and row.body_sha256 is None and row.artifact_id is None and row.event_id is None
             and row.relevance_score is not None and row.relevance_score < Decimal("0.18")
             and not metadata.get("request_id")
+            and candidate.metadata.get('curated_news', {}).get('eligible') is not False
             and score_candidate_metadata(db, candidate).relevance >= 0.18):
             metadata["prior_metadata_rejection"] = {"score": str(row.relevance_score), "reasons": json.loads(row.scoring_reasons_json or "[]")}
             metadata.update(candidate.metadata)
@@ -265,6 +274,11 @@ def persist_candidate(db: Session, config: EvidenceSourceConfig, candidate: Cand
     )
     db.add(row)
     db.flush()
+    if candidate.metadata.get('curated_news', {}).get('eligible') is False:
+        row.relevance_score = Decimal('0')
+        row.scoring_reasons_json = '["no_material_news_metadata_match"]'
+        _transition(row, CandidateStatus.REJECTED)
+        return row, True
     _transition(row, CandidateStatus.FETCH_READY)
     return row, True
 

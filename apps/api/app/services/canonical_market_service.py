@@ -337,6 +337,22 @@ def _from_observation(db: Session, observation: MarketObservation, symbol: str) 
     return _from_observation_parts(observation, artifact, source, symbol)
 
 
+def close_series(db: Session, symbol: str, start=None, end=None) -> dict[date, Decimal]:
+    """Validated index closes have their own basis; never manufacture OHLC."""
+    result = {row.trade_date: row.close for row in price_series(db, symbol, start, end)}
+    instrument = db.scalar(select(Instrument).where(Instrument.symbol == symbol.upper()))
+    if instrument and instrument.instrument_type in ('index', 'total_return_index'):
+        query = select(MarketObservation).where(
+            MarketObservation.instrument_id == instrument.id,
+            MarketObservation.frequency == 'daily_close', MarketObservation.is_selected.is_(True))
+        if start: query = query.where(MarketObservation.effective_at >= _exchange_day_start(start))
+        if end: query = query.where(MarketObservation.effective_at < _exchange_day_start(end + timedelta(days=1)))
+        observations = list(db.scalars(query.order_by(MarketObservation.effective_at)))
+        if observations:
+            result.update({observation_trade_date(row): Decimal(json.loads(row.values_json)['close']) for row in observations})
+    return result
+
+
 def price_series(
     db: Session,
     symbol: str,

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.quant import covariance_matrix, estimate_expected_returns, return_matrix
 from app.models.user import User
-from app.services.canonical_market_service import price_series
+from app.services.canonical_market_service import price_series, close_series
 from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_summary
 from app.services.workstation_service import _aligned_prices, _aligned_symbol_prices, _benchmark_symbol, _effective_risk_free_rate, _selected_ips_constraints
 
@@ -27,7 +27,7 @@ def market_inputs(db: Session, user: User, portfolio_id: str, extra_symbols: lis
 
 def benchmark_returns(db: Session, symbol: str | None, days: list[date]) -> np.ndarray | None:
     if not symbol: return None
-    by_date = {row.trade_date: float(row.close) for row in price_series(db, symbol)}
+    by_date = {day: float(close) for day, close in close_series(db, symbol).items()}
     if any(day not in by_date for day in days): return None
     prices = np.asarray([by_date[day] for day in days], dtype=float)
     return prices[1:] / prices[:-1] - 1

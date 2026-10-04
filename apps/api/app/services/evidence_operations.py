@@ -332,6 +332,17 @@ def fetch_stage(
     if row.status != CandidateStatus.FETCH_READY.value:
         return FetchStageResult(row.id, f"idempotent_{row.status}")
     candidate = candidate_from_row(row, evidence_source.key)
+    if settings.evidence_material_news_enabled:
+        from app.ingestion.news_selection import prepare_material_candidate
+        candidate = prepare_material_candidate(candidate)
+        row.metadata_json = _json(candidate.metadata)
+        if candidate.metadata.get('curated_news', {}).get('eligible') is False:
+            row.scoring_reasons_json = '["no_material_news_metadata_match"]'
+            _transition(row, CandidateStatus.REJECTED)
+            row.lease_expires_at = None
+            _record_request_outcome(db, row, 'rejected')
+            db.commit()
+            return FetchStageResult(row.id, 'rejected')
     config = db.get(EvidenceSourceConfig, row.source_config_id)
     cheap_score = score_candidate_metadata(db, candidate)
     if cheap_score.relevance < 0.18 and config.canary_group != "pass4_official":
@@ -450,6 +461,11 @@ def parse_stage(
     if row.status != CandidateStatus.EVALUATING.value or pipeline.get("stage") != "raw_ready":
         return ParseStageResult(row.id, f"idempotent_{row.status}")
     candidate = candidate_from_row(row, evidence_source.key)
+    if settings.evidence_material_news_enabled:
+        from app.ingestion.news_selection import prepare_material_candidate
+        candidate = prepare_material_candidate(candidate)
+        metadata = dict(candidate.metadata)
+        row.metadata_json = _json(metadata)
     raw = RawContent(
         candidate=candidate,
         content=spool.read_raw(row.id),

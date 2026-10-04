@@ -55,7 +55,8 @@ from app.services.ledger_service import cash_balance, replay_positions
 from app.services.scenario_service import resolve_shock
 from app.services.portfolio_service import get_portfolio_or_404, get_portfolio_performance, get_portfolio_summary
 from app.services.risk_profile_service import RISK_ORDER as _RISK_ORDER, assess_risk_profile
-from app.services.canonical_market_service import latest_price, price_series
+from app.services.canonical_market_service import latest_price, price_series, close_series
+from app.services.split_adjustments import split_adjusted_price_series
 from app.services.compliance_service import evaluate_ips_constraints, shariah_eligibility
 
 
@@ -319,6 +320,7 @@ def _aligned_symbol_prices(db: Session, symbols: list[str], start: date | None, 
         end,
         tuple(observation_stamp),
         tuple(legacy_stamp),
+        tuple(db.execute(select(CorporateAction.id, CorporateAction.effective_date, CorporateAction.details_json, CorporateAction.artifact_id).where(CorporateAction.instrument_id.in_(instrument_ids)).order_by(CorporateAction.id))),
     )
     now = monotonic()
     with _aligned_price_cache_lock:
@@ -327,7 +329,7 @@ def _aligned_symbol_prices(db: Session, symbols: list[str], start: date | None, 
             return list(cached[1]), list(cached[2]), [list(column) for column in cached[3]]
         by_symbol = {symbol: {} for symbol in symbols}
         for symbol in symbols:
-            for row in price_rows[symbol] if price_rows is not None else price_series(db, symbol, start, end):
+            for row in price_rows[symbol] if price_rows is not None else split_adjusted_price_series(db, symbol, start, end, raw_rows=price_series(db, symbol, start, end)):
                 by_symbol[symbol][row.trade_date] = float(row.close)
         aligned_dates = sorted(set.intersection(*(set(values) for values in by_symbol.values())))
         if len(aligned_dates) < 31:
@@ -379,7 +381,7 @@ def _capm_market_proxy_symbol(db: Session, constraints: dict[str, object]) -> tu
 def _benchmark_returns_for_optimizer(db: Session, symbol: str | None, days: list[date]) -> np.ndarray | None:
     if not symbol:
         return None
-    by_date = {row.trade_date: float(row.close) for row in price_series(db, symbol)}
+    by_date = {day: float(close) for day, close in close_series(db, symbol).items()}
     if any(day not in by_date for day in days):
         return None
     prices = np.asarray([by_date[day] for day in days], dtype=float)
@@ -439,12 +441,9 @@ def _benchmark_analysis(
     portfolio_returns_by_date: dict[date, float],
     risk_free_rate: float,
 ) -> dict[str, object]:
-    rows = price_series(db, benchmark_symbol)
-    benchmark_returns = {
-        rows[index].trade_date: float(rows[index].close / rows[index - 1].close - 1)
-        for index in range(1, len(rows))
-        if rows[index - 1].close > 0
-    }
+    closes = close_series(db, benchmark_symbol)
+    dates = sorted(closes)
+    benchmark_returns = {dates[index]: float(closes[dates[index]] / closes[dates[index-1]] - 1) for index in range(1,len(dates))}
     aligned_dates = sorted(set(portfolio_returns_by_date) & set(benchmark_returns))
     if len(aligned_dates) < 60:
         return {
@@ -486,7 +485,7 @@ def portfolio_quant(db: Session, user: User, portfolio_id: str, shrinkage: float
     symbols = sorted({row.symbol for row in summary.holdings})
     if len(symbols) < 2:
         raise HTTPException(status_code=422, detail="At least two securities are required")
-    series = {symbol: price_series(db, symbol) for symbol in symbols}
+    series = {symbol: split_adjusted_price_series(db, symbol, raw_rows=price_series(db, symbol)) for symbol in symbols}
     # Reuse already fetched observations to refresh the existing alignment cache.
     # Later workstation callers keep their established cache reuse behavior.
     symbols, days, prices = _aligned_prices(db, portfolio.id, None, None, price_rows=series)
@@ -518,6 +517,7 @@ def portfolio_quant(db: Session, user: User, portfolio_id: str, shrinkage: float
         "ips_version_id": portfolio.selected_ips_version_id, "ips_constraints": constraints,
         "required_return": str(ips_version.required_return) if ips_version and ips_version.required_return is not None else None,
         "benchmark_symbol": benchmark_symbol, "benchmark_observations": observation_dependencies(benchmark_series),
+        "benchmark_closes": {str(day):str(close) for day,close in close_series(db,benchmark_symbol).items()} if benchmark_symbol else {},
         "risk_free": risk_free, "shrinkage": shrinkage, "annualization": 252, "rolling_window": 60,
         "recorded_corporate_action_count": recorded_actions,
     }

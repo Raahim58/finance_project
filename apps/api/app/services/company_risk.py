@@ -1,7 +1,7 @@
 """Observed company risk, separate from screening growth/margin/liquidity metrics."""
 from datetime import date, timedelta
 from app.domain.quant import return_matrix, risk_metrics
-from app.services.canonical_market_service import price_series
+from app.services.split_adjustments import split_adjusted_price_series as price_series
 
 
 def company_risk(db, symbol, as_of=None):
