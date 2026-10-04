@@ -156,6 +156,19 @@ services:
     <<: *evidence-worker
     command: celery -A app.celery_app worker -n historical@%h -Q historical_hydrate --concurrency=1 --loglevel=INFO
 
+  market-scheduler:
+    <<: *api-image
+    profiles: ["scheduling"]
+    restart: unless-stopped
+    command: python -m app.jobs.market_daily
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
   phase2-scheduler:
     <<: *api-image
     profiles: ["scheduling"]

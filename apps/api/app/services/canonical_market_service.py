@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
@@ -57,6 +57,7 @@ class CanonicalPrice:
     observed_at: datetime | None
     adjustment_state: str
     quality_status: str
+    capitalization: dict | None = None
 
     @property
     def change(self) -> Decimal:
@@ -331,10 +332,22 @@ def _from_observation_parts(
     )
 
 
-def _from_observation(db: Session, observation: MarketObservation, symbol: str) -> CanonicalPrice:
+def _from_observation(db: Session, observation: MarketObservation, symbol: str, capitalization_by_instrument=None) -> CanonicalPrice:
     artifact = db.get(SourceArtifact, observation.artifact_id)
     source = db.get(DataSource, artifact.data_source_id) if artifact else None
-    return _from_observation_parts(observation, artifact, source, symbol)
+    price = _from_observation_parts(observation, artifact, source, symbol)
+    if capitalization_by_instrument is None:
+        return _attach_capitalization(db, price)
+    snapshot = capitalization_by_instrument.get(price.instrument_id)
+    return replace(price,market_cap=Decimal(snapshot['market_cap']),capitalization=snapshot) if snapshot else price
+
+
+def _attach_capitalization(db, price):
+    from app.services.dps_capitalization import capitalization
+    snapshot = capitalization(db, price.instrument_id, price.trade_date)
+    if snapshot and snapshot['trade_date'] == str(price.trade_date):
+        return replace(price,market_cap=Decimal(snapshot['market_cap']),capitalization=snapshot)
+    return price
 
 
 def close_series(db: Session, symbol: str, start=None, end=None) -> dict[date, Decimal]:
@@ -441,6 +454,7 @@ def price_series(
 
 
 def canonical_prices_for_date(db: Session, trade_date: date) -> list[CanonicalPrice]:
+    from app.services.dps_capitalization import capitalization_for_date
     start = _exchange_day_start(trade_date)
     end = start + timedelta(days=1)
     statement = (
@@ -463,11 +477,12 @@ def canonical_prices_for_date(db: Session, trade_date: date) -> list[CanonicalPr
             ~func.lower(SourceArtifact.source_url).like("normalized://mock/%"),
         )
     rows = list(db.scalars(statement))
+    capitalization_by_instrument = capitalization_for_date(db, trade_date)
     output = []
     for row in rows:
         instrument = db.get(Instrument, row.instrument_id)
         if instrument:
-            output.append(_from_observation(db, row, instrument.symbol))
+            output.append(_from_observation(db, row, instrument.symbol, capitalization_by_instrument))
     return output
 
 
@@ -500,7 +515,7 @@ def latest_price(db: Session, symbol: str, as_of: date | None = None) -> Canonic
         row = db.execute(statement.order_by(MarketObservation.effective_at.desc()).limit(1)).first()
         if row:
             observation, artifact, source = row
-            return _from_observation_parts(observation, artifact, source, instrument.symbol)
+            return _attach_capitalization(db, _from_observation_parts(observation, artifact, source, instrument.symbol))
 
     statement = select(MarketPrice).where(MarketPrice.symbol == normalized_symbol)
     if not synthetic_market_data_allowed():

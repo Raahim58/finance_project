@@ -318,6 +318,12 @@ class DpsMarketDataProvider(MarketDataProvider):
                 continue
             parsed.append((day, open_price, high, low, close, volume))
         parsed.sort(key=lambda item: item[0])
+        unique = {}
+        for item in parsed:
+            if item[0] in unique and unique[item[0]] != item:
+                raise ValueError(f'Conflicting DPS history rows for {symbol} {item[0]}')
+            unique[item[0]] = item
+        parsed = list(unique.values())
         result: list[SymbolHistoryRow] = []
         previous_close: Decimal | None = None
         for day, open_price, high, low, close, volume in parsed:
@@ -346,9 +352,9 @@ class DpsMarketDataProvider(MarketDataProvider):
         except Exception as exc:
             return {"ok": False, "provider": self.source, "detail": str(exc), "parser_version": self.parser_version}
 
-    def fetch_latest_prices(self, symbols: list[str] | None = None) -> list[LatestPriceRow]:
+    def fetch_latest_prices(self, symbols: list[str] | None = None, *, target_date: date | None = None) -> list[LatestPriceRow]:
         now = datetime.now(ZoneInfo("Asia/Karachi"))
-        cursor = now.date() if now.hour >= 18 else now.date().fromordinal(now.date().toordinal() - 1)
+        cursor = target_date or (now.date() if now.hour >= 18 else now.date().fromordinal(now.date().toordinal() - 1))
         with self._client() as client:
             universe_response = client.get("/symbols")
             universe_response.raise_for_status()
@@ -356,7 +362,7 @@ class DpsMarketDataProvider(MarketDataProvider):
             self.observed_universe = self.parse_symbols(universe_response.json())
             metadata = {row["symbol"]: row for row in self.observed_universe}
             rows: list[LatestPriceRow] = []
-            for _ in range(10):
+            for _ in range(1 if target_date else 10):
                 if cursor.weekday() < 5:
                     response = client.post("/historical", data={"date": cursor.isoformat()})
                     response.raise_for_status()
@@ -382,7 +388,7 @@ class DpsMarketDataProvider(MarketDataProvider):
             result.append(row)
         return result
 
-    def refresh_latest(self, db: Session) -> dict[str, Any]:
+    def refresh_latest(self, db: Session, *, target_date: date | None = None) -> dict[str, Any]:
         from app.ingestion.artifact_store import get_artifact_store
         from app.models.workstation import DataQualityIssue, DataSource, Instrument, MarketObservation, SourceArtifact
         from app.services.canonical_market_service import reconcile_market_observations
@@ -393,7 +399,7 @@ class DpsMarketDataProvider(MarketDataProvider):
 
         self.captured_responses = []
         self.quality_issues = []
-        latest_prices = self.fetch_latest_prices()
+        latest_prices = self.fetch_latest_prices(target_date=target_date) if target_date else self.fetch_latest_prices()
         if not latest_prices:
             raise RuntimeError("DPS returned no usable market price rows")
         expected_symbols = {
@@ -458,7 +464,8 @@ class DpsMarketDataProvider(MarketDataProvider):
                 selection_status="rejected",
             ))
         db.flush()
-        reconcile_market_observations(db)
+        for day in artifacts_by_date:
+            reconcile_market_observations(db, effective_at=datetime.combine(day, datetime.min.time(), tzinfo=ZoneInfo('Asia/Karachi')))
         db.commit()
         persisted_rejected = int(result.get("rejected", 0))
         result.update({

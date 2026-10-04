@@ -1,0 +1,38 @@
+[
+  {
+    "symbol": "SYS",
+    "action_type": "stock_split",
+    "ex_date": "2025-05-31",
+    "old_shares": "1",
+    "new_shares": "5",
+    "date_evidence": "May 31, 2025",
+    "ratio_evidence": "Rs. 10/- to Rs. 2/-",
+    "evidence": [
+      {
+        "url": "https://dps.psx.com.pk/download/document/254645.pdf",
+        "page": 1,
+        "sha256": "019a5db85302b1ec8542d36257402049fb24ff1ea3de95e506353626b2ebb2b8",
+        "quote": "In accordance with the special resolution passed by the shareholders and upon completion of the necessary formalities, the shares reflecting the sub-division of face value from Rs. 10/- to Rs. 2/- have been credited, as of the close of business on May 31, 2025, into the respective accounts of entitled shareholders maintained with the Central Depository Company of Pakistan Limited."
+      }
+    ]
+  },
+  {
+    "symbol": "MARI",
+    "action_type": "bonus_issue",
+    "ex_date": "2024-09-16",
+    "old_shares": "1",
+    "new_shares": "9",
+    "date_evidence": "16-Sep-2024",
+    "ratio_evidence": "800% (B)",
+    "delivery_date": "2024-09-27",
+    "tax_withholding_note": "Gross bonus adjustment only; shares withheld for tax are not portfolio credits.",
+    "evidence": [
+      {
+        "url": "https://dps.psx.com.pk/download/quote/2024-09-13.pdf",
+        "page": 27,
+        "sha256": "48636f981cc2aabfc4470ad73c70cc95d17f7ba5314442b747e27937f39c5899",
+        "quote": "Mari Petroleum Company Limited 19-Sep-2024 24-Sep-2024 1340% (F) 800% (B) 16-Sep-2024 24-Sep-2024 10:00 ISL"
+      }
+    ]
+  }
+]

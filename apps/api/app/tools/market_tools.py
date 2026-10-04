@@ -113,11 +113,15 @@ def _latest(db, _user, payload: MarketLatestInput):
     return tool_result("ok", {
         "instrument_id": instrument.id, "symbol": instrument.symbol,
         "date": row.trade_date, "close": row.close, "observed_at": row.observed_at,
+        "capitalization": row.capitalization,
         "source_ref": "market_latest",
     }, sources=[{
         "id": "market_latest", "source_name": row.source, "source_url": row.source_url,
         "artifact_id": row.artifact_id, "artifact_sha256": row.artifact_sha256,
-    }], returned=1, remaining=0)
+    }] + ([{"id":"capitalization", "source_name":"PSX DPS constituent workbook",
+        "source_url":row.capitalization['source_url'],"artifact_id":row.capitalization['artifact_id'],
+        "artifact_sha256":row.capitalization['artifact_sha256']}]
+        if row.capitalization else []), returned=1, remaining=0)
 
 
 def _series(db, _user, payload: MarketSeriesInput):
