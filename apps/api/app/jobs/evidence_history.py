@@ -24,10 +24,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--preset",
-        choices=("psx_12m", "deep_company_12m", "news_90d", "global_shipping_90d", "all"),
+        choices=("psx_12m", "deep_company_12m", "news_90d", "global_shipping_90d", "publisher_news_90d", "all"),
         required=True,
     )
     parser.add_argument("--symbol", action="append", default=[])
+    parser.add_argument("--source", action="append", default=[])
     parser.add_argument("--date-from", type=_date)
     parser.add_argument("--date-to", type=_date)
     parser.add_argument("--max-candidates", type=int)
@@ -69,6 +70,7 @@ def main() -> None:
                 row = create_historical_request(
                     db,
                     preset_key=preset,
+                    source_keys=tuple(args.source) if args.source else None,
                     instrument=instrument,
                     date_from=args.date_from,
                     date_to=args.date_to,

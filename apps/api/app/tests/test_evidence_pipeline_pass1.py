@@ -63,6 +63,11 @@ def test_global_market_channels_pass_metadata_without_company_link():
             score = score_candidate_metadata(db, replace(candidate, source_key="bbc_world", headline=headline))
             assert score.relevance >= 0.30
             assert score.entity_keys == ()
+        for headline in ("Local automakers voice concerns as imports of used cars surge in Sept",
+                         "Gold prices rise as bond yields fall", "Manufacturing activity contracts",
+                         "Company quarterly earnings fall", "Remittances support the currency"):
+            score = score_candidate_metadata(db, replace(candidate, headline=headline))
+            assert score.relevance >= 0.30
         for headline in ("Coalition announces its sports award winners", "China hosts football final",
                          "$20M in cocaine found beneath floorboards of commercial truck trailer"):
             score = score_candidate_metadata(db, replace(candidate, source_key="bbc_world", headline=headline))

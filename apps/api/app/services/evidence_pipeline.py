@@ -67,6 +67,11 @@ MARKET_CHANNEL_TERMS = frozenset({
     "tariffs", "supply chain", "semiconductor", "fertilizer prices",
     "coal prices", "cotton prices",
     "drone attack", "airstrike", "invasion", "blockade", "ceasefire", "military deployment",
+    "imports", "exports", "automakers", "vehicle sales", "corporate earnings",
+    "quarterly earnings", "quarterly results", "net profit", "operating profit",
+    "industrial production", "manufacturing activity", "consumer prices",
+    "gold prices", "crude prices", "bond yields", "currency depreciation",
+    "currency appreciation", "remittances", "foreign investment",
 })
 
 

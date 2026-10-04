@@ -27,6 +27,28 @@ from app.services.evidence_scheduler_service import (
 NOW = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
 
 
+def test_disabled_publisher_backlog_does_not_block_or_get_scheduled(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, 'evidence_source_allowlist', 'dawn')
+    monkeypatch.setattr(settings, 'evidence_fetch_queue_target', 1)
+    monkeypatch.setattr(settings, 'evidence_spool_root', str(tmp_path))
+    published = []
+    from app.jobs import evidence_tasks
+    for task in (evidence_tasks.discover, evidence_tasks.fetch, evidence_tasks.parse,
+                 evidence_tasks.pdf, evidence_tasks.index, evidence_tasks.historical_hydrate,
+                 evidence_tasks.targeted_refresh):
+        monkeypatch.setattr(task, 'apply_async', lambda **kwargs: published.append(kwargs))
+    with SessionLocal() as db:
+        _, config, _ = ensure_source_config(db, 'mof_pakistan')
+        for i in range(3):
+            persist_candidate(db, config, Candidate('mof_pakistan', f'https://www.finance.gov.pk/{i}',
+                'Fiscal budget', 'MOF', datetime.now(UTC), 'listing'))
+        db.commit()
+        result = run_evidence_scheduler_once(db)
+        assert result.discovery_queued == 1
+        assert result.fetch_queued == 0
+        assert published[0]['args'][0] == 'dawn'
+
+
 class StagedDawnSource:
     key = "dawn"
 

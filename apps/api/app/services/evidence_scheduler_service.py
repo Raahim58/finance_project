@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.ingestion.evidence import CandidateStatus
-from app.ingestion.evidence_catalog import SOURCE_SPECS
+from app.ingestion.evidence_catalog import SOURCE_SPECS, source_is_allowlisted
 from app.jobs import evidence_tasks
 from app.models.evidence import (
     DiscoveryCandidate,
@@ -146,8 +146,12 @@ def run_evidence_scheduler_once(db: Session) -> SchedulerResult:
     db.commit()
 
     expired = _expire_old_candidates(db, now)
+    enabled_configs = select(EvidenceSourceConfig.id).join(
+        DataSource, DataSource.id == EvidenceSourceConfig.data_source_id
+    ).where(DataSource.enabled.is_(True))
     actionable_fetch_backlog = db.scalar(
         select(func.count()).select_from(DiscoveryCandidate).where(
+            DiscoveryCandidate.source_config_id.in_(enabled_configs),
             or_(
                 DiscoveryCandidate.next_attempt_at.is_(None),
                 DiscoveryCandidate.next_attempt_at <= now,
@@ -191,7 +195,9 @@ def run_evidence_scheduler_once(db: Session) -> SchedulerResult:
                 state.next_poll_at = now + timedelta(seconds=settings.evidence_retry_backoff_seconds)
                 db.commit()
 
-    candidates = db.scalars(select(DiscoveryCandidate).order_by(DiscoveryCandidate.discovered_at)).all()
+    candidates = db.scalars(select(DiscoveryCandidate).where(
+        DiscoveryCandidate.source_config_id.in_(enabled_configs)
+    ).order_by(DiscoveryCandidate.discovered_at)).all()
     live_first = sorted(candidates, key=lambda row: (_priority(row), row.discovered_at))
     eligible_fetch: list[DiscoveryCandidate] = []
     eligible_parse: list[DiscoveryCandidate] = []
@@ -291,6 +297,10 @@ def run_evidence_scheduler_once(db: Session) -> SchedulerResult:
     live_queued = 0
     history_is_yielding = historical_must_yield(db)
     for request in requests:
+        source_keys = json.loads(request.source_keys_json or "[]")
+        enabled_keys = {spec.key for spec in SOURCE_SPECS if spec.enabled and source_is_allowlisted(spec.key)}
+        if source_keys and not set(source_keys).intersection(enabled_keys):
+            continue
         if request.priority_class == "historical" and history_is_yielding:
             continue
         if request.priority_class == "historical" and historical_queued >= settings.evidence_historical_queue_target:

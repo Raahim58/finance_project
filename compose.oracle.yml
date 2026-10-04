@@ -19,7 +19,7 @@ x-worker: &worker
 x-evidence-worker: &evidence-worker
   <<: *worker
   volumes:
-    - evidence_spool:/data/evidence-spool
+    - ${PSX_DATA_ROOT:-/srv/psx}/evidence-spool:/data/evidence-spool
 
 services:
   postgres:
@@ -128,19 +128,19 @@ services:
 
   worker-macro:
     <<: *worker
-    command: celery -A app.celery_app worker -P threads -n macro@%h -Q macro --concurrency=2 --loglevel=INFO
+    command: celery -A app.celery_app worker -P threads -n macro@%h -Q macro --concurrency=1 --loglevel=INFO
 
   worker-evidence-discovery:
     <<: *evidence-worker
-    command: celery -A app.celery_app worker -n discovery@%h -Q evidence_discovery --concurrency=2 --loglevel=INFO
+    command: celery -A app.celery_app worker -n discovery@%h -Q evidence_discovery --concurrency=1 --loglevel=INFO
 
   worker-evidence-fetch:
     <<: *evidence-worker
-    command: celery -A app.celery_app worker -n fetch@%h -Q evidence_fetch --concurrency=4 --loglevel=INFO
+    command: celery -A app.celery_app worker -n fetch@%h -Q evidence_fetch --concurrency=2 --loglevel=INFO
 
   worker-evidence-parse:
     <<: *evidence-worker
-    command: celery -A app.celery_app worker -n parse@%h -Q evidence_parse --concurrency=2 --loglevel=INFO
+    command: celery -A app.celery_app worker -n parse@%h -Q evidence_parse --concurrency=1 --loglevel=INFO
 
   worker-evidence-pdf:
     <<: *evidence-worker
@@ -148,7 +148,8 @@ services:
 
   worker-evidence-index:
     <<: *evidence-worker
-    command: celery -A app.celery_app worker -n index@%h -Q evidence_index --concurrency=1 --loglevel=INFO
+    # Shared OCR/embedding lane: do not also start worker-evidence-pdf.
+    command: celery -A app.celery_app worker -n index@%h -Q evidence_pdf,evidence_index --concurrency=1 --loglevel=INFO
 
   worker-historical-hydrate:
     <<: *evidence-worker
@@ -186,7 +187,7 @@ services:
     environment:
       EVIDENCE_ENABLED: "true"
     volumes:
-      - evidence_spool:/data/evidence-spool
+      - ${PSX_DATA_ROOT:-/srv/psx}/evidence-spool:/data/evidence-spool
     depends_on:
       postgres:
         condition: service_healthy

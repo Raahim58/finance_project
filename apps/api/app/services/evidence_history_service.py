@@ -22,6 +22,7 @@ from app.models.evidence import (
 from app.models.workstation import Instrument
 from app.providers.evidence.sources import HttpEvidenceSource
 from app.providers.evidence.wordpress_archive import ARCHIVES, WordPressArchiveSource
+from app.providers.evidence.dated_archive import DATED_ARCHIVES, DatedArchiveSource
 from app.services.evidence_operations import DiscoveryStageResult, discover_stage
 
 
@@ -36,6 +37,7 @@ class HistoricalPreset:
 
 
 HISTORICAL_PRESETS = {
+    "publisher_news_90d": HistoricalPreset("publisher_news_90d", 90, DATED_ARCHIVES, 2000, 300, 250 * 1024 * 1024),
     "global_shipping_90d": HistoricalPreset("global_shipping_90d", 90, tuple(ARCHIVES), 200, 100, 250 * 1024 * 1024),
     "psx_12m": HistoricalPreset(
         "psx_12m", 365, ("psx_announcements",), 5000, 5000, 512 * 1024 * 1024
@@ -79,7 +81,12 @@ def _units(
 ) -> list[dict[str, Any]]:
     units: list[dict[str, Any]] = []
     for source_key in sources:
-        if source_key in ARCHIVES and date_from is not None and date_to is not None:
+        if source_key in DATED_ARCHIVES and date_from is not None and date_to is not None:
+            start = date_from
+            while start <= date_to:
+                units.append({"source_key": source_key, "offset": 0, "date_from": start.isoformat(), "date_to": start.isoformat()})
+                start += timedelta(days=1)
+        elif source_key in ARCHIVES and date_from is not None and date_to is not None:
             start = date_from
             while start <= date_to:
                 end = min(start + timedelta(days=6), date_to)
@@ -179,7 +186,7 @@ def create_historical_request(
     scope_key = (
         f"deep_instrument:{instrument.id}" if instrument else f"preset:{preset_key}:{start}:{end}"
     )
-    if preset_key == "global_shipping_90d":
+    if preset_key in {"global_shipping_90d", "publisher_news_90d"}:
         scope_key += ":" + ",".join(sorted(sources))
     existing = db.scalar(
         select(EvidenceRefreshRequest).where(
@@ -309,6 +316,8 @@ def _source_circuit_open(db: Session, source_key: str) -> bool:
 
 
 def _source_for_unit(unit: dict[str, Any]):
+    if unit["source_key"] in DATED_ARCHIVES:
+        return DatedArchiveSource(str(unit["source_key"]))
     if unit["source_key"] in ARCHIVES:
         return WordPressArchiveSource(str(unit["source_key"]))
     source = build_pass1_registry().get(str(unit["source_key"]))
@@ -439,9 +448,15 @@ def run_historical_discovery_slice(
         request_id=request.id,
     )
     db.refresh(request)
-    if unit["source_key"] in ARCHIVES and result.next_cursor and not result.next_cursor.get("exhausted"):
-        unit["offset"] = int(result.next_cursor["offset"])
-        units[unit_index] = unit
+    if unit["source_key"] in (*ARCHIVES, *DATED_ARCHIVES):
+        if not result.next_cursor:
+            # Budget exhaustion must not falsely mark an unscanned day complete.
+            return result, "discovery_budget_reached"
+        if not result.next_cursor.get("exhausted"):
+            unit["offset"] = int(result.next_cursor["offset"])
+            units[unit_index] = unit
+        else:
+            unit_index += 1
     elif unit["source_key"] == "psx_announcements" and result.discovered >= batch_limit:
         unit["offset"] = int(unit.get("offset", 0)) + result.discovered
         units[unit_index] = unit
