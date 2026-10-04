@@ -33,3 +33,14 @@ AI receives the few passages retrieved for its question. No AI calls are needed 
 ## Search responsibility
 
 Recommendation: deterministic source discovery, relevance screening, deduplication and ingestion. The conversational model chooses bounded evidence searches and interprets retrieved evidence. No autonomous search agent or model call per ingested article is needed. Keyword filtering requires observed acceptance/rejection review, and cannot prove company impact.
+
+## Confirmed next order — 2026-10-04
+
+1. Verify company-price catch-up and remaining gaps; enable and verify recurring daily company-price and index refresh.
+2. Import verified DPS shares, free float, market capitalization and index constituent weights.
+3. Extend source-backed corporate-action coverage beyond LUCK, including splits, bonuses and dividends, with appropriate analytical adjustments.
+4. Add Tavily as an on-demand web-search tool available to the existing assistant. Keep the current model/provider selection; Tavily is a separate search service. Use it for missing or current external evidence, with source links and publication dates where available. Preserve database queries for exact stored financial/portfolio values and calculations. Bound search results and track credit usage; do not activate paid overage automatically. API-key setup, request limits and retention choices will be settled during this step. This is scheduled work, not implemented or activated by this roadmap update.
+
+Tavily follows all three market-data steps above; it does not replace historical ingestion, continuous verified feeds or portfolio analytics. Existing report, macro and historical-news backlog remains tracked separately.
+
+Implementation details for the first three market steps: [daily market and corporate actions](DAILY_MARKET_AND_CORPORATE_ACTIONS.md). Live deployment results must be checked separately from implementation.
