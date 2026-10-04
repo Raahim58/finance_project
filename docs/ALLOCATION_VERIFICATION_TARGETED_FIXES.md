@@ -1,6 +1,6 @@
 # Allocation verification: confirmed failures and deferred fixes
 
-Recorded 2026-10-04. Investigation only; the fixes below are not implemented.
+Recorded 2026-10-04. Targeted implementation authorized and completed locally; no commits, deployment or live-model checks. Beta/benchmark and shared-memory work remain deferred.
 
 ## Agreed GLM input fix
 
@@ -40,3 +40,26 @@ Additional Oracle inspection confirmed HBL has one legacy DPS price dated 2026-0
 - Separate arithmetic feasibility, evaluated IPS breaches, unavailable IPS checks and evidence readiness rather than interpreting every non-pass as an unusable calculation. Do not label an unresolved candidate fully compliant.
 
 No migration, seed, worker, model-call or deployment commands are needed to record this note. This file is uncommitted.
+
+
+## Local implementation and verification
+
+- Proposal normalization and strict validation are implemented in `tools/quant_tools.py`; field/type/message feedback excludes submitted input.
+- Model-only verification projection is applied when producing provider result blocks. Full results for every verification call remain in the encrypted execution checkpoint (`allocation_calculations`, keyed by tool-call ID); latest full result also remains in `allocation_check`. Source provenance is retained in encrypted checkpoint evidence. Provider turns contain the compact projection and citation IDs.
+- The verification service exposes `trade_feasibility`, `IPS_status`, and `evidence_status` independently. Existing full-acceptance and actionable-evidence gates remain unchanged. Calculated feasible candidates display with exact failed/unavailable checks, not as accepted recommendations.
+- Rejected preflight counts are saved as `provider_input_preflight` diagnostic stages, without provider attempts or reservations. Synthetic limit messages do not increment provider usage and preserve available partial text/citations without dumping metadata.
+- Canonical price date conversion and date filters use Asia/Karachi trading days. New observations retain explicit source trade dates. Existing midnight-local timestamps are correct and need no bulk rewrite; correcting their read conversion repairs displayed dates. Previously saved answers/analyses are historical snapshots and are not rewritten. Recompute dependent analyses when deploying/testing.
+
+Setup uses the existing API virtualenv and web node_modules. No dependencies or migrations added. Run offline database tests against a disposable database only (the test fixture resets its schema):
+
+```sh
+DATABASE_URL=sqlite+pysqlite:///:memory: apps/api/.venv/bin/python -m pytest apps/api/app/tests/test_allocation_targeted_fixes.py apps/api/app/tests/test_assistant_scope_fixes.py apps/api/app/tests/test_canonical_market.py apps/api/app/tests/test_phase8_phase2_tool_loop.py apps/api/app/tests/test_phase11_workspace.py apps/api/app/tests/test_token_counting.py -q
+cd apps/web
+npm run typecheck
+npm test -- components/AssistantChatMessage.test.tsx components/AssistantWorkspace.test.tsx app/assistant/page.test.tsx
+npm run build
+```
+
+No live provider calls are part of these commands. Model limits, selected benchmark, ingestion and PostgreSQL configuration are unchanged.
+
+Validation result: 91 focused backend tests and 11 frontend tests passed; TypeScript checks and production build passed. No live-provider verification performed.

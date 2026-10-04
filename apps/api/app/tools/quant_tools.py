@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+import json
+
+from pydantic import BaseModel, Field, field_validator
 
 from app.reasoning.allocation import AllocationProposal
 from app.services.allocation_verification import verify_allocation
@@ -46,6 +48,18 @@ class AllocationVerificationInput(BaseModel):
     portfolio_id: str
     proposal: AllocationProposal
     allowed_instrument_ids: list[str] = Field(min_length=1, max_length=100)
+
+    @field_validator("proposal", mode="before")
+    @classmethod
+    def parse_proposal(cls, value):
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                raise ValueError("proposal must be an object or a valid JSON object string") from None
+            if not isinstance(value, dict):
+                raise ValueError("proposal must decode to an object with a legs array")
+        return value
 
 
 def _verify_allocation(db, user, payload: AllocationVerificationInput):
@@ -121,3 +135,35 @@ def register_quant_tools(registry: ToolRegistry) -> None:
             _verify_allocation,
         )
     )
+
+
+def model_verification_result(data):
+    """Model projection only; the encrypted checkpoint retains the full calculation."""
+    result = {key: data[key] for key in (
+        "accepted", "errors", "verification_id", "ips_version_id", "trade_feasibility",
+        "IPS_status", "evidence_status", "legs", "current_weights", "proposed_weights",
+        "current_cash", "proposed_cash", "cost_note", "financial_state_mutated",
+        "evidence_readiness",
+    ) if key in data}
+    result["metrics"] = data.get("comparison", {}).get("metrics", []) if data.get("comparison") else []
+    checks = data.get("checks", {})
+    result["checks"] = {key: checks[key] for key in ("arithmetic_funding", "modeled_goal") if key in checks}
+    compliance = data.get("proposed_compliance", {})
+    result["checks"]["ips_compliance"] = {
+        "status": compliance.get("status"),
+        "checks": compliance.get("checks", []),
+    }
+    freshness = checks.get("price_freshness", {})
+    result["checks"]["price_freshness"] = {
+        "status": freshness.get("status"),
+        "coverage": {key: len((record.get("policy") or {}).get("intervening_sessions", []))
+                     for key, record in freshness.get("instruments", {}).items()},
+        "instruments": {key: {field: value for field, value in record.items()
+                            if field in {"status", "trade_date", "latest_price_date", "missing_sessions", "reason"}
+                            and not isinstance(value, (dict, list))}
+                        for key, record in freshness.get("instruments", {}).items()},
+    }
+    records = data.get("evidence_versions", {})
+    result["symbols"] = {key: record.get("symbol") for key, record in records.items()}
+    result["risk_sample"] = data.get("risk_sample")
+    return result

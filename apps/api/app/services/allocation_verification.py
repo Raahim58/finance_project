@@ -115,6 +115,14 @@ def verify_allocation(db, user, portfolio_id, proposal, allowed_ids):
         "actionable_recommendation_eligible": bool(result["accepted"] and freshness_status == "current" and summary.valuation_complete and summary.portfolio.selected_ips_version_id),
         "optimality": "not_established",
     }
+    result["trade_feasibility"] = "invalid" if arithmetic_errors or any(
+        code in result["errors"] for code in ("incomplete_portfolio_valuation", "currency_conversion_unavailable")
+    ) else "valid"
+    breaches = bool(compliance["violations"])
+    unavailable = bool(compliance["not_evaluated"]) or "confirmed_ips_missing" in result["errors"]
+    result["IPS_status"] = ("breach_and_incomplete" if breaches and unavailable else
+                            "breach" if breaches else "incomplete" if unavailable else "pass")
+    result["evidence_status"] = "ready" if result["evidence_readiness"]["status"] == "ready" else "limited"
     result["evidence_versions"] = records
     result["ips_version_id"] = summary.portfolio.selected_ips_version_id
     result["verification_id"] = hashlib.sha256(json.dumps(result, sort_keys=True, default=str).encode()).hexdigest()

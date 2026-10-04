@@ -288,6 +288,9 @@ export type ScenarioResult = Omit<OpenApi["schemas"]["ScenarioResponse"],"positi
 export type HistoricalReplay = { portfolio_id:string; start_date:string; end_date:string; counterfactual:boolean; assumption:string; start_value:number; end_value:number; pnl:number; return?:number|null; path:Array<{date:string;value:number}>; max_drawdown?:number|null; recovery_days?:number|null; sector_pnl_contribution:Record<string,number>; positions:Array<Record<string,unknown>>; total_return_available:boolean; total_return_unavailable_reason:string };
 
 export type AssistantAllocation = {
+  trade_feasibility?:"valid"|"invalid";
+  IPS_status?:"pass"|"breach"|"incomplete"|"breach_and_incomplete";
+  evidence_status?:"ready"|"limited";
   status:"accepted"|"rejected"|"unavailable"|"not_requested";
   verification_id?:string|null;
   rows?:Array<{instrument_id:string;symbol:string;current_capital_weight:number;proposed_capital_weight:number;side?:"buy"|"sell"|null;quantity?:string|null;gross_amount?:string|null;currency?:string|null}>;

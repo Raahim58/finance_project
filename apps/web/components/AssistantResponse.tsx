@@ -12,7 +12,7 @@ function AllocationTable({allocation}:{allocation:AssistantResult["synthesis"]["
   const goal=allocation.checks?.modeled_goal;
   const goalLabel=goal?.status==="meets"?"Meets modeled goal":goal?.status==="below"?"Below modeled goal":"Modeled goal unavailable";
   return <section className="panel">
-    <div className="panel-head"><h2 className="panel-title">Allocation calculation</h2><span className={`badge ${allocation.status==="accepted"?"badge-good":"badge-warn"}`}>Verification: {allocation.status}</span></div>
+    <div className="panel-head"><h2 className="panel-title">Allocation calculation</h2><span className={`badge ${allocation.status==="accepted"?"badge-good":"badge-warn"}`}>{allocation.trade_feasibility ? `Trades: ${allocation.trade_feasibility} · IPS: ${allocation.IPS_status ?? "unavailable"}` : `Verification: ${allocation.status}`}</span></div>
     <div className="flex flex-wrap gap-2 px-5 py-3 text-[12px]">
       <span>Prices: {allocation.checks?.price_freshness?.status??"unavailable"}</span>
       <span>IPS: {allocation.checks?.ips_compliance?.status??"unavailable"}</span>

@@ -49,6 +49,9 @@ class AllocationChecks(BaseModel):
 
 
 class AllocationResult(BaseModel):
+    trade_feasibility: Literal["valid", "invalid"] | None = None
+    IPS_status: Literal["pass", "breach", "incomplete", "breach_and_incomplete"] | None = None
+    evidence_status: Literal["ready", "limited"] | None = None
     status: Literal["accepted", "rejected", "unavailable", "not_requested"]
     verification_id: str | None = None
     rows: list[AllocationRow] = Field(default_factory=list)

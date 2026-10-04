@@ -11,3 +11,11 @@ describe("saved provider failure", () => {
     expect(outcomeLabel("failed","provider_quota_exhausted")).toContain("insufficient balance");
   });
 });
+
+describe("calculated allocation candidates", () => {
+  it("keeps a feasible candidate visibly distinct from full IPS acceptance", () => {
+    render(<ChatMessageView message={{id:"candidate",role:"assistant",content:"Calculated candidate",context:{page:"workspace"},created_at:"2026-10-04T00:00:00Z",outcome:"completed",evidence:{synthesis:{allocation_check:{trade_feasibility:"valid",IPS_status:"breach_and_incomplete",checks:{ips_compliance:{status:"BREACH"}},evidence_readiness:{actionable_recommendation_eligible:false}}}}}}/>);
+    expect(screen.getByText(/not fully IPS compliant: breach and incomplete/)).toBeInTheDocument();
+    expect(screen.getByText(/breaches the recorded investment policy/)).toBeInTheDocument();
+  });
+});

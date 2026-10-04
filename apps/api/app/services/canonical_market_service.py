@@ -208,6 +208,7 @@ def persist_normalized_observations(db: Session, rows: Iterable, source_name: st
         )
         if existing is None:
             values = {key: str(value) if isinstance(value, Decimal) else value for key, value in cleaned.items()}
+            values["trade_date"] = row.trade_date.isoformat()
             db.add(
                 MarketObservation(
                     instrument_id=instrument.id,
@@ -284,6 +285,22 @@ def reconcile_market_observations(
     return selected_count
 
 
+def observation_trade_date(observation, values=None):
+    values = values if values is not None else json.loads(observation.values_json)
+    if values.get("trade_date"):
+        return date.fromisoformat(values["trade_date"])
+    # SQLite retains the local naive midnight used by ingestion; PostgreSQL
+    # returns an aware instant. Never derive an exchange date in UTC.
+    timestamp = observation.effective_at
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=ZoneInfo("Asia/Karachi"))
+    return timestamp.astimezone(ZoneInfo("Asia/Karachi")).date()
+
+
+def _exchange_day_start(day):
+    return datetime.combine(day, datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi"))
+
+
 def _from_observation_parts(
     observation: MarketObservation,
     artifact: SourceArtifact | None,
@@ -294,7 +311,7 @@ def _from_observation_parts(
     return CanonicalPrice(
         instrument_id=observation.instrument_id,
         symbol=symbol,
-        trade_date=observation.effective_at.date(),
+        trade_date=observation_trade_date(observation, values),
         open=Decimal(str(values["open"])),
         high=Decimal(str(values["high"])),
         low=Decimal(str(values["low"])),
@@ -349,9 +366,9 @@ def price_series(
                 ~func.lower(SourceArtifact.source_url).like("normalized://mock/%"),
             )
         if start:
-            statement = statement.where(MarketObservation.effective_at >= datetime.combine(start, datetime.min.time()))
+            statement = statement.where(MarketObservation.effective_at >= _exchange_day_start(start))
         if end:
-            statement = statement.where(MarketObservation.effective_at < datetime.combine(end, datetime.max.time()))
+            statement = statement.where(MarketObservation.effective_at < _exchange_day_start(end + timedelta(days=1)))
         statement = statement.order_by(MarketObservation.effective_at.desc() if limit else MarketObservation.effective_at)
         if limit:
             statement = statement.limit(limit)
@@ -406,7 +423,7 @@ def price_series(
 
 
 def canonical_prices_for_date(db: Session, trade_date: date) -> list[CanonicalPrice]:
-    start = datetime.combine(trade_date, datetime.min.time())
+    start = _exchange_day_start(trade_date)
     end = start + timedelta(days=1)
     statement = (
         select(MarketObservation)
@@ -460,7 +477,7 @@ def latest_price(db: Session, symbol: str, as_of: date | None = None) -> Canonic
             )
         if as_of:
             statement = statement.where(
-                MarketObservation.effective_at < datetime.combine(as_of, datetime.max.time())
+                MarketObservation.effective_at < _exchange_day_start(as_of + timedelta(days=1))
             )
         row = db.execute(statement.order_by(MarketObservation.effective_at.desc()).limit(1)).first()
         if row:

@@ -104,6 +104,8 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
 function essentialWarnings(synthesis?: Record<string, unknown>): string[] {
   const allocation = synthesis?.allocation_check as
     | {
+        trade_feasibility?: string;
+        IPS_status?: string;
         checks?: {
           price_freshness?: { status: string };
           ips_compliance?: { status: string };
@@ -112,6 +114,8 @@ function essentialWarnings(synthesis?: Record<string, unknown>): string[] {
       }
     | undefined;
   const warnings: string[] = [];
+  if (allocation?.trade_feasibility === "valid" && allocation.IPS_status && allocation.IPS_status !== "pass")
+    warnings.push(`Calculated candidate, not fully IPS compliant: ${allocation.IPS_status.replaceAll("_", " ")}.`);
   if (allocation?.checks?.price_freshness?.status === "stale")
     warnings.push("Prices are stale. Verify current prices before acting.");
   if (allocation?.checks?.price_freshness?.status === "unavailable")

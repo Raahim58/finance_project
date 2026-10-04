@@ -163,7 +163,10 @@ class ToolRegistry:
             )
             return tool_result(
                 "invalid_arguments",
-                error={"code": "invalid_arguments", "fields": fields},
+                error={"code": "invalid_arguments", "fields": fields,
+                       "details": [{"field": ".".join(str(part) for part in item["loc"]),
+                                    "type": item["type"], "message": item["msg"]}
+                                   for item in exc.errors(include_url=False, include_context=False, include_input=False)]},
             )
         started = monotonic()
         try:

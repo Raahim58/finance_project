@@ -578,3 +578,14 @@ def finish_stage(identifier, *, status, latency_ms, validation_count=0, error=No
             metadata = json.loads(row.metadata_json)
             metadata["error_code"] = error_code
             row.metadata_json = json.dumps(metadata)
+
+
+def record_preflight_rejection(metadata):
+    """Save count diagnostics without creating/reserving a sent provider attempt."""
+    identifier = execution_id.get()
+    if identifier is None:
+        return
+    with SessionLocal.begin() as db:
+        db.add(AssistantStage(execution_id=identifier, operation="provider_input_preflight",
+                              status="rejected", completed_at=now(),
+                              metadata_json=json.dumps(metadata)))

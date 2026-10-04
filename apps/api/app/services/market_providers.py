@@ -428,7 +428,7 @@ class DpsMarketDataProvider(MarketDataProvider):
                 continue
             if db.scalar(select(MarketObservation).where(MarketObservation.instrument_id == instrument.id, MarketObservation.effective_at == datetime.combine(price.trade_date, datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi")), MarketObservation.artifact_id == artifact.id)):
                 continue
-            values = {"open": str(price.open), "high": str(price.high), "low": str(price.low), "close": str(price.close), "previous_close": str(price.previous_close), "volume": price.volume}
+            values = {"trade_date": price.trade_date.isoformat(), "open": str(price.open), "high": str(price.high), "low": str(price.low), "close": str(price.close), "previous_close": str(price.previous_close), "volume": price.volume}
             db.add(MarketObservation(instrument_id=instrument.id, effective_at=datetime.combine(price.trade_date, datetime.min.time(), tzinfo=ZoneInfo("Asia/Karachi")), frequency="daily", values_json=json.dumps(values, sort_keys=True), currency="PKR", unit="price", adjustment_state="unadjusted", artifact_id=artifact.id, is_selected=False))
             observation_count += 1
         for issue in self.quality_issues:

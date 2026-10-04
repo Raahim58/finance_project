@@ -116,7 +116,8 @@ Lead with the conclusion, then the evidence and material limitations. Keep it co
 
 
 class AssistantTerminalError(RuntimeError):
-    def __init__(self, code: str):
+    def __init__(self, code: str, reason: str | None = None):
+        self.reason = reason
         self.code = code
         super().__init__(code)
 
@@ -434,7 +435,7 @@ async def _provider_turn(
     calls = accounting.get("calls", 0)
     output_used = accounting.get("output", 0)
     if calls >= policy["calls"] or output_used >= policy["cumulative_output"]:
-        raise AssistantTerminalError("question_budget_exhausted")
+        raise AssistantTerminalError("question_budget_exhausted", "provider calls" if calls >= policy["calls"] else "cumulative output")
     output_cap = min(policy["output"], policy["cumulative_output"] - output_used)
     turns = _deduplicate_tool_evidence(turns)
     stream = StreamBatch(identifier)
@@ -451,16 +452,28 @@ async def _provider_turn(
             input_limit=policy["input"], remaining_input=remaining_input)
         transmitted_bytes = len(json.dumps(payload, default=str, separators=(",", ":")).encode())
         if estimated > policy["input"]:
-            raise AssistantTerminalError("question_budget_exhausted")
+            diagnostics.record_preflight_rejection({**count_metadata, "counted_input_tokens": estimated,
+                "per_call_limit": policy["input"], "remaining_cumulative_input": remaining_input,
+                "rejected_boundary": "per_call_input"})
+            raise AssistantTerminalError("question_budget_exhausted", "input per call")
         with SessionLocal.begin() as budget_db:
             row = budget_db.get(AssistantExecution, identifier, with_for_update=True)
             if row.cancel_requested_at:
                 raise asyncio.CancelledError()
             if row.reserved_input_tokens + estimated > policy["cumulative_input"]:
-                raise AssistantTerminalError("question_budget_exhausted")
-            current = json.loads(row.accounting_json)
-            current["calls"] = current.get("calls", 0) + 1
-            row.accounting_json = json.dumps(current)
+                rejected = {**count_metadata, "counted_input_tokens": estimated,
+                    "per_call_limit": policy["input"],
+                    "remaining_cumulative_input": policy["cumulative_input"] - row.reserved_input_tokens,
+                    "rejected_boundary": "cumulative_input"}
+            else:
+                rejected = None
+            if rejected is None:
+                current = json.loads(row.accounting_json)
+                current["calls"] = current.get("calls", 0) + 1
+                row.accounting_json = json.dumps(current)
+        if rejected is not None:
+            diagnostics.record_preflight_rejection(rejected)
+            raise AssistantTerminalError("question_budget_exhausted", "cumulative input")
         record = [{"role": "user", "content": json.dumps(payload, default=str, separators=(",", ":"))}]
         attempt_id = diagnostics.begin_attempt("tool_loop_turn", provider.name, model or provider.default_model,
                                               record, estimated, transmitted_input_bytes=transmitted_bytes,
@@ -651,6 +664,12 @@ def _result_blocks(checkpoint: dict[str, Any], execution: ToolExecution) -> list
             else {"status": "unavailable", "tool_status": envelope.get("status"),
                   "error": allocation.get("error") if isinstance(allocation, dict) else None}
         )
+        if envelope.get("status") == "ok" and isinstance(allocation, dict):
+            checkpoint.setdefault("allocation_calculations", {})[execution.call.id] = allocation
+            from app.tools.quant_tools import model_verification_result
+            envelope["data"] = model_verification_result(allocation)
+            envelope["sources"] = [{key: value for key, value in source.items()
+                                    if key != "price_observations"} for source in envelope["sources"]]
     provider_part = execution.call.opaque.get("provider_part", {})
     include_id = bool(provider_part.get("functionCall", {}).get("id"))
     return [
@@ -731,7 +750,8 @@ def _render_allocation(checkpoint: dict[str, Any]) -> tuple[str, dict[str, Any]]
     current = allocation.get("current_weights", {})
     proposed = allocation.get("proposed_weights", {})
     rows = []
-    for instrument_id in (dict.fromkeys([*current, *proposed]) if status == "accepted" else []):
+    feasible = status == "accepted" or allocation.get("trade_feasibility") == "valid"
+    for instrument_id in (dict.fromkeys([*current, *proposed]) if feasible else []):
         record = records.get(instrument_id, {})
         leg = next((item for item in legs if item.get("instrument_id") == instrument_id), {})
         rows.append({
@@ -746,18 +766,26 @@ def _render_allocation(checkpoint: dict[str, Any]) -> tuple[str, dict[str, Any]]
     outcome = {
         "status": status, "verification_id": allocation.get("verification_id"),
         "errors": allocation.get("errors", []), "error": allocation.get("error"),
-        "rows": rows, "legs": legs if status == "accepted" else [], "weight_unit": "fraction_of_total_capital",
+        "rows": rows, "legs": legs if feasible else [],
+        "trade_feasibility": allocation.get("trade_feasibility"),
+        "IPS_status": allocation.get("IPS_status"), "evidence_status": allocation.get("evidence_status"), "weight_unit": "fraction_of_total_capital",
         "checks": allocation.get("checks", {}),
         "evidence_readiness": allocation.get("evidence_readiness"),
         "cost_note": allocation.get("cost_note"), "financial_state_mutated": False,
     }
-    if status == "accepted":
+    if feasible:
         statements = [str(leg["required_statement"]) for leg in legs]
         statements.extend(
             f"{row['symbol']}: current capital weight {row['current_capital_weight']:.2%}; proposed {row['proposed_capital_weight']:.2%}."
             for row in rows
         )
-        return "\n\nAllocation calculation (server calculated):\n" + "\n".join(
+        label = "Allocation calculation (server calculated)" if status == "accepted" else "Allocation check: rejected — calculated candidate, not fully IPS compliant/verified"
+        if status != "accepted":
+            statements.append("IPS outcome: " + str(allocation.get("IPS_status", "unavailable")) + ".")
+            for check in [*allocation.get("proposed_compliance", {}).get("violations", []),
+                          *allocation.get("proposed_compliance", {}).get("not_evaluated", [])]:
+                statements.append(f"{check.get('code')}: {check.get('status')}; value {check.get('actual', check.get('value'))}; limit {check.get('limit')}; {check.get('message', '')}")
+        return "\n\n" + label + ":\n" + "\n".join(
             f"- {statement}" for statement in statements
         ), outcome
     if status == "rejected":
@@ -768,6 +796,8 @@ def _render_allocation(checkpoint: dict[str, Any]) -> tuple[str, dict[str, Any]]
 
 
 def _record_provider_result(checkpoint: dict[str, Any], result: LLMProviderResult) -> None:
+    if result.finish_reason == "budget_limit":
+        return
     usage = checkpoint["usage"]
     usage["model_calls"] += 1
     usage["transmitted_input_bytes"] += int(result.transmitted_input_bytes or 0)
@@ -942,8 +972,7 @@ async def run_tool_loop(
             except AssistantTerminalError as exc:
                 if exc.code != "question_budget_exhausted":
                     raise
-                facts = [json.dumps(item, default=str) for item in list(checkpoint["evidence"].values())[:4]]
-                result = LLMProviderResult(content="The question reached its context or generation limit. Available evidence (no investment conclusion):\n\n" + "\n\n".join(facts) if facts else "The question reached its context or generation limit before a grounded answer could be completed.",
+                result = LLMProviderResult(content=_budget_limit_answer(checkpoint, exc.reason),
                     provider=provider.name, model=model or provider.default_model, finish_reason="budget_limit")
             assistant_turn = result.turn or ProviderTurn(
                 "assistant", [ContentBlock("text", text=result.content)]
@@ -1043,3 +1072,17 @@ async def run_tool_loop(
         }
         response["_terminal_error_code"] = terminal_code
         return response
+
+
+def _budget_limit_answer(checkpoint, reason=None):
+    partial = ""
+    for turn in reversed(checkpoint.get("turns", [])):
+        if turn.get("role") == "assistant":
+            partial = "\n".join(block.get("text") or "" for block in turn.get("content", [])
+                                if block.get("type") == "text").strip()
+            if partial:
+                break
+    sources = "\n".join(f"- {item['source'].get('source_name') or item['source'].get('title') or 'Saved evidence'} [[{ref}]]"
+                        for ref, item in checkpoint.get("evidence", {}).items())
+    notice = f"Incomplete answer — the question reached its {reason or 'context or generation'} budget. No further model call was made."
+    return "\n\n".join(part for part in (partial, notice, "Available sources:\n" + sources if sources else "") if part)
