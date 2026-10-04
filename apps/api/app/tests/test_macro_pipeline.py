@@ -29,7 +29,7 @@ def _provider(series_key, prefix):
 
 
 def test_macro_catalog_has_source_independent_series_and_ordered_fallbacks():
-    assert 20 <= len(MACRO_SERIES) <= 30
+    assert len(MACRO_SERIES) >= 20
     assert len({spec.key for spec in MACRO_SERIES}) == len(MACRO_SERIES)
     cpi = MACRO_SERIES_BY_KEY["PK_CPI_YOY"]
     assert [provider.source_name for provider in cpi.providers] == [

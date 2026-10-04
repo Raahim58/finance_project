@@ -160,7 +160,20 @@ def _sbp_remittances_provider(
         enabled=True,
     )
 
+
+def _pink(key: str, name: str, unit: str, source_column: str, dimension: str) -> MacroSeriesSpec:
+    return MacroSeriesSpec(key, name, unit, "monthly", dimension, (
+        MacroProviderSpec(f"world_bank_pink:{source_column}", "world_bank_pink", "World Bank Commodity Markets",
+            "https://thedocs.worldbank.org", f"world_bank.commodity.{source_column}", 10,
+            "official_international", "xlsx_download"),
+    ))
+
 MACRO_SERIES = (
+    _pink("GLOBAL_COAL_AUSTRALIA_USD_MT", "World Bank Australian coal price", "USD_per_mt", "coal_australian", "coal"),
+    _pink("GLOBAL_PALM_OIL_USD_MT", "World Bank palm-oil price", "USD_per_mt", "palm_oil", "agriculture"),
+    _pink("GLOBAL_COTTON_USD_KG", "World Bank cotton A-index price", "USD_per_kg", "cotton_a_index", "cotton"),
+    _pink("GLOBAL_LNG_JAPAN_USD_MMBTU", "World Bank Japan LNG price", "USD_per_MMBtu", "liquefied_natural_gas_japan", "gas"),
+    _pink("GLOBAL_COPPER_USD_MT", "World Bank copper price", "USD_per_mt", "copper", "metals"),
     MacroSeriesSpec("PK_CPI_YOY", "Pakistan consumer-price inflation", "percent_yoy", "annual", "inflation", (_pbs_unverified("CPI_YOY"), _imf("PAK", "PCPIPCH"), _wb("PAK", "FP.CPI.TOTL.ZG"))),
     MacroSeriesSpec("PK_REAL_GDP_GROWTH", "Pakistan real GDP growth", "percent_yoy", "annual", "growth", (_pbs_unverified("REAL_GDP_GROWTH"), _imf("PAK", "NGDP_RPCH"), _wb("PAK", "NY.GDP.MKTP.KD.ZG"))),
     MacroSeriesSpec("PK_CURRENT_ACCOUNT_GDP", "Pakistan current-account balance", "percent_gdp", "annual", "external", (_sbp_unverified("CURRENT_ACCOUNT_GDP"), _imf("PAK", "BCA_NGDPD"), _wb("PAK", "BN.CAB.XOKA.GD.ZS"))),

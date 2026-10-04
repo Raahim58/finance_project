@@ -43,11 +43,11 @@ def _confidence(authority: str) -> Decimal:
     }.get(authority, Decimal("0.60000"))
 
 
-def ensure_macro_catalog(db: Session) -> tuple[int, int]:
+def ensure_macro_catalog(db: Session, *, specs=None) -> tuple[int, int]:
     """Upsert canonical series and ordered provider contracts without fetching."""
 
     series_count = provider_count = 0
-    for spec in MACRO_SERIES:
+    for spec in MACRO_SERIES if specs is None else specs:
         providers: list[tuple[object, DataSource]] = []
         for provider in sorted(spec.providers, key=lambda item: item.priority):
             data_source = source(
@@ -277,7 +277,7 @@ def refresh_macro_series(
     spec = MACRO_SERIES_BY_KEY.get(series_key)
     if spec is None:
         raise ValueError(f"Unknown canonical macro series {series_key!r}")
-    ensure_macro_catalog(db)
+    ensure_macro_catalog(db, specs=(spec,))
     db.commit()
     diagnostics: list[dict[str, object]] = []
     attempted = succeeded = written = 0
