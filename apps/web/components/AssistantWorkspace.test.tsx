@@ -20,12 +20,18 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   portfolios: vi.fn(),
   search: vi.fn(),
+  preferences: vi.fn(),
+  keys: vi.fn(),
+  updatePreferences: vi.fn(),
 }));
 vi.mock("next/navigation", () => ({ usePathname: () => mocks.path }));
 vi.mock("@/lib/api", () => ({
   getToken: () => mocks.token,
   getPortfolios: mocks.portfolios,
   searchInstruments: mocks.search,
+  getPreferences: mocks.preferences,
+  getLLMKeys: mocks.keys,
+  updatePreferences: mocks.updatePreferences,
 }));
 vi.mock("@/lib/assistant-workspace", () => ({
   listChats: mocks.list,
@@ -51,6 +57,14 @@ function tree() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.path = "/companies/OGDC";
+  mocks.preferences.mockResolvedValue({ default_llm_provider: "anthropic" });
+  mocks.keys.mockResolvedValue([
+    { id: "a", provider: "anthropic", default_model: "claude-test", is_active: true },
+    { id: "z", provider: "zai", default_model: "glm-test", is_active: true },
+    { id: "old", provider: "zai", default_model: "old-model", is_active: true },
+    { id: "inactive", provider: "gemini", is_active: false },
+  ]);
+  mocks.updatePreferences.mockImplementation((prefs) => Promise.resolve(prefs));
   mocks.portfolios.mockResolvedValue([
     { id: "p1", name: "Growth", is_default: true },
   ]);
@@ -107,6 +121,29 @@ async function send() {
   await waitFor(() => expect(mocks.observe).toHaveBeenCalledTimes(1));
 }
 describe("persistent Assistant", () => {
+  it("switches saved providers without generating and snapshots the next submission", async () => {
+    render(tree());
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: "Switch AI provider" }));
+    expect(screen.queryByText(/old-model/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Google Gemini/)).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Z.ai · glm-test" }));
+    await waitFor(() => expect(mocks.updatePreferences).toHaveBeenCalledWith({ default_llm_provider: "zai" }));
+    await waitFor(() => expect(screen.getByText("glm-test")).toBeInTheDocument());
+    expect(mocks.submit).not.toHaveBeenCalled();
+    await send();
+    expect(mocks.submit.mock.calls[0][4]).toBe("zai");
+  });
+  it("keeps the previous provider when saving the switch fails", async () => {
+    mocks.updatePreferences.mockRejectedValue(new Error("Provider change failed"));
+    render(tree());
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: "Switch AI provider" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Z.ai · glm-test" }));
+    await screen.findByText("Provider change failed");
+    await send();
+    expect(mocks.submit.mock.calls[0][4]).toBe("anthropic");
+  });
   it("prefills without calling the model", async () => {
     render(tree());
     await open();

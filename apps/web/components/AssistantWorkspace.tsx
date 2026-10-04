@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { usePathname } from "next/navigation";
+import { AssistantProviderSwitch } from "@/components/AssistantProviderSwitch";
 import {
   ChatMessageView,
   Markdown,
@@ -114,6 +115,8 @@ export function AssistantWorkspaceProvider({
     scroller = useRef<HTMLDivElement>(null),
     nearBottom = useRef(true);
   const [newMessages, setNewMessages] = useState(false);
+  const [provider, setProvider] = useState<string | null>(null);
+  const [providerSaving, setProviderSaving] = useState(false);
   runsRef.current = runs;
   selectedRef.current = selected;
   accountRef.current = account;
@@ -315,6 +318,8 @@ export function AssistantWorkspaceProvider({
     pendingPrefill.current = null;
     setOpened(false);
     setError(null);
+    setProvider(null);
+    setProviderSaving(false);
     if (account)
       void refreshChats()
         .then((rows) => {
@@ -449,7 +454,7 @@ export function AssistantWorkspaceProvider({
   const send = async () => {
     const key = selected ?? "new",
       question = (drafts[key] ?? "").trim();
-    if (!question || submitting || !contextReady) return;
+    if (!question || submitting || providerSaving || !contextReady) return;
     setSubmitting(true);
     setError(null);
     const owner = accountRef.current;
@@ -462,6 +467,7 @@ export function AssistantWorkspaceProvider({
         question,
         snapshot,
         crypto.randomUUID(),
+        provider ?? undefined,
       );
       if (owner !== accountRef.current) return;
       setDrafts((old) => ({ ...old, [key]: "", [id]: "" }));
@@ -538,6 +544,7 @@ export function AssistantWorkspaceProvider({
               </button>
             </div>
           </header>
+          <AssistantProviderSwitch key={account} onProviderChange={setProvider} onSavingChange={setProviderSaving} />
           {showChats ? (
             <nav
               className="assistant-chat-list"
@@ -749,7 +756,7 @@ export function AssistantWorkspaceProvider({
               ) : (
                 <button
                   className="btn btn-primary"
-                  disabled={!draft.trim() || submitting || !contextReady}
+                  disabled={!draft.trim() || submitting || providerSaving || !contextReady}
                 >
                   {submitting ? "Sending…" : "Send"}
                 </button>

@@ -79,6 +79,7 @@ export const submitRun = (
   question: string,
   context: MessageContext,
   clientRequestId: string,
+  provider?: string,
 ) =>
   request<ChatRun & { conversation_id: string }>("/assistant/runs", {
     method: "POST",
@@ -86,6 +87,7 @@ export const submitRun = (
       conversation_id: id,
       question,
       client_request_id: clientRequestId,
+      provider,
       page_context: {
         page: context.page,
         instrument_id: context.instrument_id ?? null,
