@@ -129,6 +129,8 @@ def _simhash(text: str) -> str:
 def extract_article(raw: RawContent) -> ParsedEvidence:
     """Extract JSON-LD first, then a conservative article/main paragraph fallback."""
 
+    if raw.content.startswith(b"%PDF-") or "pdf" in raw.content_type.lower():
+        raise ValueError("PDF evidence requires the PDF text parser")
     html = raw.content.decode("utf-8", errors="replace")
     soup = BeautifulSoup(html, "lxml")
     payload = _article_json_ld(soup)

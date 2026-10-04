@@ -52,6 +52,7 @@ class DiscoveryStageResult:
     candidate_ids: tuple[str, ...]
     discovered: int
     new: int
+    next_cursor: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -283,7 +284,7 @@ def discover_stage(
                 if not request.discovered_count:
                     request.completed_at = now
         db.commit()
-        return DiscoveryStageResult(tuple(identifiers), len(batch.candidates), new_count)
+        return DiscoveryStageResult(tuple(identifiers), len(batch.candidates), new_count, dict(batch.next_cursor))
     except Exception as exc:
         state.consecutive_failures += 1
         state.healthy_since = None
@@ -417,7 +418,7 @@ def _pdf_evidence(raw: RawContent, source_key: str) -> ParsedEvidence:
     pages = parse_pdf(raw.content)
     body = "\n\n".join(page.text for page in pages if page.text.strip())
     if not body:
-        body = raw.candidate.headline
+        raise ValueError("PDF evidence has no extractable text")
     digest = hashlib.sha256(body.encode()).hexdigest()
     return ParsedEvidence(
         canonical_url=raw.candidate.canonical_url or raw.candidate.observed_url,
@@ -596,7 +597,7 @@ def index_stage(db: Session, candidate_id: str, *, spool: EvidenceSpool | None =
         symbol = next((str(key) for key in pipeline.get("entity_keys", []) if len(str(key)) <= 30), None)
         document = create_document_from_pages(
             db,
-            [ParsedPage(1, parsed.body)],
+            parse_pdf(raw_content) if raw_content.startswith(b"%PDF-") or "pdf" in content_type.lower() else [ParsedPage(1, parsed.body)],
             title=parsed.title,
             document_type="announcement" if config.source_key == "psx_announcements" else "news",
             symbol=symbol,

@@ -34,7 +34,7 @@ from app.services.evidence_canary_service import (
     reserve_selection,
 )
 from app.services.ingestion_persistence import store_artifact
-from app.services.rag_service import ParsedPage, create_document_from_pages
+from app.services.rag_service import ParsedPage, create_document_from_pages, parse_pdf
 from app.services.company_event_service import contains_explicit_instrument_reference
 
 WORD_RE = re.compile(r"[a-z0-9][a-z0-9&./-]*")
@@ -46,7 +46,8 @@ MACRO_TERMS = frozenset(
     }
 )
 GEOPOLITICAL_TERMS = frozenset(
-    {"sanctions", "war", "conflict", "red sea", "shipping", "iran", "gulf", "china", "middle east"}
+    {"sanctions", "war", "conflict", "red sea", "shipping", "iran", "gulf", "china", "middle east",
+     "russia", "ukraine", "israel", "gaza", "lebanon", "troops", "missile", "airstrike", "blockade"}
 )
 GLOBAL_DRIVER_TERMS = frozenset(
     {
@@ -55,6 +56,22 @@ GLOBAL_DRIVER_TERMS = frozenset(
         "semiconductor", "dram", "nand", "ai chip", "cloud capex", "battery", "freight",
     }
 )
+
+# These indicate a financial transmission channel even when a short headline
+# contains only one match. Geography or publisher reputation alone is not one.
+MARKET_CHANNEL_TERMS = frozenset({
+    "sanctions", "shipping disruption", "red sea", "strait of hormuz",
+    "trade war", "export controls", "export restrictions", "oil supply",
+    "lng supply", "freight rates", "freight market", "freight capacity", "per-mile pricing",
+    "central bank", "interest rates",
+    "tariffs", "supply chain", "semiconductor", "fertilizer prices",
+    "coal prices", "cotton prices",
+    "drone attack", "airstrike", "invasion", "blockade", "ceasefire", "military deployment",
+})
+
+
+def _term_present(text: str, term: str) -> bool:
+    return re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text) is not None
 
 
 @dataclass(frozen=True)
@@ -206,6 +223,20 @@ def persist_candidate(db: Session, config: EvidenceSourceConfig, candidate: Cand
     row = db.scalar(select(DiscoveryCandidate).where(or_(*filters)))
     if row is not None:
         row.last_seen_at = candidate.discovered_at
+        # Revisit only never-fetched metadata rejections whose classification
+        # changes under the repaired gate. Preserve the original decision and
+        # never reopen body-quality, duplicate, selected or historical rows.
+        metadata = json.loads(row.metadata_json or "{}")
+        if (row.status == CandidateStatus.REJECTED.value
+            and row.body_sha256 is None and row.artifact_id is None and row.event_id is None
+            and row.relevance_score is not None and row.relevance_score < Decimal("0.18")
+            and not metadata.get("request_id")
+            and score_candidate_metadata(db, candidate).relevance >= 0.18):
+            metadata["prior_metadata_rejection"] = {"score": str(row.relevance_score), "reasons": json.loads(row.scoring_reasons_json or "[]")}
+            row.metadata_json = _json(metadata)
+            row.status = CandidateStatus.FETCH_READY.value
+            row.scoring_reasons_json = '["reconsidered_after_market_channel_gate_fix"]'
+            return row, True
         return row, False
     row = DiscoveryCandidate(
         source_config_id=config.id,
@@ -257,21 +288,25 @@ def score_evidence(db: Session, parsed: ParsedEvidence, candidate: Candidate) ->
                 entities.add(symbol)
                 relevance += 0.65
                 reasons.append(f"instrument:{symbol}")
-    matched_macro = sorted(term for term in MACRO_TERMS if term in text)
+    matched_macro = sorted(term for term in MACRO_TERMS if _term_present(text, term))
     if matched_macro:
         relevance += min(0.75, 0.18 * len(matched_macro))
         reasons.append("macro:" + ",".join(matched_macro[:4]))
-    matched_geo = sorted(term for term in GEOPOLITICAL_TERMS if term in text)
+    matched_geo = sorted(term for term in GEOPOLITICAL_TERMS if _term_present(text, term))
     if matched_geo:
         relevance += min(0.55, 0.14 * len(matched_geo))
         reasons.append("geopolitics:" + ",".join(matched_geo[:4]))
-    matched_global = sorted(term for term in GLOBAL_DRIVER_TERMS if term in text)
+    matched_global = sorted(term for term in GLOBAL_DRIVER_TERMS if _term_present(text, term))
     if matched_global:
         relevance += min(0.55, 0.14 * len(matched_global))
         reasons.append("global_driver:" + ",".join(matched_global[:4]))
+    channels = sorted(term for term in MARKET_CHANNEL_TERMS if _term_present(text, term))
+    if channels:
+        relevance = max(relevance, 0.35)
+        reasons.append("market_channel:" + ",".join(channels[:4]))
     for instrument in instruments:
         drivers = SECTOR_DRIVERS.get((instrument.sector or "").lower(), ())
-        hits = [driver for driver in drivers if driver in text]
+        hits = [driver for driver in drivers if _term_present(text, driver)]
         if hits:
             relevance += min(0.35, 0.12 * len(hits))
             reasons.append(f"sector_driver:{instrument.sector}:{','.join(hits[:3])}")
@@ -491,7 +526,9 @@ def _select_and_index(
     symbol = next((key for key in score.entity_keys if len(key) <= 30), None)
     document = create_document_from_pages(
         db,
-        [ParsedPage(1, parsed.body)],
+        parse_pdf(raw_content)
+        if raw_content.startswith(b"%PDF-") or "pdf" in content_type.lower()
+        else [ParsedPage(1, parsed.body)],
         title=parsed.title,
         document_type="announcement" if config.source_key == "psx_announcements" else "news",
         symbol=symbol,

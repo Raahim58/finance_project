@@ -24,7 +24,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--preset",
-        choices=("psx_12m", "deep_company_12m", "news_90d", "all"),
+        choices=("psx_12m", "deep_company_12m", "news_90d", "global_shipping_90d", "all"),
         required=True,
     )
     parser.add_argument("--symbol", action="append", default=[])

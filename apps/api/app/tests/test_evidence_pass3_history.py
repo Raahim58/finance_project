@@ -11,6 +11,7 @@ from app.models.evidence import DiscoveryCandidate, EvidenceRefreshRequest, Evid
 from app.models.workstation import Instrument
 from app.services.evidence_history_service import (
     create_historical_request,
+    live_evidence_pressure,
     run_historical_discovery_slice,
 )
 from app.services.evidence_operations import EvidenceSpool, fetch_stage
@@ -19,6 +20,28 @@ from app.services.evidence_scheduler_service import _historical_request_order_ke
 
 
 NOW = datetime(2026, 8, 15, 10, 0, tzinfo=UTC)
+
+
+def test_disabled_source_backlog_does_not_block_selected_history(monkeypatch):
+    monkeypatch.setattr(settings, "evidence_source_allowlist", "gcaptain")
+    with SessionLocal() as db:
+        _, config, _ = ensure_source_config(db, "dawn")
+        persist_candidate(db, config, Candidate("dawn", "https://www.dawn.com/news/disabled",
+                          "Policy rate", "Dawn", NOW, "rss_atom"))
+        db.commit()
+        assert live_evidence_pressure(db) == 0
+        monkeypatch.setattr(settings, "evidence_source_allowlist", "dawn,gcaptain")
+        assert live_evidence_pressure(db) == 1
+
+
+def test_archive_source_selection_is_part_of_request_identity():
+    with SessionLocal() as db:
+        all_sources = create_historical_request(db, preset_key="global_shipping_90d")
+        freight = create_historical_request(db, preset_key="global_shipping_90d", source_keys=("freightwaves",))
+        repeat = create_historical_request(db, preset_key="global_shipping_90d", source_keys=("freightwaves",))
+        assert all_sources.id != freight.id
+        assert freight.id == repeat.id
+        assert json.loads(freight.source_keys_json) == ["freightwaves"]
 
 
 @pytest.fixture(autouse=True)

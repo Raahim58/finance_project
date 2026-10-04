@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import json
 
 from sqlalchemy import func, select
 
@@ -49,6 +50,62 @@ class FixtureDawnSource:
         from app.providers.evidence.extraction import extract_article
 
         return extract_article(raw)
+
+
+def test_global_market_channels_pass_metadata_without_company_link():
+    from dataclasses import replace
+    from app.services.evidence_pipeline import score_candidate_metadata
+    candidate = FixtureDawnSource().discover_since({}, 1).candidates[0]
+    with SessionLocal() as db:
+        for headline in ("New sanctions announced", "Export controls expanded", "Freight rates climb",
+                         "Freight Market Update: 5 Signals Capacity Is Tight",
+                         "Aurora reports Q2 results, details per-mile pricing"):
+            score = score_candidate_metadata(db, replace(candidate, source_key="bbc_world", headline=headline))
+            assert score.relevance >= 0.30
+            assert score.entity_keys == ()
+        for headline in ("Coalition announces its sports award winners", "China hosts football final",
+                         "$20M in cocaine found beneath floorboards of commercial truck trailer"):
+            score = score_candidate_metadata(db, replace(candidate, source_key="bbc_world", headline=headline))
+            assert score.relevance < 0.18
+
+
+def test_repaired_gate_revisits_only_unfetched_metadata_rejections():
+    from dataclasses import replace
+    from decimal import Decimal
+    candidate = replace(FixtureDawnSource().discover_since({}, 1).candidates[0], headline="New sanctions announced")
+    with SessionLocal() as db:
+        _, config, _ = ensure_source_config(db, "dawn")
+        row, _ = persist_candidate(db, config, candidate)
+        row.status = "rejected"
+        row.relevance_score = Decimal("0.14")
+        row.scoring_reasons_json = '["geopolitics:sanctions"]'
+        _, reconsidered = persist_candidate(db, config, candidate)
+        assert reconsidered and row.status == "fetch_ready"
+        assert json.loads(row.metadata_json)["prior_metadata_rejection"]["score"] == "0.14"
+        row.status = "rejected"
+        row.body_sha256 = "previously-parsed-body"
+        _, reconsidered = persist_candidate(db, config, candidate)
+        assert not reconsidered and row.status == "rejected"
+
+
+def test_synchronous_pdf_ingestion_routes_text_and_preserves_page_citations(tmp_path, monkeypatch):
+    from app.providers.evidence.sources import HttpEvidenceSource
+    from app.services.rag_service import ParsedPage
+    monkeypatch.setattr(settings, "source_artifact_root", str(tmp_path))
+    pages = [ParsedPage(2, "Pakistan inflation and SBP policy rate decisions affect reserves and the economic outlook.")]
+    monkeypatch.setattr("app.services.evidence_operations.parse_pdf", lambda content: pages)
+    monkeypatch.setattr("app.services.evidence_pipeline.parse_pdf", lambda content: pages)
+    class PdfSource(FixtureDawnSource):
+        def fetch(self, candidate):
+            return RawContent(candidate, b"%PDF-fixture", "application/pdf", self.now, candidate.observed_url)
+        def normalize(self, raw):
+            return HttpEvidenceSource("dawn", "Dawn", "https://example.com", "rss").normalize(raw)
+    with SessionLocal() as db:
+        result = run_source_once(db, PdfSource(), limit=1)
+        assert result.selected == 1
+        assert db.scalar(select(DiscoveryCandidate.parser_version)) == "pypdf_evidence_v1"
+        assert db.scalar(select(DocumentChunk.page_number)) == 2
+        assert db.scalar(select(Citation.page_number)) == 2
 
 
 def test_end_to_end_selection_indexes_once_and_keeps_exact_numbers_out_of_fact_tables(tmp_path, monkeypatch):

@@ -264,6 +264,9 @@ class HttpEvidenceSource:
         return RawContent(candidate, content, content_type, datetime.now(UTC), final_url, headers)
 
     def normalize(self, raw: RawContent) -> ParsedEvidence:
+        if raw.content.startswith(b"%PDF-") or "pdf" in raw.content_type.lower():
+            from app.services.evidence_operations import _pdf_evidence
+            return _pdf_evidence(raw, self.key)
         return extract_article(raw)
 
 

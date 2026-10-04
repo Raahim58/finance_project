@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.ingestion.evidence import CandidateStatus
-from app.ingestion.evidence_catalog import TOPIC_QUERIES, build_pass1_registry
+from app.ingestion.evidence_catalog import TOPIC_QUERIES, build_pass1_registry, source_is_allowlisted
 from app.models.evidence import (
     DiscoveryCandidate,
     EvidenceRefreshRequest,
@@ -21,6 +21,7 @@ from app.models.evidence import (
 )
 from app.models.workstation import Instrument
 from app.providers.evidence.sources import HttpEvidenceSource
+from app.providers.evidence.wordpress_archive import ARCHIVES, WordPressArchiveSource
 from app.services.evidence_operations import DiscoveryStageResult, discover_stage
 
 
@@ -35,6 +36,7 @@ class HistoricalPreset:
 
 
 HISTORICAL_PRESETS = {
+    "global_shipping_90d": HistoricalPreset("global_shipping_90d", 90, tuple(ARCHIVES), 200, 100, 250 * 1024 * 1024),
     "psx_12m": HistoricalPreset(
         "psx_12m", 365, ("psx_announcements",), 5000, 5000, 512 * 1024 * 1024
     ),
@@ -72,10 +74,18 @@ def _units(
     query_text: str | None,
     symbol: str | None,
     preset_key: str | None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[dict[str, Any]]:
     units: list[dict[str, Any]] = []
     for source_key in sources:
-        if source_key == "psx_announcements":
+        if source_key in ARCHIVES and date_from is not None and date_to is not None:
+            start = date_from
+            while start <= date_to:
+                end = min(start + timedelta(days=6), date_to)
+                units.append({"source_key": source_key, "offset": 0, "date_from": start.isoformat(), "date_to": end.isoformat()})
+                start = end + timedelta(days=1)
+        elif source_key == "psx_announcements":
             units.append({"source_key": source_key, "symbol": symbol, "offset": 0})
         elif source_key == "gdelt" and preset_key == "news_90d":
             units.extend(
@@ -163,10 +173,14 @@ def create_historical_request(
         query_text=query,
         symbol=symbol,
         preset_key=preset_key,
+        date_from=start,
+        date_to=end,
     )
     scope_key = (
         f"deep_instrument:{instrument.id}" if instrument else f"preset:{preset_key}:{start}:{end}"
     )
+    if preset_key == "global_shipping_90d":
+        scope_key += ":" + ",".join(sorted(sources))
     existing = db.scalar(
         select(EvidenceRefreshRequest).where(
             EvidenceRefreshRequest.request_type == "historical",
@@ -224,9 +238,13 @@ def live_evidence_pressure(db: Session) -> int:
     }
     now = datetime.now(UTC)
     pressure = 0
+    permitted_configs = {config.id for config in db.scalars(select(EvidenceSourceConfig))
+                         if source_is_allowlisted(config.source_key)}
     for row in db.scalars(
         select(DiscoveryCandidate).where(DiscoveryCandidate.status.in_(nonterminal))
     ):
+        if row.source_config_id not in permitted_configs:
+            continue
         if json.loads(row.metadata_json or "{}").get("priority_class", "live") != "live":
             continue
         next_attempt_at = row.next_attempt_at
@@ -248,13 +266,13 @@ def live_evidence_pressure(db: Session) -> int:
         ):
             continue
         pressure += 1
-    pressure += len(
-        db.scalars(
+    pressure += sum(
+        1 for request in db.scalars(
             select(EvidenceRefreshRequest).where(
                 EvidenceRefreshRequest.priority_class == "live",
                 EvidenceRefreshRequest.status.in_(("queued", "running", "processing")),
             )
-        ).all()
+        ) if any(source_is_allowlisted(key) for key in json.loads(request.source_keys_json or "[]"))
     )
     return pressure
 
@@ -291,6 +309,8 @@ def _source_circuit_open(db: Session, source_key: str) -> bool:
 
 
 def _source_for_unit(unit: dict[str, Any]):
+    if unit["source_key"] in ARCHIVES:
+        return WordPressArchiveSource(str(unit["source_key"]))
     source = build_pass1_registry().get(str(unit["source_key"]))
     if unit["source_key"] == "gdelt":
         if not isinstance(source, HttpEvidenceSource):
@@ -408,7 +428,7 @@ def run_historical_discovery_slice(
         "historical_days": (request.date_to - request.date_from).days,
         "date_from": request.date_from.isoformat(),
         "date_to": request.date_to.isoformat(),
-        **{key: value for key, value in unit.items() if key in {"offset", "symbol"}},
+        **{key: value for key, value in unit.items() if key in {"offset", "symbol", "date_from", "date_to"}},
     }
     result = discover_stage(
         db,
@@ -419,7 +439,10 @@ def run_historical_discovery_slice(
         request_id=request.id,
     )
     db.refresh(request)
-    if unit["source_key"] == "psx_announcements" and result.discovered >= batch_limit:
+    if unit["source_key"] in ARCHIVES and result.next_cursor and not result.next_cursor.get("exhausted"):
+        unit["offset"] = int(result.next_cursor["offset"])
+        units[unit_index] = unit
+    elif unit["source_key"] == "psx_announcements" and result.discovered >= batch_limit:
         unit["offset"] = int(unit.get("offset", 0)) + result.discovered
         units[unit_index] = unit
     else:
