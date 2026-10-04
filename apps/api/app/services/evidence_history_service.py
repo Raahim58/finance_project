@@ -38,7 +38,7 @@ class HistoricalPreset:
 
 HISTORICAL_PRESETS = {
     "publisher_news_90d": HistoricalPreset("publisher_news_90d", 90, DATED_ARCHIVES, 2000, 300, 250 * 1024 * 1024),
-    "global_shipping_90d": HistoricalPreset("global_shipping_90d", 90, tuple(ARCHIVES), 200, 100, 250 * 1024 * 1024),
+    "global_shipping_90d": HistoricalPreset("global_shipping_90d", 90, ("gcaptain", "freightwaves"), 200, 100, 250 * 1024 * 1024),
     "psx_12m": HistoricalPreset(
         "psx_12m", 365, ("psx_announcements",), 5000, 5000, 512 * 1024 * 1024
     ),

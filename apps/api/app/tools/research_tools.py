@@ -3,6 +3,7 @@ import json
 from datetime import date, datetime
 
 from pydantic import BaseModel, Field, model_validator
+from sqlalchemy import select
 
 from app.schemas.rag import RagSearchRequest
 from app.models.workstation import Instrument
@@ -21,7 +22,20 @@ class ResearchInput(BaseModel):
     query: str = Field(min_length=1)
     portfolio_id: str | None = None
     symbols: list[str] | None = None
+    sectors: list[str] | None = Field(default=None, max_length=20)
+    topics: list[str] | None = Field(default=None, max_length=20)
+    document_types: list[str] | None = Field(default=None, max_length=20)
+    date_from: date | None = None
+    date_to: date | None = None
+    include_broader_context: bool = True
+    cursor: str | None = Field(default=None, max_length=6000)
     limit: int = Field(default=5, ge=1, le=10)
+
+    @model_validator(mode='after')
+    def check_dates(self):
+        if self.date_from and self.date_to and self.date_from>self.date_to:
+            raise ValueError('date_from must be on or before date_to')
+        return self
 
 
 class CompanySectionsInput(BaseModel):
@@ -63,25 +77,19 @@ class InstrumentSearchInput(BaseModel):
 
 
 def _search(db, user, payload: ResearchInput):
-    result = search_rag(db, user, RagSearchRequest(**payload.model_dump()))
-    body = result.model_dump(mode="json")
-    sources = [item.model_dump(mode="json") for item in result.citations]
-    chunks = []
-    for item in body["chunks"]:
-        chunk = dict(item)
-        citation = chunk.pop("citation")
-        chunk.pop("source_url", None)
-        chunk["source_ref"] = citation["id"]
-        chunks.append(chunk)
+    from app.services.news_retrieval import search_research_evidence
+    from app.models.document import Document
+    chosen,citations,coverage=search_research_evidence(db,user,payload)
+    sources=[item.model_dump(mode='json') for item in citations]
+    dates={row.id:row.published_date for row in db.scalars(select(Document).where(Document.id.in_([c.document_id for _,c in chosen])))}
+    chunks=[{'id':c.id,'document_id':c.document_id,'group':name,'title':c.citation.title,
+        'published_date':str(dates[c.document_id]) if dates.get(c.document_id) else None,
+        'text':c.chunk_text,'source_ref':c.citation.id,
+        'evidence_kind':c.metadata.get('evidence_kind','reporting')} for name,c in chosen]
     return tool_result(
-        "ok" if result.chunks else "missing",
-        {
-            "chunks": chunks,
-            "audit": body["audit"],
-            "disambiguation": body["disambiguation"],
-        },
+        "ok" if chunks else "missing", {"chunks":chunks, "coverage":coverage},
         sources=sources,
-        returned=len(result.chunks),
+        returned=len(chunks),
         remaining=None,
     )
 
@@ -308,7 +316,7 @@ def register_research_tools(registry: ToolRegistry) -> None:
         ToolDefinition(
             "research.search",
             "1.0",
-            "Ownership-filtered document retrieval with page citations",
+            "Cited company, sector and broader economic/news passages with dates and pagination. Optional topics/date filters; set include_broader_context=false for company-only retrieval. Follow next_cursor for more stored evidence. Commentary is labelled, not a numerical fact source.",
             ResearchInput,
             "research:read",
             True,

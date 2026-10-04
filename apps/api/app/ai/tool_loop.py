@@ -634,6 +634,21 @@ def _attach_evidence(checkpoint: dict[str, Any], envelope: dict[str, Any]) -> di
 
 def _result_blocks(checkpoint: dict[str, Any], execution: ToolExecution) -> list[ContentBlock]:
     envelope = _attach_evidence(checkpoint, execution.envelope)
+    if execution.call.name == 'research.search':
+        from app.tools.registry import compact_model_data
+        envelope['data']=expand_model_data(envelope.get('data'))
+        # _attach_evidence has already saved the full citations for the UI.
+        # Their quotes duplicate the returned passages; don't resend both.
+        envelope['sources']=[{k:v for k,v in source.items() if k!='quote_snippet'}
+                             for source in envelope.get('sources',[])]
+        delivered=checkpoint.setdefault('delivered_research_chunks',[])
+        for chunk in (envelope.get('data') or {}).get('chunks',[]):
+            if chunk.get('id') in delivered:
+                chunk.pop('text',None)
+                chunk['previously_supplied']=True
+            elif chunk.get('id'):
+                delivered.append(chunk['id'])
+        envelope['data']=compact_model_data(envelope['data'])
     images = []
     data = envelope.get("data")
     if isinstance(data, dict) and isinstance(data.get("images"), list):

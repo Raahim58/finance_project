@@ -133,7 +133,7 @@ def _discover(db, user, payload: DocumentDiscoveryInput):
         select(DocumentChunk, Document, Citation)
         .join(Document, Document.id == DocumentChunk.document_id)
         .join(Citation, Citation.chunk_id == DocumentChunk.id)
-        .where(_visible(user), Document.data_status != "synthetic_demo")
+        .where(_visible(user), Document.data_status.not_in(("synthetic_demo", "excluded_irrelevant")))
     )
     if payload.symbols:
         statement = statement.where(

@@ -14,6 +14,7 @@ from app.services.evidence_pipeline import ensure_source_config, persist_candida
 
 
 BREADTH_KEYS = {
+    "world_fertilizer", "world_cement", "oilprice", "medium_kahloon",
     "reuters_world",
     "bloomberg_markets",
     "financial_times",
@@ -65,8 +66,9 @@ def test_breadth_catalog_matches_the_agreed_source_scope():
         for key in BREADTH_KEYS - DORMANT_KEYS
     )
     assert all(spec.historical_days == 90 for spec in specs.values())
-    assert all(spec.daily_fetch_budget <= 8 for spec in specs.values())
-    assert all(spec.daily_selected_budget <= 4 for spec in specs.values())
+    additions={"world_fertilizer", "world_cement", "oilprice", "medium_kahloon"}
+    assert all(spec.daily_fetch_budget <= (20 if key in additions else 8) for key,spec in specs.items())
+    assert all(spec.daily_selected_budget <= (10 if key in additions else 4) for key,spec in specs.items())
 
     tier_one = {
         "reuters_world",

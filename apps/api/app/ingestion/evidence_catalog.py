@@ -33,6 +33,10 @@ class SourceSpec:
 
 
 SOURCE_SPECS = (
+    SourceSpec("world_fertilizer", "World Fertilizer", "https://www.worldfertilizer.com", "specialist", ("reporting", "context"), ("fertilizer",), "rss", 1800, 90, settings.evidence_pass4_breadth_enabled, "https://www.worldfertilizer.com/rss/worldfertilizer.xml", "commodities", None, "pass4_breadth", 100, 20, 10),
+    SourceSpec("world_cement", "World Cement", "https://www.worldcement.com", "specialist", ("reporting", "context"), ("cement",), "rss", 1800, 90, settings.evidence_pass4_breadth_enabled, "https://www.worldcement.com/rss/worldcement.xml", "commodities", None, "pass4_breadth", 100, 20, 10),
+    SourceSpec("oilprice", "OilPrice", "https://oilprice.com", "specialist", ("reporting", "context"), ("energy", "geopolitics"), "rss", 1800, 90, settings.evidence_pass4_breadth_enabled, "https://oilprice.com/rss/main", "commodities", None, "pass4_breadth", 100, 20, 10),
+    SourceSpec("medium_kahloon", "Kahloon Journal on Medium", "https://medium.com", "commentary", ("context",), ("pakistan_macro",), "rss", 3600, 90, settings.evidence_pass4_breadth_enabled, "https://medium.com/feed/kahloonjournal", "pakistan_macro", None, "pass4_breadth", 20, 3, 2, fallback="Public dated commentary only; exclude paywall previews"),
     SourceSpec("psx_announcements", "PSX Announcements", "https://dps.psx.com.pk", "official", ("primary",), ("psx_company",), "psx_post", 120, 1825),
     SourceSpec("dawn", "Dawn", "https://www.dawn.com", "reporting", ("reporting",), ("pakistan_macro", "politics"), "rss", 300, 548, discovery_url="https://www.dawn.com/feeds/home", topic="pakistan", canary_group="pass4_pakistan", daily_discovery_budget=300, daily_fetch_budget=50, daily_selected_budget=30),
     SourceSpec("business_recorder", "Business Recorder", "https://www.brecorder.com", "reporting", ("reporting",), ("pakistan_macro", "markets"), "rss", 300, 548, discovery_url="https://www.brecorder.com/feeds/latest-news", topic="pakistan", canary_group="pass4_pakistan", daily_discovery_budget=300, daily_fetch_budget=50, daily_selected_budget=30),

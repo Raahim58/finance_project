@@ -460,6 +460,23 @@ def parse_stage(
     )
     try:
         parsed = _pdf_evidence(raw, evidence_source.key) if pdf else evidence_source.normalize(raw)
+        if metadata.get("curated_news"):
+            from app.ingestion.news_selection import classify_news
+            curation = classify_news(parsed.title, parsed.body)
+            bounds = metadata['curated_news']
+            outside_dates = bool(parsed.published_at and (
+                bounds.get('date_from') and parsed.published_at.date().isoformat() < bounds['date_from']
+                or bounds.get('date_to') and parsed.published_at.date().isoformat() > bounds['date_to']))
+            preview = "member-only" in parsed.body.lower() or "subscribe to continue" in parsed.body.lower()
+            if (not curation["eligible"] or len(parsed.body) < 500 or preview
+                or parsed.published_at is None or outside_dates):
+                row.scoring_reasons_json = '["curated_article_not_substantive_or_undated"]'
+                _transition(row, CandidateStatus.REJECTED)
+                spool.cleanup(row.id)
+                db.commit()
+                return ParseStageResult(row.id, "rejected")
+            metadata["curated_news"] = curation
+            row.metadata_json = _json(metadata)
         canonical_hash = _hash(parsed.canonical_url)
         canonical_match = db.scalar(
             select(DiscoveryCandidate).where(
@@ -609,6 +626,19 @@ def index_stage(db: Session, candidate_id: str, *, spool: EvidenceSpool | None =
             commit=False,
         )
         event_source.artifact_id = artifact.id
+        from app.models.document import DocumentEvidenceTag
+        company_tags=set(db.scalars(select(DocumentEvidenceTag.value).where(
+            DocumentEvidenceTag.document_id==document.id,DocumentEvidenceTag.kind=='company')))
+        for entity in pipeline.get('entity_keys',[]):
+            if entity not in company_tags:
+                db.add(DocumentEvidenceTag(document_id=document.id,kind='company',value=entity,basis='explicit_mention'))
+                company_tags.add(entity)
+        if metadata.get("curated_news"):
+            from app.models.document import DocumentChunk
+            for chunk in db.scalars(select(DocumentChunk).where(DocumentChunk.document_id == document.id)):
+                chunk.metadata_json = _json({**json.loads(chunk.metadata_json),
+                    "news_tags": metadata["curated_news"],
+                    "evidence_kind": "commentary" if config.source_tier == "commentary" else "reporting"})
         event_source.document_id = document.id
         event_source.selection_status = "selected"
         event_source.selection_reasons_json = _json([f"selected_{event_source.evidence_role}_slot"])

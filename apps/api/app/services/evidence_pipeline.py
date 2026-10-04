@@ -238,6 +238,7 @@ def persist_candidate(db: Session, config: EvidenceSourceConfig, candidate: Cand
             and not metadata.get("request_id")
             and score_candidate_metadata(db, candidate).relevance >= 0.18):
             metadata["prior_metadata_rejection"] = {"score": str(row.relevance_score), "reasons": json.loads(row.scoring_reasons_json or "[]")}
+            metadata.update(candidate.metadata)
             row.metadata_json = _json(metadata)
             row.status = CandidateStatus.FETCH_READY.value
             row.scoring_reasons_json = '["reconsidered_after_market_channel_gate_fix"]'
@@ -276,6 +277,12 @@ def score_evidence(db: Session, parsed: ParsedEvidence, candidate: Candidate) ->
     reasons: list[str] = []
     entities = set(parsed.entity_keys)
     relevance = 0.0
+    if candidate.metadata.get("curated_news"):
+        from app.ingestion.news_selection import classify_news
+        selected = classify_news(parsed.title, parsed.body)
+        if selected["eligible"]:
+            relevance = selected["score"]
+            reasons.append("material_news:" + ",".join(selected["topics"]))
     if candidate.source_key == "psx_announcements":
         relevance = 1.0
         reasons.append("official_psx_announcement")

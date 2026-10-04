@@ -310,6 +310,8 @@ def index_document_pages(db: Session, document: Document, pages: list[ParsedPage
                 quote_snippet=first_snippet(text)))
             chunk_index += 1
     db.flush()
+    from app.services.news_retrieval import tag_document
+    tag_document(db, document, "\n".join(page.text for page in pages))
     return chunk_index
 
 
@@ -570,7 +572,7 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         get_portfolio_or_404(db, user, payload.portfolio_id)
     resolved_symbols: list[str] = []
     ambiguous_symbols: list[str] = []
-    if not payload.symbols:
+    if not payload.symbols and payload.auto_symbols:
         resolved_symbols, ambiguous_symbols = _query_symbols(db, payload.query)
     plan = build_retrieval_plan(
         query=payload.query,
@@ -598,21 +600,35 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         .join(Document, Document.id == DocumentChunk.document_id)
         .join(Citation, Citation.chunk_id == DocumentChunk.id)
     )
+    public=(Document.visibility == "public") & Document.portfolio_id.is_(None)
+    if user is None:
+        base_query=base_query.where(public)
+    else:
+        from app.models.portfolio import Portfolio
+        owned=select(Portfolio.id).where(Portfolio.user_id==user.id)
+        base_query=base_query.where(or_(public,Document.owner_user_id==user.id,Document.portfolio_id.in_(owned)))
     base_query = base_query.where(
-        Document.visibility == "public"
-        if user is None
-        else or_(Document.visibility == "public", Document.owner_user_id == user.id)
-    )
-    base_query = base_query.where(
-        Document.data_status != "synthetic_demo",
+        Document.data_status.not_in(("synthetic_demo", "excluded_irrelevant")),
         DocumentChunk.embedding_status == "indexed",
         DocumentChunk.embedding_model == active_embedding_model(),
         DocumentChunk.embedding_index_version == settings.embedding_index_version,
     )
     if plan.symbols:
-        base_query = base_query.where(func.upper(DocumentChunk.symbol).in_(plan.symbols))
+        from app.models.document import DocumentEvidenceTag
+        company_tags=select(DocumentEvidenceTag.document_id).where(
+            DocumentEvidenceTag.kind=='company',DocumentEvidenceTag.value.in_(plan.symbols))
+        base_query = base_query.where(or_(func.upper(DocumentChunk.symbol).in_(plan.symbols),Document.id.in_(company_tags)))
     if plan.sectors:
         base_query = base_query.where(Document.sector.in_(plan.sectors))
+    if payload.sector_tags or payload.topics:
+        from app.models.document import DocumentEvidenceTag
+        filters=[]
+        if payload.sector_tags:
+            filters.append((DocumentEvidenceTag.kind=='sector') & DocumentEvidenceTag.value.in_(payload.sector_tags))
+        if payload.topics:
+            filters.append((DocumentEvidenceTag.kind=='topic') & DocumentEvidenceTag.value.in_(payload.topics))
+        tagged=select(DocumentEvidenceTag.document_id).where(or_(*filters))
+        base_query=base_query.where(Document.id.in_(tagged))
     if plan.document_types:
         base_query = base_query.where(Document.document_type.in_(plan.document_types))
     if plan.date_from:
@@ -623,7 +639,7 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         base_query = base_query.where(or_(Document.portfolio_id == plan.portfolio_id, Document.visibility == "public"))
 
     query_vector = embed_text(plan.query)
-    candidate_depth = max(settings.retrieval_candidate_depth, plan.limit * 8)
+    candidate_depth = max(settings.retrieval_candidate_depth, (payload.rank_offset + plan.limit) * 8)
     if db.bind and db.bind.dialect.name == "postgresql":
         semantic_rows = db.execute(
             base_query.where(DocumentChunk.embedding_vector.is_not(None))
@@ -670,6 +686,12 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
             value for value in (document.title, chunk.section_title, chunk.chunk_text) if value
         )
         lexical_scores[chunk_id] = lexical_score(plan.query_tokens, lexical_text)
+        if payload.topics:
+            from app.ingestion.news_selection import TOPIC_TERMS, matches
+            # Expanded topics are alternatives, not a requirement that one
+            # paragraph mention sanctions AND tariffs AND every war synonym.
+            if any(matches(lexical_text, TOPIC_TERMS.get(topic,(topic,))) for topic in payload.topics):
+                lexical_scores[chunk_id]=max(lexical_scores[chunk_id],settings.retrieval_min_lexical_score)
 
     semantic_ranking = (
         sorted(candidates, key=lambda item: (-semantic_scores[item], item))[:candidate_depth]
@@ -693,7 +715,7 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         semantic_ok = (
             settings.embedding_backend == "sentence_transformers"
             and semantic >= settings.retrieval_min_semantic_score
-            and lexical > 0
+            and (lexical > 0 or bool(payload.sector_tags or payload.topics))
         )
         lexical_ok = lexical >= settings.retrieval_min_lexical_score
         if not (semantic_ok or lexical_ok):
@@ -720,7 +742,7 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         ranked.append((final_score, fused_score, semantic, lexical, chunk, document, citation))
 
     ranked.sort(key=lambda item: (-item[0], item[4].id))
-    selected = ranked[: plan.limit]
+    selected = ranked[payload.rank_offset : payload.rank_offset + plan.limit]
     chunks: list[RagChunkResponse] = []
     citations: list[CitationResponse] = []
     scores: list[float] = []
@@ -756,6 +778,7 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         citations=citations,
         scores=scores,
         audit=RagSearchAudit(
+            has_more=len(ranked)>payload.rank_offset + plan.limit,
             plan=_audit_plan(plan),
             semantic_candidates=len(semantic_ranking),
             lexical_candidates=len(lexical_ranking),

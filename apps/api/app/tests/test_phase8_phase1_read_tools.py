@@ -69,7 +69,8 @@ def test_catalog_is_generated_from_pydantic_and_refresh_is_not_allowlisted():
 def test_errors_are_stable_and_do_not_expose_exception_text():
     result = build_tool_registry().invoke("documents.read", None, None, {"document_id": "x"})
     assert result["status"] == "invalid_arguments"
-    assert result["data"] == {"error": {"code": "invalid_arguments", "fields": ["mode"]}}
+    assert result["data"] == {"error": {"code": "invalid_arguments", "fields": ["mode"],
+        "details": [{"field":"mode","type":"missing","message":"Field required"}]}}
 
 
 def test_company_sections_preserve_period_unit_source_and_have_no_side_effects(monkeypatch):

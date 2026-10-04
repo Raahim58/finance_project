@@ -76,6 +76,7 @@ class RagChunkResponse(BaseModel):
 
 
 class RagSearchAudit(BaseModel):
+    has_more: bool = False
     plan: dict
     semantic_candidates: int
     lexical_candidates: int
@@ -95,6 +96,10 @@ class RagSearchRequest(BaseModel):
     query: str = Field(min_length=1)
     symbols: list[str] | None = None
     sectors: list[str] | None = None
+    sector_tags: list[str] | None = Field(default=None, max_length=20)
+    topics: list[str] | None = Field(default=None, max_length=20)
+    auto_symbols: bool = True
+    rank_offset: int = Field(default=0, ge=0, le=200)
     document_types: list[str] | None = None
     date_from: date | None = None
     date_to: date | None = None

@@ -1,7 +1,7 @@
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
 
@@ -63,6 +63,19 @@ class DocumentPage(Base):
     metadata_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
 
     document: Mapped[Document] = relationship(back_populates="pages")
+
+
+class DocumentEvidenceTag(Base):
+    __tablename__ = "document_evidence_tags"
+    __table_args__ = (
+        UniqueConstraint("document_id", "kind", "value"),
+        Index("ix_document_evidence_tags_lookup", "kind", "value", "document_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    value: Mapped[str] = mapped_column(String(120), nullable=False)
+    basis: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
 class DocumentChunk(Base):

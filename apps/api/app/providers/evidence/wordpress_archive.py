@@ -10,6 +10,9 @@ from app.providers.evidence.sources import HttpEvidenceSource
 
 
 ARCHIVES = {
+    "cotton_grower": ("Cotton Grower", "https://www.cottongrower.com"),
+    "metalminer": ("MetalMiner", "https://agmetalminer.com"),
+    "semiconductor_engineering": ("Semiconductor Engineering", "https://semiengineering.com"),
     "gcaptain": ("gCaptain", "https://gcaptain.com"),
     "freightwaves": ("FreightWaves", "https://www.freightwaves.com"),
 }

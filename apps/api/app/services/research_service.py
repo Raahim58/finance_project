@@ -440,6 +440,9 @@ def list_events(
     query: str | None = None,
 ):
     statement = select(Event)
+    excluded = select(EventSource.event_id).where(EventSource.selection_status == 'excluded')
+    usable = select(EventSource.event_id).where(EventSource.selection_status != 'excluded')
+    statement = statement.where(or_(Event.id.not_in(excluded), Event.id.in_(usable)))
     if query:
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         statement = statement.where(or_(Event.title.ilike("%" + escaped + "%", escape="\\"), Event.details_json.ilike("%" + escaped + "%", escape="\\")))
@@ -460,7 +463,7 @@ def list_events(
     )
     result = []
     for event in rows:
-        sources = list(db.scalars(select(EventSource).where(EventSource.event_id == event.id)))
+        sources = list(db.scalars(select(EventSource).where(EventSource.event_id == event.id, EventSource.selection_status != 'excluded')))
         result.append({"id": event.id, "event_type": event.event_type, "title": event.title, "occurred_at": event.occurred_at, "materiality": event.materiality, "direction": event.direction, "confidence": event.confidence, "details": json.loads(event.details_json), "sources": [{"source_name": source.source_name, "source_url": source.source_url, "document_id": source.document_id, "published_at": source.published_at} for source in sources]})
     return result
 
