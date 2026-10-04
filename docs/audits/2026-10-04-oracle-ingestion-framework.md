@@ -271,3 +271,17 @@ This worker does **not** ingest October 1 history for the full universe (the Oct
 3. Establish genuine Pakistan policy-rate, FX, CPI, reserves and monthly external-sector history; separate annual fallback series from daily/monthly contracts. Refresh the existing global numerical series through their latest available releases.
 4. Index the 1,375 retained reports lacking searchable text without re-extracting valid financial facts or rebuilding the whole index. Improve timely company/global news breadth; the new shipping archives have only bounded verified samples so far.
 5. Add independent continuous market scheduling and finish the runbook's storage, spool, shared-memory, retention and deploy pause/resume controls. Current continuous producers remain off; the isolated bounded history worker continues running.
+
+## 10. Saved sequencing decision and benchmark scope
+
+Saved at the user's request on 2026-10-04. This is an execution-order decision, not a claim that the remaining work has been performed:
+
+> These are different jobs. We can run backfills alongside implementation, but the two-CPU Oracle server should have only one heavy OCR/embedding worker. Estimates below are planning ranges, not measured completion promises.
+>
+> My order: finish recent-price failures, get KSE-100 and split handling right, then run report indexing + broader news + macro imports alongside each other within resource limits. Enable each verified live lane as it becomes ready—we shouldn't wait for every five-year historical gap to close.
+>
+> The main uncertainty is source availability and OCR volume, not writing another scheduler. I can defend the price throughput estimate from actual runs; the report/news estimates still need representative timing samples.
+
+The user selected **both KSE100 and KSE100PR, with all available official daily history**. Keep total-return and price-return series distinct, with source provenance. Historical download availability remains to be verified; benchmark usage, missing-date policy and split handling are still being settled section by section. Do not silently substitute a stock for either market index.
+
+Report indexing already exists through `financial_index` / `prepare_report`, but the documented five-report selector only considers the latest 50 candidates. `prepare_report` currently extracts native PDF text, not OCR. A full backlog pass must paginate beyond that window, skip current indexes, record failures and process one report at a time on Oracle. It must not re-extract numerical facts or run corpus-wide `reindex_rag`.
