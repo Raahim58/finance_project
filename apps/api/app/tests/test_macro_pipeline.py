@@ -28,6 +28,29 @@ def _provider(series_key, prefix):
     )
 
 
+def test_daily_macro_allowlist_only_registers_and_queues_verified_series(monkeypatch):
+    from app.services.macro_schedule_service import enqueue_due_macro_refreshes
+    monkeypatch.setattr(settings, 'macro_ingestion_enabled', True)
+    monkeypatch.setattr(settings, 'macro_series_allowlist', 'WTI_USD_BBL,GLOBAL_GOLD_USD_TROY_OZ')
+    published = []
+    with SessionLocal() as db:
+        result = enqueue_due_macro_refreshes(db, publish=lambda key, run: published.append(key))
+        assert result.queued == 2
+        assert set(published) == {'WTI_USD_BBL', 'GLOBAL_GOLD_USD_TROY_OZ'}
+        assert set(db.scalars(select(MacroSeries.key))) == set(published)
+
+
+def test_daily_macro_allowlist_rejects_unknown_keys_before_mutation(monkeypatch):
+    import pytest
+    from app.services.macro_schedule_service import enqueue_due_macro_refreshes
+    monkeypatch.setattr(settings, 'macro_ingestion_enabled', True)
+    monkeypatch.setattr(settings, 'macro_series_allowlist', 'NOT_A_REAL_SERIES')
+    with SessionLocal() as db:
+        with pytest.raises(ValueError, match='Unknown macro'):
+            enqueue_due_macro_refreshes(db, publish=lambda *args: None)
+        assert db.scalar(select(func.count()).select_from(MacroSeries)) == 0
+
+
 def test_macro_catalog_has_source_independent_series_and_ordered_fallbacks():
     assert len(MACRO_SERIES) >= 20
     assert len({spec.key for spec in MACRO_SERIES}) == len(MACRO_SERIES)

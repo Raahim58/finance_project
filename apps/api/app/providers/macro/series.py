@@ -18,6 +18,7 @@ from app.ingestion.macro_catalog import MacroProviderSpec
 from app.providers.macro.contracts import ProviderObservation, ProviderResult
 from app.providers.macro.official_workbooks import WorldBankCommodityProvider
 from app.providers.macro.sbp import SbpKeyIndicatorsProvider
+from app.providers.macro.eia import parse_daily_spot
 from app.providers.macro.pakistan_monthly import (
     fetch_sbp_monthly,
     fetch_sbp_remittances_recent,
@@ -185,6 +186,7 @@ def fetch_macro_provider(provider: MacroProviderSpec, start: date, end: date) ->
         "ecb_sdmx_csv": _ecb,
         "sbp_key_indicators": _sbp,
         "world_bank_pink": _world_bank_pink,
+        "eia_daily_spot_xls": _eia_daily_spot,
         "sbp_monthly_workbook": _sbp_monthly,
         "sbp_easydata_remittances": _sbp_remittances,
     }
@@ -195,6 +197,15 @@ def fetch_macro_provider(provider: MacroProviderSpec, start: date, end: date) ->
     if not result.observations:
         raise ValueError(f"Macro provider {provider.key} returned no observations")
     return result
+
+
+def _eia_daily_spot(provider: MacroProviderSpec, start: date, end: date) -> ProviderResult:
+    url = f"https://www.eia.gov/dnav/pet/hist_xls/{provider.source_series_id}d.xls"
+    content, final_url, content_type = _get(url)
+    frame = pd.read_excel(BytesIO(content), sheet_name="Data 1", header=None)
+    observations = parse_daily_spot(frame, provider.source_series_id, start, end)
+    return ProviderResult(provider.key, provider.source_series_id, final_url, content,
+        content_type, "eia-daily-spot-xls-v1", datetime.now(UTC), observations)
 
 def _sbp_monthly(
     provider: MacroProviderSpec,

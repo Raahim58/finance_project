@@ -40,7 +40,14 @@ def enqueue_due_macro_refreshes(
             args=(series_key, run_key), queue="macro", priority=3
         )
     )
-    created_series, created_providers = ensure_macro_catalog(db)
+    specs = MACRO_SERIES
+    if settings.macro_series_allowlist is not None:
+        keys = {key.strip() for key in settings.macro_series_allowlist.split(',') if key.strip()}
+        unknown = keys - {spec.key for spec in MACRO_SERIES}
+        if unknown:
+            raise ValueError('Unknown macro series keys: ' + ', '.join(sorted(unknown)))
+        specs = tuple(spec for spec in MACRO_SERIES if spec.key in keys)
+    created_series, created_providers = ensure_macro_catalog(db, specs=specs)
     stale = now - timedelta(hours=2)
     for run in db.scalars(
         select(IngestionRun).where(
@@ -64,7 +71,7 @@ def enqueue_due_macro_refreshes(
     period = now.date().isoformat()
     linked: list[str] = []
     queued = 0
-    for spec in MACRO_SERIES:
+    for spec in specs:
         run_key = f"{spec.key}:{period}"
         run = db.scalar(select(IngestionRun).where(
             IngestionRun.job_key == "macro-series-refresh",

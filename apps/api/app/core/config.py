@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     market_history_bootstrap_enabled: bool = True
     scheduled_research_enabled: bool = True
     macro_ingestion_enabled: bool = False
+    macro_series_allowlist: str | None = None
     macro_scheduler_seconds: int = Field(default=30, ge=30, le=86400)
     macro_queue_target: int = Field(default=8, ge=1, le=100)
     macro_history_start_year: int = Field(default=2000, ge=1960, le=2100)

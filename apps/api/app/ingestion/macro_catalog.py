@@ -87,6 +87,12 @@ def _fred(series_id: str, priority: int = 10) -> tuple[MacroProviderSpec, ...]:
     )
 
 
+def _eia_spot(series_id: str) -> MacroProviderSpec:
+    return MacroProviderSpec(f"eia_daily:{series_id}", "eia_daily_spot_xls",
+        "U.S. Energy Information Administration", "https://www.eia.gov", series_id,
+        5, "national_official", "xls_download")
+
+
 def _sbp(source_series_id: str, priority: int = 10) -> MacroProviderSpec:
     return MacroProviderSpec(
         f"sbp:{source_series_id}",
@@ -265,7 +271,9 @@ MACRO_SERIES = (
     MacroSeriesSpec("ECB_USD_EUR", "U.S. dollars per euro", "USD_per_EUR", "monthly", "fx", (MacroProviderSpec("ecb:EXR:M.USD.EUR.SP00.A", "ecb_sdmx_csv", "European Central Bank Data Portal", "https://data-api.ecb.europa.eu", "EXR/M.USD.EUR.SP00.A", 10, "official_supranational", "sdmx_csv"),)),
     MacroSeriesSpec("GLOBAL_GDP_GROWTH", "World real GDP growth", "percent_yoy", "annual", "growth", (_wb("WLD", "NY.GDP.MKTP.KD.ZG", 10),)),
     MacroSeriesSpec("GLOBAL_CRUDE_OIL_USD_BBL", "World Bank average crude-oil price", "USD_per_bbl", "monthly", "oil", (MacroProviderSpec("world_bank_pink:crude_oil_average", "world_bank_pink", "World Bank Commodity Markets", "https://thedocs.worldbank.org", "world_bank.commodity.crude_oil_average", 20, "official_international", "xlsx_download"),)),
-    MacroSeriesSpec("BRENT_USD_BBL", "Brent crude-oil spot price", "USD_per_bbl", "daily", "oil", _fred("DCOILBRENTEU")),
+    MacroSeriesSpec("BRENT_USD_BBL", "Brent crude-oil spot price", "USD_per_bbl", "daily", "oil", (_eia_spot("RBRTE"),) + _fred("DCOILBRENTEU")),
+    MacroSeriesSpec("WTI_USD_BBL", "Cushing WTI crude-oil spot price", "USD_per_bbl", "daily", "oil", (_eia_spot("RWTC"),)),
+    _pink("GLOBAL_GOLD_USD_TROY_OZ", "World Bank gold price", "USD_per_troy_oz", "gold", "precious_metals"),
     MacroSeriesSpec("GLOBAL_UREA_USD_MT", "World Bank urea price", "USD_per_mt", "monthly", "fertilizer", (MacroProviderSpec("world_bank_pink:urea", "world_bank_pink", "World Bank Commodity Markets", "https://thedocs.worldbank.org", "world_bank.commodity.urea", 10, "official_international", "xlsx_download"),)),
     MacroSeriesSpec(
         "PK_REMITTANCES_USD",
