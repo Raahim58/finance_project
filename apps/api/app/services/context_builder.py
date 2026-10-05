@@ -382,6 +382,15 @@ class ContextBuilder:
                         FinancialFact.filing_date,
                         FinancialFact.period_end,
                         FinancialFact.confidence,
+                        FinancialFact.taxonomy_key,
+                        FinancialFact.period_type,
+                        FinancialFact.period_start,
+                        FinancialFact.unit,
+                        FinancialFact.currency,
+                        FinancialFact.consolidated,
+                        FinancialFact.source_label,
+                        FinancialFact.document_id,
+                        FinancialFact.page_number,
                     ).where(FinancialFact.instrument_id == instrument.id)
                 )
             ]
@@ -393,6 +402,14 @@ class ContextBuilder:
                         StandardizedFinancialFact.value,
                         StandardizedFinancialFact.retrieved_at,
                         StandardizedFinancialFact.quality_status,
+                        StandardizedFinancialFact.metric,
+                        StandardizedFinancialFact.period_type,
+                        StandardizedFinancialFact.period_end,
+                        StandardizedFinancialFact.unit,
+                        StandardizedFinancialFact.currency,
+                        StandardizedFinancialFact.source,
+                        StandardizedFinancialFact.source_url,
+                        StandardizedFinancialFact.classification,
                     ).where(StandardizedFinancialFact.instrument_id == instrument.id)
                 )
             ]

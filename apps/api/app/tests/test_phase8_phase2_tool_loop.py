@@ -34,11 +34,33 @@ from app.services.market_ingestion import generate_mock_market_data
 
 
 def _anthropic_tool_results(payload):
-    # Phase 11 may append a final-answer instruction after the latest tool results.
+    # Native associations stay present; fused values live in the current packet.
+    from app.ai.company_packet import PACKET_PREFIX, PACKET_SECTIONS
+    from app.tools.registry import expand_model_data
+    packet = None
+    for message in payload["messages"]:
+        for block in message.get("content", []) if isinstance(message.get("content"), list) else []:
+            if block.get("type") == "text" and block.get("text", "").startswith(PACKET_PREFIX):
+                packet = expand_model_data(json.loads(block["text"][len(PACKET_PREFIX):]))
     for message in reversed(payload["messages"]):
         content = message.get("content")
-        if isinstance(content, list) and any(block.get("type") == "tool_result" for block in content):
-            return [json.loads(block["content"]) for block in content if block["type"] == "tool_result"]
+        if not isinstance(content, list):
+            continue
+        results = [block for block in content if block.get("type") == "tool_result"]
+        if not results:
+            continue
+        output = []
+        for block in results:
+            result = json.loads(block["content"])
+            if result.get("evidence_location"):
+                native = next(tool for msg in payload["messages"] for tool in
+                    (msg.get("content", []) if isinstance(msg.get("content"), list) else [])
+                    if tool.get("type") == "tool_use" and tool["id"] == block["tool_use_id"])
+                scope = {k: v for k, v in native["input"].items() if k not in ("cursor", "limit", "sector_comparison_limit")}
+                result = next(section for key in PACKET_SECTIONS for section in packet[key]
+                    if section["tool"] == native["name"].replace("__", ".") and section["scope"] == scope)
+            output.append(result)
+        return output
     return []
 
 
@@ -285,7 +307,8 @@ def test_native_gemini_loop_continues_without_resending_prior_results(client, mo
     assert response.status_code == 201, response.text
     assert response.json()["tool_trace"][0]["tool"] == "market.freshness"
     assert captured[1]["previous_interaction_id"] == "gemini-loop-tools"
-    assert len(captured[1]["input"]) == 1
+    assert len(captured[1]["input"]) == 2
+    assert captured[1]["input"][1]["type"] == "user_input"
     function_response = captured[1]["input"][0]
     assert function_response["name"] == "market__freshness"
     assert function_response["call_id"] == "freshness-call"
@@ -385,14 +408,14 @@ def test_gemini_six_parallel_results_then_dependent_allocation_are_checkpointed(
     )
 
     assert response.status_code == 201, response.text
-    assert [row["call_id"] for row in captured[1]["input"]] == [
+    assert [row["call_id"] for row in captured[1]["input"] if row["type"] == "function_result"] == [
         f"fact-{index}" for index in range(6)
     ]
     assert "Execution allowance (not evidence)" in captured[1]["system_instruction"]
     assert captured[1]["previous_interaction_id"] == "parallel-interaction"
-    assert [row["call_id"] for row in captured[2]["input"]] == ["allocation-call"]
+    assert [row["call_id"] for row in captured[2]["input"] if row["type"] == "function_result"] == ["allocation-call"]
     assert captured[2]["previous_interaction_id"] == "allocation-interaction"
-    assert "fact-0" not in json.dumps(captured[2]["input"])
+    assert "fact-0" not in json.dumps([row for row in captured[2]["input"] if row["type"] == "function_result"])
     assert response.json()["synthesis"]["allocation_check"]["status"] == "rejected"
     with SessionLocal() as db:
         execution = db.scalar(
@@ -610,7 +633,7 @@ def test_malformed_and_forbidden_calls_return_stable_associated_results(client, 
     )
 
     assert response.status_code == 201, response.text
-    blocks = captured[1]["messages"][-1]["content"]
+    blocks = [block for block in captured[1]["messages"][-1]["content"] if block["type"] == "tool_result"]
     assert [block["tool_use_id"] for block in blocks] == [
         "malformed",
         "forbidden",
@@ -833,7 +856,7 @@ def test_checkpoint_persistence_failure_has_specific_durable_terminal_code(clien
     def fail_after_attempt(identifier, checkpoint):
         nonlocal saves
         saves += 1
-        if saves == 3:
+        if checkpoint.get("provider_turn_complete"):
             raise AssistantTerminalError("checkpoint_persistence_failed")
         return original_save(identifier, checkpoint)
 
@@ -1245,7 +1268,7 @@ def test_accepted_allocation_delivery_and_local_recovery_do_not_repeat_provider(
         row = db.scalar(select(AssistantExecution).where(AssistantExecution.user_id == user_id))
         identifier = row.id
         checkpoint = json.loads(decrypt_secret(row.transcript_encrypted))
-        assert checkpoint["reserved_tool_calls"] == 3
+        assert checkpoint["reserved_tool_calls"] == 7  # four first-pass reads plus three model tools
         assert "cost units" not in json.dumps(captured)
         assert checkpoint["allocation_check"]["accepted"] is True
         assert "Execution allowance (not evidence)" in json.dumps(captured[1])

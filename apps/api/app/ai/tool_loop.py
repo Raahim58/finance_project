@@ -83,6 +83,7 @@ TRUNCATED_REASONS = {
 SYSTEM_PROMPT = """You are a read-only PSX investment assistant. Answer the user's actual question using their portfolio, goals, required return and available company/market evidence.
 
 EVIDENCE
+- Use the current evidence JSON first; it contains source-linked database facts and document excerpts already retrieved for this question. Call tools for missing evidence or deeper investigation, not to repeat supplied reads.
 - Get exact prices, financials, holdings and calculations from database tools. Use document tools for supporting text.
 - Check reporting periods, units, data provenance and price adjustments before comparing numbers. Flag demo inputs and unresolved corporate actions; do not use distorted returns to justify advice.
 - Separate reported facts, historical estimates and your own interpretation. Historical returns are not forecasts.
@@ -131,6 +132,30 @@ class ToolExecution:
 
 def _turns(checkpoint: dict[str, Any]) -> list[ProviderTurn]:
     return [ProviderTurn.from_dict(turn) for turn in checkpoint["turns"]]
+
+
+def _model_turns(checkpoint):
+    turns = _turns(checkpoint)
+    if checkpoint.get('evidence_packet'):
+        from app.ai.company_packet import project_turns
+        return project_turns(turns, checkpoint['evidence_packet'], checkpoint.get('fused_tool_call_ids', []))
+    return turns
+
+
+def _packet_receipt(checkpoint):
+    packet = checkpoint.get('evidence_packet')
+    if not packet:
+        return None
+    from app.ai.company_packet import model_packet
+    encoded = json.dumps(model_packet(packet), ensure_ascii=False, separators=(',', ':')).encode()
+    return {
+        'version': packet['version'], 'serialized_bytes': len(encoded),
+        'sections': len(packet['sections']),
+        'initial_calls': sum(ref.startswith('initial-') for ref in checkpoint['completed_tool_call_ids']),
+        'initial_elapsed_ms': checkpoint.get('initial_evidence_elapsed_ms'),
+        'missing_sections': len(packet['missing_data']),
+        'contradictions': len(packet['contradictions']),
+    }
 
 
 def _company_tool_allowed(name: str, arguments=None) -> bool:
@@ -318,6 +343,8 @@ def _initial_checkpoint(
     ]
     return {
         "version": "assistant-tool-loop-2",
+        "resolved_identity": identity,
+        "compact_evidence_enabled": settings.assistant_compact_evidence_enabled,
         "turns": [turn.to_dict() for turn in turns],
         "evidence": {},
         "next_evidence": 1,
@@ -618,6 +645,10 @@ def _attach_evidence(checkpoint: dict[str, Any], envelope: dict[str, Any]) -> di
     result = normalize_json(copy.deepcopy(envelope))
     sources = []
     for source in result.get("sources", []):
+        # Context sections use `source`; citation rendering uses `source_name`.
+        # Preserve the supplied label rather than displaying only an E marker.
+        if not source.get("source_name") and isinstance(source.get("source"), str):
+            source["source_name"] = source["source"]
         identity = json.dumps(source, sort_keys=True, separators=(",", ":"))
         existing = next(
             (key for key, value in checkpoint["evidence"].items() if value["identity"] == identity),
@@ -686,6 +717,10 @@ def _result_blocks(checkpoint: dict[str, Any], execution: ToolExecution) -> list
             envelope["sources"] = [{key: value for key, value in source.items()
                                     if key != "price_observations"} for source in envelope["sources"]]
     provider_part = execution.call.opaque.get("provider_part", {})
+    if checkpoint.get('evidence_packet') is not None and execution.call.name != 'search_conversation_history' and not images:
+        from app.ai.company_packet import merge_result
+        merge_result(checkpoint['evidence_packet'], execution.call, envelope)
+        checkpoint.setdefault('fused_tool_call_ids', []).append(execution.call.id)
     include_id = bool(provider_part.get("functionCall", {}).get("id"))
     return [
         ContentBlock(
@@ -835,6 +870,46 @@ def _record_provider_result(checkpoint: dict[str, Any], result: LLMProviderResul
     checkpoint["web_tool_activity"].extend(result.web_tool_activity)
 
 
+async def _prepare_evidence(identifier, user_id, payload, checkpoint):
+    if not checkpoint.get('compact_evidence_enabled') or checkpoint.get('initial_evidence_prepared'):
+        return
+    started = time.perf_counter()
+    from app.ai.company_packet import initial_calls, new_packet
+    identity = checkpoint.get('resolved_identity', {})
+    checkpoint.setdefault('evidence_packet', new_packet(identity))
+    if 'initial_evidence_plan' not in checkpoint:
+        checkpoint['initial_evidence_plan'] = [call.to_dict() for call in initial_calls(
+            identity, payload.question, payload.company_only,
+            settings.assistant_max_tool_iterations - checkpoint['reserved_tool_calls'])]
+    calls = [ContentBlock.from_dict(call) for call in checkpoint['initial_evidence_plan']]
+    unreserved = [call for call in calls if call.id not in checkpoint['reserved_tool_call_ids']]
+    _reserve_calls(checkpoint, unreserved)
+    checkpoint['reserved_tool_call_ids'].extend(call.id for call in unreserved)
+    _save_checkpoint(identifier, checkpoint)
+    semaphore = asyncio.Semaphore(4)
+    async def retrieve(call):
+        async with semaphore:
+            return await _execute_tool(user_id, call)
+    # Each _execute_tool opens its own ownership-checked database session.
+    pending = [call for call in calls if call.id not in checkpoint['completed_tool_call_ids']]
+    for execution in await asyncio.gather(*[retrieve(call) for call in pending]):
+        checkpoint.setdefault('initial_evidence_results', {})[execution.call.id] = normalize_json(execution.envelope)
+        _result_blocks(checkpoint, execution)
+        checkpoint['completed_tool_call_ids'].append(execution.call.id)
+        _save_checkpoint(identifier, checkpoint)
+    visited = {call.arguments.get('instrument_id') for call in calls}
+    checkpoint['evidence_packet']['first_pass_coverage'] = {
+        item['instrument_id']: [call.arguments.get('sections', [call.name])[0]
+            for call in calls if call.arguments.get('instrument_id') == item['instrument_id']]
+        for item in identity.get('mentioned_instrument_candidates', [])}
+    checkpoint['evidence_packet']['first_pass_unvisited_instruments'] = [
+        item for item in identity.get('mentioned_instrument_candidates', []) if item['instrument_id'] not in visited]
+    checkpoint['initial_evidence_prepared'] = True
+    _update_allowance(checkpoint)
+    checkpoint['initial_evidence_elapsed_ms'] = round((time.perf_counter() - started) * 1000, 3)
+    _save_checkpoint(identifier, checkpoint)
+
+
 async def run_tool_loop(
     db: Session,
     user: User,
@@ -905,6 +980,8 @@ async def run_tool_loop(
         history = await prepare(identifier, user.id, conversation_id, provider, api_key, model)
         checkpoint["turns"] = [checkpoint["turns"][0], *[t.to_dict() for t in history], checkpoint["turns"][-1]]
         checkpoint["memory_prepared"] = True
+
+    await _prepare_evidence(identifier, user.id, payload, checkpoint)
 
     while True:
         turns = _turns(checkpoint)
@@ -983,7 +1060,12 @@ async def run_tool_loop(
                 # Gemini requires these results alongside previous_interaction_id.
                 turns[-1] = ProviderTurn("user", [*turns[-1].content, instruction], turns[-1].opaque)
             try:
-                result = await _provider_turn(provider, api_key, model, turns, tools, continuation_id)
+                model_turns = _model_turns(checkpoint)
+                # Budget-finalization instructions must also survive projection.
+                if not tools and turns[-1].role == 'user':
+                    model_turns[-1] = ProviderTurn('user', [*model_turns[-1].content,
+                        ContentBlock('text',text='Give the grounded final answer now; no further tools are available.')], model_turns[-1].opaque)
+                result = await _provider_turn(provider, api_key, model, model_turns, tools, continuation_id)
             except AssistantTerminalError as exc:
                 if exc.code != "question_budget_exhausted":
                     raise
@@ -1046,6 +1128,7 @@ async def run_tool_loop(
                 "citation_count": len(checkpoint["web_citations"]),
             },
             "allocation_check": allocation_outcome,
+            "evidence_packet": _packet_receipt(checkpoint),
             "token_usage": {
                 **checkpoint["usage"],
                 "total_tokens": checkpoint["usage"]["input_tokens"]

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -17,6 +18,16 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(local_assets)
     except (FileNotFoundError, ImportError):
         pass  # Explicit conservative fallback until tokenizer setup is run.
+    # Load the existing local embedder before accepting questions. Its cold
+    # initialization can exceed the unchanged research-tool deadline.
+    from app.services.rag_service import embed_text
+    try:
+        await asyncio.to_thread(embed_text, "market financial evidence")
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Embedding startup preload failed (%s); retrieval will report availability normally",
+            type(exc).__name__,
+        )
     if settings.auto_create_tables:
         Base.metadata.create_all(bind=engine)
     from app.services.assistant_execution import maintenance, shutdown
