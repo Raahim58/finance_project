@@ -71,6 +71,14 @@ def digest_prompt_payload(payload):
 
 
 def generation_request(kind, payload):
+    if kind == "company_brief":
+        from app.schemas.research_intelligence import CompanyBriefOutput
+        schema = CompanyBriefOutput.model_json_schema()
+        messages = [{"role":"system","content":(PROMPTS / "company_brief.md").read_text()},
+            {"role":"user","content":"INPUT_JSON\n"+canonical(brief_projection(payload))+"\nOUTPUT_SCHEMA\n"+canonical(schema)}]
+        if len(canonical(messages).encode()) > 40000:
+            raise ValueError("research_input_budget_exceeded")
+        return messages, schema
     schema = ProfileOutput if kind == "profile" else DigestOutput
     output_schema = schema.model_json_schema()
     quotes = profile_quote_options(payload) if kind == "profile" else {}
@@ -114,6 +122,19 @@ def evidence_map(payload):
 
 
 def validate_output(kind, content, payload):
+    if kind == "company_brief":
+        from app.schemas.research_intelligence import CompanyBriefOutput
+        result = CompanyBriefOutput.model_validate_json(content)
+        allowed = set(payload['sources']) | {f['id'] for f in payload['financials']} | {e['id'] for e in payload['news']} | {a['id'] for a in payload.get('corporate_actions',[])}
+        output = result.model_dump(mode='json')
+        for name, claims in output.items():
+            if name == 'unresolved_questions': continue
+            for claim in claims:
+                if set(claim['refs']) - allowed:
+                    raise ValueError('unknown_claim_reference')
+        if sum(len(c['text'].split()) for k,v in output.items() if k != 'unresolved_questions' for c in v) > 650:
+            raise ValueError('brief_word_budget_exceeded')
+        return output
     schema = ProfileOutput if kind == "profile" else DigestOutput
     result = schema.model_validate_json(content)
     evidence = evidence_map(payload)
@@ -229,6 +250,14 @@ def cached_event_keys(db, user, instrument, payload, provider=None, model=None):
 
 
 def save_output(db, user, instrument, kind, payload, output, provider, model):
+    if kind == "company_brief":
+        from app.services.company_digest_service import store_snapshot
+        row = store_snapshot(db,user,instrument,payload,{'provider':provider,'model':model})
+        row.brief_json = canonical(output)
+        from datetime import datetime, UTC
+        row.generated_at = datetime.now(UTC)
+        db.flush()
+        return
     key = fingerprint(payload)
     evidence = list(evidence_map(payload).values())
     if kind == "profile":
@@ -274,3 +303,10 @@ def save_output(db, user, instrument, kind, payload, output, provider, model):
                 )
             )
     db.flush()
+
+
+def brief_projection(payload):
+    """Lossless shared-column encoding; saved snapshot keeps named original fields."""
+    from app.tools.registry import compact_model_data
+    return {k:compact_model_data(v) if k in ('financials','changes') else v
+            for k,v in payload.items() if k != 'size'}

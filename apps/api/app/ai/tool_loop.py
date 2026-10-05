@@ -345,6 +345,7 @@ def _initial_checkpoint(
         "version": "assistant-tool-loop-2",
         "resolved_identity": identity,
         "compact_evidence_enabled": settings.assistant_compact_evidence_enabled,
+        "company_digest_enabled": settings.assistant_company_digest_enabled,
         "turns": [turn.to_dict() for turn in turns],
         "evidence": {},
         "next_evidence": 1,
@@ -880,7 +881,8 @@ async def _prepare_evidence(identifier, user_id, payload, checkpoint):
     if 'initial_evidence_plan' not in checkpoint:
         checkpoint['initial_evidence_plan'] = [call.to_dict() for call in initial_calls(
             identity, payload.question, payload.company_only,
-            settings.assistant_max_tool_iterations - checkpoint['reserved_tool_calls'])]
+            settings.assistant_max_tool_iterations - checkpoint['reserved_tool_calls'],
+            use_digests=checkpoint.get("company_digest_enabled", settings.assistant_company_digest_enabled))]
     calls = [ContentBlock.from_dict(call) for call in checkpoint['initial_evidence_plan']]
     unreserved = [call for call in calls if call.id not in checkpoint['reserved_tool_call_ids']]
     _reserve_calls(checkpoint, unreserved)

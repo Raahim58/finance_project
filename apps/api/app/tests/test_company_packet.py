@@ -135,6 +135,8 @@ def test_first_pass_recovery_reuses_saved_plan_and_reservation(monkeypatch):
 
 
 def test_actual_loop_has_evidence_before_first_model_call_and_no_summary_call(client, monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "assistant_company_digest_enabled", False)
     from app.tests.test_phase8_phase2_tool_loop import _auth_with_anthropic, _mock_market
     from app.ai.providers.http_placeholders import AnthropicProvider
     from app.ai.tool_loop import ToolExecution
@@ -243,6 +245,8 @@ def test_company_cache_is_reusable_but_basis_corrections_invalidate_it():
 
 
 def test_offline_legacy_and_compact_loop_comparison(client, monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "assistant_company_digest_enabled", False)
     """Same fixture, real adapters, mocked transport; measure no network latency."""
     import time
     from app.tests.test_phase8_phase2_tool_loop import _auth_with_anthropic, _mock_market

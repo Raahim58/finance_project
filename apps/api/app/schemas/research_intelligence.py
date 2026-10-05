@@ -64,3 +64,18 @@ class EventExplanation(StrictModel):
 
 class DigestOutput(StrictModel):
     events: list[EventExplanation] = Field(max_length=5)
+
+
+class DigestClaim(StrictModel):
+    text: str = Field(min_length=1, max_length=600)
+    kind: Literal['interpretation', 'reported', 'management_claim']
+    refs: list[str] = Field(min_length=1, max_length=8)
+
+
+class CompanyBriefOutput(StrictModel):
+    thesis: list[DigestClaim] = Field(max_length=3)
+    earnings_drivers: list[DigestClaim] = Field(max_length=3)
+    valuation: list[DigestClaim] = Field(max_length=2)
+    catalysts: list[DigestClaim] = Field(max_length=3)
+    risks: list[DigestClaim] = Field(max_length=3)
+    unresolved_questions: list[str] = Field(max_length=6)

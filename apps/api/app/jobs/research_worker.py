@@ -46,7 +46,7 @@ def recover(db):
     now = datetime.now(UTC)
     for job in db.scalars(
         select(ResearchJob).where(
-            ResearchJob.job_type == "company",
+            ResearchJob.job_type.in_(("company", "company_snapshot")),
             ResearchJob.status == "running",
             ResearchJob.lease_until < now,
         )
@@ -56,7 +56,7 @@ def recover(db):
                 select(ResearchJob).where(
                     ResearchJob.parent_id == job.parent_id,
                     ResearchJob.instrument_id == job.instrument_id,
-                    ResearchJob.job_type.in_(("profile", "digest")),
+                    ResearchJob.job_type.in_(("profile", "digest", "company_brief")),
                 )
             )
         )
@@ -181,12 +181,12 @@ async def call_stage(db, company, user, instrument, kind, payload, config):
                 messages,
                 config["model"],
                 options=ProviderCallOptions(
-                    response_schema=schema if kind == "profile" else None,
+                    response_schema=schema if kind in ("profile", "company_brief") else None,
                     json_mode=True,
                     max_output_tokens=1500 if kind == "profile" else 2500,
                     deadline_seconds=60,
                     thinking_level="minimal"
-                    if config["provider"] == "gemini"
+                    if kind != "company_brief" and config["provider"] == "gemini"
                     and config["model"].startswith("gemini-3-flash")
                     else None,
                 ),
@@ -224,6 +224,11 @@ async def call_stage(db, company, user, instrument, kind, payload, config):
         )
         attempt.status = "response_received"
         db.commit()
+        if kind == "company_brief" and result.finish_reason in ('length','max_tokens','MAX_TOKENS','model_context_window_exceeded','incomplete'):
+            attempt.status = stage.status = 'failed'
+            attempt.error_code = stage.error_code = 'provider_output_truncated'
+            db.commit()
+            raise RuntimeError('provider_output_truncated')
         try:
             output = validate_output(kind, result.content, payload)
         except Exception:
@@ -255,6 +260,34 @@ async def execute_company(job_id):
             instrument = db.get(Instrument, job.instrument_id)
             config = json.loads(decrypt_secret(job.request_encrypted))
             try:
+                if job.job_type == "company_snapshot":
+                    from app.services.company_snapshot import build_snapshot, dependency_hash
+                    from app.services.company_digest_service import store_snapshot
+                    from app.models.research_intelligence import CompanyDigest
+                    checkpoint = json.loads(job.result_json or '{}')
+                    saved = db.scalar(select(CompanyDigest).where(CompanyDigest.id == checkpoint.get('snapshot_id'),
+                        CompanyDigest.user_id == user.id,CompanyDigest.instrument_id == instrument.id)) if checkpoint.get('snapshot_id') else None
+                    inputs = saved.input_hash if saved else dependency_hash(db,instrument)
+                    if saved is None:
+                        saved = db.scalar(select(CompanyDigest).where(CompanyDigest.user_id == user.id,
+                            CompanyDigest.instrument_id == instrument.id,CompanyDigest.input_hash == inputs,
+                            CompanyDigest.provider == config['provider'],CompanyDigest.model == config['model'],
+                            CompanyDigest.prompt_version == 'company-brief.v1'))
+                    if saved and saved.brief_json:
+                        job.status = "completed"
+                    else:
+                        payload = json.loads(saved.snapshot_json) if saved else build_snapshot(db,user,instrument)
+                        payload['input_hash'] = inputs
+                        saved = store_snapshot(db,user,instrument,payload,config)
+                        job.result_json = canonical({'snapshot_id':saved.id})
+                        db.commit()  # Snapshot survives model failure; previous brief is not erased.
+                        await call_stage(db,job,user,instrument,"company_brief",payload,config)
+                        job.status = "completed"
+                    job.result_json = canonical({'symbol':instrument.symbol,'input_hash':inputs})
+                    job.lease_until = None
+                    db.commit()
+                    finish_batch(db,user,job.parent_id)
+                    return
                 preparations = await asyncio.to_thread(prepare_company_reports, instrument.id)
                 if current_profile(db, user, instrument, **config) is None:
                     await call_stage(
@@ -285,6 +318,7 @@ async def execute_company(job_id):
                     "provider_request_failed",
                     "provider_key_unavailable",
                     "invalid_model_output",
+                    "provider_output_truncated",
                     "call_budget_exhausted",
                     "research_input_budget_exceeded",
                 }
@@ -303,13 +337,14 @@ def finish_batch(db, user, root_id):
     companies = list(
         db.scalars(
             select(ResearchJob).where(
-                ResearchJob.parent_id == root_id, ResearchJob.job_type == "company"
+                ResearchJob.parent_id == root_id, ResearchJob.job_type.in_(("company", "company_snapshot"))
             )
         )
     )
     if not all(c.status in TERMINAL for c in companies):
         return
     root.status = "completed" if all(c.status == "completed" for c in companies) else "failed"
+    root.error_code = next((c.error_code for c in companies if c.error_code), None)
     if root.portfolio_id:
         try:
             persist_snapshot(db, user, root.portfolio_id)
@@ -333,7 +368,7 @@ async def drain(once=False):
                     recover(db)
                     job = db.scalar(
                         select(ResearchJob)
-                        .where(ResearchJob.job_type == "company", ResearchJob.status == "queued")
+                        .where(ResearchJob.job_type.in_(("company", "company_snapshot")), ResearchJob.status == "queued")
                         .order_by(ResearchJob.created_at, ResearchJob.id)
                         .with_for_update(skip_locked=True)
                         .limit(1)

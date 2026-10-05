@@ -67,3 +67,17 @@ def generate(
 @router.get("/research/jobs/{job_id}")
 def status(job_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return job_status(db, user, job_id)
+
+
+@router.get("/research/companies/{symbol}/digest")
+def digest(symbol: str, active: bool = True, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.research_intelligence_service import resolve_company
+    from app.services.company_digest_service import read_digest
+    return read_digest(db,user,resolve_company(db,symbol),active=active)
+
+
+@router.post("/research/companies/{symbol}/digest/retry", status_code=202)
+def retry_digest(symbol: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.research_intelligence_service import resolve_company
+    from app.services.company_digest_service import read_digest
+    return read_digest(db,user,resolve_company(db,symbol),active=True,retry=True)

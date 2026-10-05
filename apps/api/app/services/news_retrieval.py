@@ -37,7 +37,7 @@ def tag_document(db, document, text):
     db.flush()
 
 
-def search_research_evidence(db,user,payload):
+def search_research_evidence(db,user,payload,*,public_only=False):
     from app.services.rag_service import search_rag, _query_symbols
     identity=hashlib.sha256(json.dumps({'user':user.id,'request':payload.model_dump(mode='json',exclude={'cursor'})},sort_keys=True).encode()).hexdigest()
     offsets={};seen=set();per_document=Counter()
@@ -55,7 +55,7 @@ def search_research_evidence(db,user,payload):
     if not symbols:
         symbols,ambiguous=_query_symbols(db,payload.query)
         if ambiguous:
-            response=search_rag(db,user,RagSearchRequest(query=payload.query,portfolio_id=payload.portfolio_id,limit=payload.limit))
+            response=search_rag(db,None if public_only else user,RagSearchRequest(query=payload.query,portfolio_id=payload.portfolio_id,limit=payload.limit))
             return [],[],{'disambiguation':response.disambiguation.model_dump() if response.disambiguation else None}
     sectors=list(dict.fromkeys(canonical_sector(s) for s in payload.sectors or []))
     if symbols and not sectors:
@@ -78,7 +78,7 @@ def search_research_evidence(db,user,payload):
     results=[];coverage={}
     for name,filters in lanes:
         request=RagSearchRequest(**{**base,**filters,'rank_offset':offsets.get(name,0)})
-        response=search_rag(db,user,request)
+        response=search_rag(db,None if public_only else user,request)
         results.append((name,response.chunks))
         coverage[name]={'candidate_page_size':len(response.chunks),
             'returned':0,'has_more':response.audit.has_more,

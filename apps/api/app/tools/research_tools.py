@@ -76,10 +76,10 @@ class InstrumentSearchInput(BaseModel):
     limit: int = Field(default=10, ge=1, le=20)
 
 
-def _search(db, user, payload: ResearchInput):
+def _search(db, user, payload: ResearchInput, *, public_only=False):
     from app.services.news_retrieval import search_research_evidence
     from app.models.document import Document
-    chosen,citations,coverage=search_research_evidence(db,user,payload)
+    chosen,citations,coverage=search_research_evidence(db,user,payload,public_only=public_only)
     sources=[item.model_dump(mode='json') for item in citations]
     dates={row.id:row.published_date for row in db.scalars(select(Document).where(Document.id.in_([c.document_id for _,c in chosen])))}
     chunks=[{'id':c.id,'document_id':c.document_id,'group':name,'title':c.citation.title,
@@ -308,7 +308,43 @@ def _instruments(db, _user, payload: InstrumentSearchInput):
     )
 
 
+class CompanyDigestInput(BaseModel):
+    instrument_id: str
+
+
+def _company_digest(db,user,payload):
+    from app.services.company_digest_service import read_digest
+    from app.services.research_generation_service import brief_projection
+    instrument = db.get(Instrument,payload.instrument_id)
+    if instrument is None:
+        return tool_result('missing',error={'code':'instrument_not_found'})
+    saved = read_digest(db,user,instrument,active=False)
+    snapshot = saved['snapshot']
+    if not snapshot:
+        return tool_result('missing',{'status':saved['status'],'detail':'No saved company digest yet. Use company_sections/search for evidence; page opening can queue preparation.'},returned=0)
+    # Map snapshot-local refs to unique execution evidence IDs before packet fusion.
+    prefix = 'digest-'+saved['input_hash'][:12]+'-'
+    def refs(value):
+        if isinstance(value,dict):
+            return {k:refs(v) for k,v in value.items()}
+        if isinstance(value,list): return [refs(v) for v in value]
+        if isinstance(value,str) and value in snapshot['sources']: return prefix+value
+        return value
+    data = refs(brief_projection(snapshot))
+    data.pop('sources',None)
+    # The brief belongs to its own input version, which can differ during a refresh.
+    data['brief'] = refs(saved['brief']) if saved['brief_is_current'] else None
+    data['brief_is_current'] = saved['brief_is_current']
+    data['snapshot_is_current'] = snapshot.get('input_hash') == saved['input_hash']
+    if not data['snapshot_is_current']:
+        data.setdefault('missing_data',[]).append({'code':'snapshot_inputs_changed','detail':'Saved snapshot is historical. Read company_sections/market.latest/search for current evidence.'})
+    return tool_result('ok',data,sources=[{'id':prefix+ref,**source} for ref,source in snapshot['sources'].items()],returned=1)
+
+
 def register_research_tools(registry: ToolRegistry) -> None:
+    registry.register(ToolDefinition('research.company_digest','1.0',
+        'Saved compact company snapshot and cited AI thesis; dates, periods, reporting bases and missing data retained. Use company_sections/search for omitted older or detailed evidence. No portfolio or IPS.',
+        CompanyDigestInput,'research:read',True,False,12,_company_digest))
     registry.register(ToolDefinition("research.event_relevance", "1.0",
         "Issuer-scoped direct events and three-factor AI-proposed indirect relationships with original evidence; no impact forecast",
         EventRelevanceInput, "research:read", True, False, 12, _event_relevance))

@@ -137,3 +137,17 @@ class ResearchAttempt(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=now, nullable=False
     )
+
+
+class CompanyDigest(ResearchArtifact, Base):
+    """Company-only snapshot and interpretation; existing research jobs own generation."""
+    __tablename__ = "company_digests"
+    __table_args__ = (
+        UniqueConstraint("user_id", "instrument_id", "input_hash", "prompt_version", "provider", "model", name="uq_company_digest"),
+    )
+    instrument_id: Mapped[str] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
+    prompt_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    brief_json: Mapped[str | None] = mapped_column(Text)
