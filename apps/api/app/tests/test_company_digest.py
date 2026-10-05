@@ -65,6 +65,29 @@ def test_interim_matches_prior_year_not_previous_quarter():
     assert [r['id'] for r in select_periods(rows)]==['0','1']
 
 
+def test_projection_interns_source_documents_without_dropping_quotes_or_facts():
+    payload={'financials':[{'id':'fact','value':'123.0000','unit':'PKR','evidence_refs':['S1']}],
+        'changes':[], 'sources':{
+            'S1':{'document_id':'doc','title':'Annual report','source_url':'https://example.test/report',
+                  'page_number':4,'source_name':'Profit 123; subject to audit'},
+            'S2':{'document_id':'doc','title':'Annual report','source_url':'https://example.test/report',
+                  'page_number':5,'source_name':'Debt 99'}},
+        'coverage':{'news':{'next_cursor':'opaque-large-cursor','groups':{'company':{'has_more':True}}}},
+        'market':{'close':'23.4500','artifact_id':'artifact','date':'2026-10-02'},
+        'corporate_actions':[{'details':{'quote':'Split approved, subject to record date.','source_url':'https://example.test/action'}}]}
+    original=json.loads(json.dumps(payload))
+    projected=brief_projection(payload)
+    assert payload==original
+    assert expand_model_data(projected['financials'])==payload['financials']
+    assert len(projected['source_documents'])==1
+    assert projected['sources']['S1']['source_quote']=='Profit 123; subject to audit'
+    assert projected['sources']['S2']['page_number']==5
+    assert projected['market']=={'close':'23.4500','date':'2026-10-02'}
+    assert projected['corporate_actions'][0]['details']['quote']==payload['corporate_actions'][0]['details']['quote']
+    assert projected['coverage']['news']['groups']['company']['has_more']
+    assert 'next_cursor' not in projected['coverage']['news']
+
+
 def test_excerpt_retains_adjacent_qualification():
     first=' '.join(['evidence']*105)+'.'
     selected,omitted=excerpt(first+' However, the plan has not received approval. Additional context. Unrelated final sentence.')

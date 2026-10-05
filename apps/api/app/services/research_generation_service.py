@@ -306,7 +306,39 @@ def save_output(db, user, instrument, kind, payload, output, provider, model):
 
 
 def brief_projection(payload):
-    """Lossless shared-column encoding; saved snapshot keeps named original fields."""
+    """Exact facts plus compact citation locations; full provenance stays saved."""
     from app.tools.registry import compact_model_data
-    return {k:compact_model_data(v) if k in ('financials','changes') else v
-            for k,v in payload.items() if k != 'size'}
+    projected = {k:compact_model_data(v) if k in ('financials','changes') else v
+                 for k,v in payload.items() if k not in ('size','input_hash')}
+    documents, locations, seen = {}, {}, {}
+    for ref, source in payload.get('sources', {}).items():
+        # URL and database IDs resolve on the server. Titles/dates occur once per
+        # document; exact page and source-row quotes remain beside citation IDs.
+        identity = source.get('document_id') or source.get('source_url') or canonical(source)
+        if identity not in seen:
+            seen[identity] = f'D{len(seen)+1}'
+            documents[seen[identity]] = {k:source[k] for k in ('title','published_at') if source.get(k) is not None}
+            if not source.get('document_id') and source.get('source_name'):
+                documents[seen[identity]]['source_name'] = source['source_name']
+        location = {'document':seen[identity]}
+        if source.get('page_number') is not None: location['page_number'] = source['page_number']
+        if source.get('document_id') and source.get('source_name'): location['source_quote'] = source['source_name']
+        locations[ref] = location
+    projected['sources'] = locations
+    projected['source_documents'] = documents
+
+    def without_provenance(value):
+        if isinstance(value, dict):
+            return {k:without_provenance(v) for k,v in value.items()
+                    if k not in ('artifact_id','artifact_sha256','document_id','source_url')}
+        if isinstance(value, list): return [without_provenance(v) for v in value]
+        return value
+    for key in ('market','macro','corporate_actions'):
+        if key in projected: projected[key] = without_provenance(projected[key])
+    if 'coverage' in projected:
+        coverage = {**projected['coverage']}
+        news = coverage.get('news')
+        if isinstance(news,dict):
+            coverage['news'] = {k:v for k,v in news.items() if k != 'next_cursor'}
+        projected['coverage'] = coverage
+    return projected
