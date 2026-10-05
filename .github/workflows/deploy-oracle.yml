@@ -76,7 +76,7 @@ jobs:
           fi
 
           echo "== Fetching the triggering commit =="
-          git fetch origin main
+          git fetch origin "$deploy_sha"
           git cat-file -e "${deploy_sha}^{commit}"
           git reset --hard "$deploy_sha"
 
