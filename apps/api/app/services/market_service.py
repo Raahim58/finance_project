@@ -46,6 +46,7 @@ def serialize_company(company: Company) -> CompanyResponse:
 
 
 def serialize_price(price: MarketPrice | CanonicalPrice) -> MarketPriceResponse:
+    capitalization = (price.capitalization or {}) if isinstance(price, CanonicalPrice) else {}
     return MarketPriceResponse(
         symbol=price.symbol,
         trade_date=price.trade_date,
@@ -59,6 +60,11 @@ def serialize_price(price: MarketPrice | CanonicalPrice) -> MarketPriceResponse:
         volume=price.volume,
         value=price.value,
         market_cap=price.market_cap,
+        shares_outstanding=capitalization.get('ordinary_shares'),
+        free_float_shares=capitalization.get('free_float_shares'),
+        free_float_market_cap=capitalization.get('free_float_market_cap'),
+        capitalization_date=capitalization.get('trade_date'),
+        capitalization_source_url=capitalization.get('source_url'),
         source=price.source,
         source_url=price.source_url,
         ingested_at=price.observed_at if isinstance(price, CanonicalPrice) else price.ingested_at,
@@ -141,7 +147,32 @@ def get_market_snapshot(db: Session, requested_date: date | None = None) -> Mark
         .order_by(MarketSnapshot.index_name)
         .limit(1)
     )
-    return serialize_snapshot(snapshot) if snapshot else None
+    if snapshot:
+        return serialize_snapshot(snapshot)
+    # Official index closes are already ingested canonically, not into the old
+    # snapshot table. Read them; do not write another synthetic snapshot.
+    from app.models.workstation import Instrument, MarketObservation, SourceArtifact
+    from app.services.canonical_market_service import close_series
+    closes = close_series(db, 'KSE100', end=trade_date)
+    previous_dates = sorted(day for day in closes if day < trade_date)
+    if trade_date not in closes or not previous_dates:
+        return None
+    start = datetime.combine(trade_date, time.min, tzinfo=ZoneInfo('Asia/Karachi'))
+    artifact = db.scalar(select(SourceArtifact).join(MarketObservation, MarketObservation.artifact_id == SourceArtifact.id)
+        .join(Instrument, Instrument.id == MarketObservation.instrument_id)
+        .where(Instrument.symbol == 'KSE100', MarketObservation.is_selected.is_(True),
+            MarketObservation.frequency == 'daily_close', MarketObservation.effective_at >= start,
+            MarketObservation.effective_at < start + timedelta(days=1))
+        .order_by(SourceArtifact.retrieved_at.desc()).limit(1))
+    if artifact is None:
+        return None
+    prices = _prices_for_date(db, trade_date)
+    current, previous = closes[trade_date], closes[previous_dates[-1]]
+    return MarketSnapshotResponse(snapshot_date=trade_date,index_name='KSE-100',index_value=current,
+        index_change=current-previous,index_change_percent=(current-previous)/previous*100,
+        total_volume=sum(row.volume for row in prices),total_value=sum((row.value for row in prices),Decimal('0')),
+        source='PSX DPS',source_url=artifact.source_url,ingested_at=artifact.retrieved_at,
+        totals_note=f'Totals cover {len(prices)} stored securities, excluding indices; value is close × volume, not reported turnover.')
 
 
 def _price_query(trade_date: date) -> Select[tuple[MarketPrice]]:
@@ -154,8 +185,15 @@ def _price_query(trade_date: date) -> Select[tuple[MarketPrice]]:
 def _prices_for_date(db: Session, trade_date: date) -> list[MarketPrice | CanonicalPrice]:
     canonical = canonical_prices_for_date(db, trade_date)
     if canonical:
-        return canonical
+        return _without_indices(db, canonical)
     return list(db.scalars(_price_query(trade_date)))
+
+
+def _without_indices(db, prices):
+    from app.models.workstation import Instrument
+    index_symbols = set(db.scalars(select(Instrument.symbol).where(
+        Instrument.instrument_type.in_(('index','total_return_index')))))
+    return [row for row in prices if row.symbol not in index_symbols]
 
 
 def get_top_gainers(db: Session, requested_date: date | None = None, limit: int = 10) -> list[MarketPriceResponse]:
@@ -178,7 +216,7 @@ def get_top_volume(db: Session, requested_date: date | None = None, limit: int =
 
 def get_sectors(db: Session, requested_date: date | None = None) -> list[SectorDailyStatsResponse]:
     trade_date = resolve_market_date(db, requested_date)
-    canonical = canonical_prices_for_date(db, trade_date)
+    canonical = _without_indices(db, canonical_prices_for_date(db, trade_date))
     if canonical:
         companies = {row.symbol: row for row in db.scalars(select(Company).where(Company.symbol.in_([price.symbol for price in canonical])))}
         grouped: dict[str, list[CanonicalPrice]] = {}

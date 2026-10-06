@@ -2,8 +2,8 @@ import { request } from "@/lib/api/client";
 
 export type Exchange={code:string;name:string;timezone:string};
 export type Company={id:string;symbol:string;name:string;sector:string;exchange:Exchange;official_website?:string|null;psx_url?:string|null;description?:string|null;is_active:boolean};
-export type MarketPrice={symbol:string;trade_date:string;open:string;high:string;low:string;close:string;previous_close:string;change:string;change_percent:string;volume:number;value:string;market_cap?:string|null;source:string;source_url?:string|null;ingested_at:string};
-export type MarketSnapshot={snapshot_date:string;index_name:string;index_value:string;index_change:string;index_change_percent:string;total_volume:number;total_value:string;source:string;ingested_at:string};
+export type MarketPrice={symbol:string;trade_date:string;open:string;high:string;low:string;close:string;previous_close:string;change:string;change_percent:string;volume:number;value:string;market_cap?:string|null;shares_outstanding?:string|null;free_float_shares?:string|null;free_float_market_cap?:string|null;capitalization_date?:string|null;capitalization_source_url?:string|null;source:string;source_url?:string|null;ingested_at:string};
+export type MarketSnapshot={snapshot_date:string;index_name:string;index_value:string;index_change:string;index_change_percent:string;total_volume:number;total_value:string;source:string;ingested_at:string;source_url?:string|null;totals_note?:string|null};
 export type SectorDailyStats={sector:string;trade_date:string;total_volume:number;total_value:string;average_change_percent:string;advancers:number;decliners:number;unchanged:number;source:string};
 export type CompanyDetail={company:Company;latest_price?:MarketPrice|null};
 export type MarketOverview={snapshot?:MarketSnapshot|null;top_gainers:MarketPrice[];top_losers:MarketPrice[];top_volume:MarketPrice[];sectors:SectorDailyStats[]};

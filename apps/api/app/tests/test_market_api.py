@@ -152,3 +152,20 @@ def test_live_mode_exposes_mock_only_market_rows_as_unavailable(client, monkeypa
     assert freshness.status_code == 200
     assert freshness.json()["latest_source"] is None
     assert freshness.json()["is_stale"] is True
+
+
+def test_canonical_share_metadata_survives_company_api_serialization():
+    from app.services.canonical_market_service import CanonicalPrice
+    price=CanonicalPrice(instrument_id=None,symbol='LUCK',trade_date=date(2026,10,2),
+        open=Decimal(410),high=Decimal(412),low=Decimal(409),close=Decimal('410.56'),
+        previous_close=Decimal(413),volume=837001,market_cap=Decimal(601470400000),
+        source='dps',source_url='https://dps.psx.com.pk',artifact_id=None,artifact_sha256=None,
+        observed_at=datetime(2026,10,4,tzinfo=UTC),adjustment_state='unadjusted',quality_status='observed',
+        capitalization={'ordinary_shares':'1465000000','free_float_shares':'439500000',
+            'free_float_market_cap':'180441120000','trade_date':'2026-10-02',
+            'source_url':'https://dps.psx.com.pk/download/indhist/2026-10-02.xls'})
+    result=serialize_price(price)
+    assert result.shares_outstanding==Decimal(1465000000)
+    assert result.free_float_shares==Decimal(439500000)
+    assert result.capitalization_date==date(2026,10,2)
+    assert result.volume==837001 and result.market_cap==Decimal(601470400000)

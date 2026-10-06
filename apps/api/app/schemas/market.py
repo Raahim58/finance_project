@@ -36,6 +36,11 @@ class MarketPriceResponse(BaseModel):
     volume: int
     value: Decimal
     market_cap: Decimal | None = None
+    shares_outstanding: Decimal | None = None
+    free_float_shares: Decimal | None = None
+    free_float_market_cap: Decimal | None = None
+    capitalization_date: date | None = None
+    capitalization_source_url: str | None = None
     source: str
     source_url: str | None = None
     ingested_at: datetime | None
@@ -51,6 +56,8 @@ class MarketSnapshotResponse(BaseModel):
     total_value: Decimal
     source: str
     ingested_at: datetime
+    source_url: str | None = None
+    totals_note: str | None = None
 
 
 class SectorDailyStatsResponse(BaseModel):
