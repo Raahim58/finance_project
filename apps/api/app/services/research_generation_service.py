@@ -324,7 +324,7 @@ def brief_projection(payload):
         if source.get('page_number') is not None: location['page_number'] = source['page_number']
         if source.get('document_id') and source.get('source_name'): location['source_quote'] = source['source_name']
         locations[ref] = location
-    projected['sources'] = locations
+    projected['sources'] = compact_model_data([{'ref':ref, **location} for ref,location in locations.items()])
     projected['source_documents'] = documents
 
     def without_provenance(value):
@@ -341,4 +341,6 @@ def brief_projection(payload):
         if isinstance(news,dict):
             coverage['news'] = {k:v for k,v in news.items() if k != 'next_cursor'}
         projected['coverage'] = coverage
-    return projected
+    # The same shared-column encoding applies to repeated disclosure/news/action
+    # fields, not just financial rows. Values and qualification text are unchanged.
+    return compact_model_data(projected)

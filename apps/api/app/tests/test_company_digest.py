@@ -80,10 +80,11 @@ def test_projection_interns_source_documents_without_dropping_quotes_or_facts():
     assert payload==original
     assert expand_model_data(projected['financials'])==payload['financials']
     assert len(projected['source_documents'])==1
-    assert projected['sources']['S1']['source_quote']=='Profit 123; subject to audit'
-    assert projected['sources']['S2']['page_number']==5
+    locations={row['ref']:row for row in expand_model_data(projected['sources'])}
+    assert locations['S1']['source_quote']=='Profit 123; subject to audit'
+    assert locations['S2']['page_number']==5
     assert projected['market']=={'close':'23.4500','date':'2026-10-02'}
-    assert projected['corporate_actions'][0]['details']['quote']==payload['corporate_actions'][0]['details']['quote']
+    assert expand_model_data(projected['corporate_actions'])[0]['details']['quote']==payload['corporate_actions'][0]['details']['quote']
     assert projected['coverage']['news']['groups']['company']['has_more']
     assert 'next_cursor' not in projected['coverage']['news']
 
@@ -142,7 +143,7 @@ def test_worker_one_call_saved_and_reopening_zero_calls(monkeypatch):
             calls.append(messages)
             payload=json.loads(messages[1]['content'].split('INPUT_JSON\n')[1].split('\nOUTPUT_SCHEMA')[0])
             output={k:[] for k in ('thesis','earnings_drivers','valuation','catalysts','risks','unresolved_questions')}
-            output['thesis']=[{'text':'Expansion remains conditional on financing.','kind':'interpretation','refs':[payload['news'][0]['id']]}]
+            output['thesis']=[{'text':'Expansion remains conditional on financing.','kind':'interpretation','refs':[expand_model_data(payload['news'])[0]['id']]}]
             return LLMProviderResult(content=json.dumps(output),provider='zai',model=model,input_tokens=2000,output_tokens=200,finish_reason='stop')
     monkeypatch.setattr(research_worker,'get_provider',lambda name:Provider())
     with SessionLocal() as db:

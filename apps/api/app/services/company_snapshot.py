@@ -9,7 +9,7 @@ from app.models.workstation import FinancialFact, StandardizedFinancialFact, Cor
 from app.reasoning.projection import estimate_tokens
 from app.ai.company_packet import financial_changes
 
-VERSION = 'company-snapshot.v2'
+VERSION = 'company-snapshot.v3'
 TARGET_TOKENS = 5000
 
 
