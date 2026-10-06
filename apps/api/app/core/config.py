@@ -124,6 +124,19 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    # Restoration is explicitly activated after migration/canary validation.
+    pipeline_dispatch_scope: str = ""
+    pipeline_enabled: bool = False
+    pipeline_enrichment_enabled: bool = False
+    pipeline_max_live_articles: int = 300
+    pipeline_max_history_articles: int = 100
+    pipeline_max_history_pdfs: int = 25
+    pipeline_max_vectors: int = 200_000
+    pipeline_data_root: str = "/data"
+    pipeline_raw_budget_gib: int = 48
+    pipeline_database_budget_gib: int = 24
+    pipeline_min_free_gib: int = 20
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, value: str | list[str]) -> list[str]:

@@ -19,6 +19,9 @@ QUEUE_TARGETS = {
 
 
 def main() -> None:
+    if settings.pipeline_enabled:
+        print("Pipeline scheduler owns ingestion; legacy producer disabled", flush=True)
+        return
     redis = Redis.from_url(settings.celery_broker_url)
     while True:
         try:

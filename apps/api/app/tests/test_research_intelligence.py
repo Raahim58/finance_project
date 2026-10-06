@@ -569,6 +569,8 @@ def test_news_clusters_merge_only_with_compatible_raw_scope():
         seed(db)
         for raw in db.scalars(select(Event)):
             raw.event_type = "news"
+        for document in db.scalars(select(Document)):
+            document.document_type="news"
         db.commit()
         assert len(event_views(db)) == 2  # Different issuers must remain separate.
         for link in db.scalars(select(EventEntityLink)):

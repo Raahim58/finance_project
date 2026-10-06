@@ -114,9 +114,7 @@ def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=Non
             Document.status == "parsed",
             Document.id.in_(
                 select(DocumentChunk.document_id).where(
-                    DocumentChunk.embedding_status == "indexed",
-                    DocumentChunk.embedding_model == active_embedding_model(),
-                    DocumentChunk.embedding_index_version == settings.embedding_index_version,
+                    DocumentChunk.embedding_status.in_(("indexed","lexical_only")),
                     DocumentChunk.content_type != "boilerplate",
                 )
             ),
@@ -163,9 +161,7 @@ def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=Non
         )
         .where(
             DocumentChunk.document_id.in_(document_ids),
-            DocumentChunk.embedding_status == "indexed",
-            DocumentChunk.embedding_model == active_embedding_model(),
-            DocumentChunk.embedding_index_version == settings.embedding_index_version,
+            DocumentChunk.embedding_status.in_(("indexed","lexical_only")),
             DocumentChunk.content_type != "boilerplate",
         )
         .subquery()
@@ -213,11 +209,14 @@ def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=Non
                 "normalized_event_id": norm.id,
                 "title": raw.title,
                 "occurred_at": raw.occurred_at,
+                "event_time_end":norm.event_time_end, "geography":norm.geography,
+                "magnitude":norm.magnitude,"magnitude_unit":norm.magnitude_unit,
+                "details":json.loads(norm.details_json or "{}"),
                 "event_type": norm.event_type,
                 "classification_status": norm.classification_status,
-                "source_document_type": "announcement"
-                if raw.event_type == "announcement"
-                else "news",
+                "source_document_type": documents[selected[0].document_id].document_type if selected else raw.event_type,
+                "statement_kind":json.loads(raw.details_json or "{}").get("kind"),
+                "lifecycle":json.loads(raw.details_json or "{}").get("lifecycle"),
                 "factor": norm.factor,
                 "factors": detect_factors(text),
                 "materiality": norm.materiality,

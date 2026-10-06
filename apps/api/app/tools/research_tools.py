@@ -84,8 +84,8 @@ def _search(db, user, payload: ResearchInput, *, public_only=False):
     dates={row.id:row.published_date for row in db.scalars(select(Document).where(Document.id.in_([c.document_id for _,c in chosen])))}
     chunks=[{'id':c.id,'document_id':c.document_id,'group':name,'title':c.citation.title,
         'published_date':str(dates[c.document_id]) if dates.get(c.document_id) else None,
-        'text':c.chunk_text,'source_ref':c.citation.id,
-        'evidence_kind':c.metadata.get('evidence_kind','reporting')} for name,c in chosen]
+        'text':c.chunk_text,'source_ref':c.citation.id,'document_type':c.document_type,
+        'evidence_kind':c.metadata.get('evidence_kind', 'reporting' if c.document_type == 'news' else c.document_type)} for name,c in chosen]
     return tool_result(
         "ok" if chunks else "missing", {"chunks":chunks, "coverage":coverage},
         sources=sources,
@@ -320,6 +320,22 @@ def _company_digest(db,user,payload):
         return tool_result('missing',error={'code':'instrument_not_found'})
     saved = read_digest(db,user,instrument,active=False)
     snapshot = saved['snapshot']
+    if not snapshot and saved.get('prepared_intelligence'):
+        import copy
+        prepared=copy.deepcopy(saved['prepared_intelligence'])
+        sources=[]
+        for section in prepared:
+            section['source_refs']=[]
+            for row in section.get('content',{}).get('evidence',[]):
+                identifier=row.get('id') or row.get('statement_id')
+                if identifier: row['evidence_refs']=[identifier]
+                for field in ('id','statement_id','document_id','source_name','source_url','page_number','version'):
+                    row.pop(field,None)
+            for source in section.pop('sources',[]):
+                ref=source.get('fact_id') or source.get('statement_id')
+                section['source_refs'].append(ref)
+                sources.append({'id':ref,**source})
+        return tool_result('ok',{'prepared_intelligence':prepared,'brief_is_current':False,'status':'source_grounded'},sources=sources,returned=len(prepared))
     if not snapshot:
         return tool_result('missing',{'status':saved['status'],'detail':'No saved company digest yet. Use company_sections/search for evidence; page opening can queue preparation.'},returned=0)
     # Map snapshot-local refs to unique execution evidence IDs before packet fusion.
@@ -331,9 +347,11 @@ def _company_digest(db,user,payload):
         if isinstance(value,str) and value in snapshot['sources']: return prefix+value
         return value
     data = refs(brief_projection(snapshot))
-    data.pop('sources',None)
+    data['citation_locations'] = data.pop('sources',None)
     # The brief belongs to its own input version, which can differ during a refresh.
-    data['brief'] = refs(saved['brief']) if saved['brief_is_current'] else None
+    data['brief'] = None
+    data['brief_validation_status'] = saved.get('brief_validation_status','reference_only')
+    data['interpretation_gap'] = 'Saved AI narrative has not passed source entailment review; answer from supplied facts and excerpts.'
     data['brief_is_current'] = saved['brief_is_current']
     data['snapshot_is_current'] = snapshot.get('input_hash') == saved['input_hash']
     if not data['snapshot_is_current']:

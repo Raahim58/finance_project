@@ -992,7 +992,7 @@ class ContextBuilder:
         evidence = []
         for dimension, observation in data.get("dimensions", {}).items():
             underlying = (
-                observation.get("artifact_id")
+                observation.get("observation_id") or observation.get("artifact_id")
                 or f"{observation.get('series_key')}:{observation.get('effective_date') or observation.get('trade_date')}"
             )
             source_value = (
@@ -1008,6 +1008,7 @@ class ContextBuilder:
                     "structured_fact",
                     f"macro:{underlying}",
                     source_name,
+                    source_url=observation.get("source_url"),
                     as_of=observation.get("release_at")
                     or observation.get("effective_date")
                     or observation.get("trade_date"),
@@ -1017,7 +1018,7 @@ class ContextBuilder:
         state = (
             ContextState.NOT_EVALUATED
             if data.get("regime") == "not_evaluated"
-            else ContextState.CURRENT
+            else ContextState.INCOMPLETE if data.get("stale_dimensions") else ContextState.CURRENT
         )
         missing = (
             []
@@ -1027,7 +1028,7 @@ class ContextBuilder:
                     instrument,
                     "macro_regime",
                     state,
-                    "Not enough selected structured observations exist to classify the regime.",
+                    "Stale macro observations are excluded from current regime calculations." if data.get("stale_dimensions") else "Not enough selected structured observations exist to classify the regime.",
                     {"minimum_evaluable_dimensions": 2, "cadence": "source_release"},
                 )
             ]
@@ -1037,7 +1038,7 @@ class ContextBuilder:
             state,
             data,
             evidence,
-            provenance={"classification": "rule_based_v1", "observations_separate": True},
+            provenance={"classification": "rule_based_v2", "observations_separate": True},
         ), missing
 
     @staticmethod

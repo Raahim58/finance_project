@@ -9,7 +9,7 @@ from app.models.workstation import FinancialFact, StandardizedFinancialFact, Cor
 from app.reasoning.projection import estimate_tokens
 from app.ai.company_packet import financial_changes
 
-VERSION = 'company-snapshot.v3'
+VERSION = 'company-snapshot.v4'
 TARGET_TOKENS = 5000
 
 
@@ -41,7 +41,9 @@ def select_periods(facts):
 
 def financial_rows(db, instrument):
     today = date.today()
+    usable_docs=select(Document.id).where(Document.status.not_in(('revoked','superseded','failed')))
     filings = list(db.scalars(select(FinancialFact).where(
+        or_(FinancialFact.document_id.is_(None),FinancialFact.document_id.in_(usable_docs)),
         FinancialFact.instrument_id == instrument.id, FinancialFact.period_end <= today,
         or_(FinancialFact.confidence.is_(None), FinancialFact.confidence > 0),
         or_(FinancialFact.filing_date.is_(None), FinancialFact.filing_date <= today))
@@ -78,15 +80,15 @@ def dependency_hash(db, instrument):
         'facts': select_periods(financial_rows(db, instrument)),
         'prices': [tuple(r) for r in db.execute(select(MarketObservation.id, MarketObservation.effective_at,
             MarketObservation.values_json, MarketObservation.artifact_id).where(MarketObservation.instrument_id == instrument.id,
-            MarketObservation.is_selected.is_(True)).order_by(MarketObservation.id))],
+            MarketObservation.is_selected.is_(True)).order_by(MarketObservation.effective_at.desc(),MarketObservation.id).limit(1))],
         'legacy_prices': [tuple(r) for r in db.execute(select(MarketPrice.id, MarketPrice.trade_date, MarketPrice.close,
-            MarketPrice.previous_close, MarketPrice.volume).where(MarketPrice.symbol == instrument.symbol).order_by(MarketPrice.id))],
+            MarketPrice.previous_close, MarketPrice.volume).where(MarketPrice.symbol == instrument.symbol).order_by(MarketPrice.trade_date.desc(),MarketPrice.id).limit(1))],
         'screening': [tuple(r) for r in db.execute(select(CompanyScreeningSnapshot.id, CompanyScreeningSnapshot.metrics_json)
             .where(CompanyScreeningSnapshot.instrument_id == instrument.id).order_by(CompanyScreeningSnapshot.as_of_date.desc()).limit(1))],
         'macro': [tuple(r) for r in db.execute(select(MacroObservation.id, MacroObservation.value, MacroObservation.revision,
             MacroObservation.effective_date).where(MacroObservation.is_selected.is_(True)).order_by(MacroObservation.id))],
         'sector': [tuple(r) for r in db.execute(select(SectorDailyStats.id, SectorDailyStats.trade_date, SectorDailyStats.total_value,
-            SectorDailyStats.average_change_percent).order_by(SectorDailyStats.trade_date.desc()).limit(100))],
+            SectorDailyStats.average_change_percent).where(SectorDailyStats.sector==instrument.sector).order_by(SectorDailyStats.trade_date.desc()).limit(1))],
     }
     # Tags allow sector/global articles without a direct company name. Include text/version corrections.
     tags = select(DocumentEvidenceTag.document_id).where(or_(

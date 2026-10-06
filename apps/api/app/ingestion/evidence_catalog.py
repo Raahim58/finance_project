@@ -33,6 +33,7 @@ class SourceSpec:
 
 
 SOURCE_SPECS = (
+    SourceSpec("tavily", "Tavily discovery pilot", "https://api.tavily.com", "discovery", ("discovery",), ("markets",), "tavily", 86400, 548, False, "https://api.tavily.com/search", daily_discovery_budget=30, daily_fetch_budget=30, daily_selected_budget=30),
     SourceSpec("world_fertilizer", "World Fertilizer", "https://www.worldfertilizer.com", "specialist", ("reporting", "context"), ("fertilizer",), "rss", 1800, 90, settings.evidence_pass4_breadth_enabled, "https://www.worldfertilizer.com/rss/worldfertilizer.xml", "commodities", None, "pass4_breadth", 100, 20, 10),
     SourceSpec("world_cement", "World Cement", "https://www.worldcement.com", "specialist", ("reporting", "context"), ("cement",), "rss", 1800, 90, settings.evidence_pass4_breadth_enabled, "https://www.worldcement.com/rss/worldcement.xml", "commodities", None, "pass4_breadth", 100, 20, 10),
     SourceSpec("oilprice", "OilPrice", "https://oilprice.com", "specialist", ("reporting", "context"), ("energy", "geopolitics"), "rss", 1800, 90, settings.evidence_pass4_breadth_enabled, "https://oilprice.com/rss/main", "commodities", None, "pass4_breadth", 100, 20, 10),

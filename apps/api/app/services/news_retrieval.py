@@ -40,13 +40,13 @@ def tag_document(db, document, text):
 def search_research_evidence(db,user,payload,*,public_only=False):
     from app.services.rag_service import search_rag, _query_symbols
     identity=hashlib.sha256(json.dumps({'user':user.id,'request':payload.model_dump(mode='json',exclude={'cursor'})},sort_keys=True).encode()).hexdigest()
-    offsets={};seen=set();per_document=Counter()
+    offsets={};seen=set();per_document=Counter();passages=set()
     if payload.cursor:
         try:
             state=json.loads(base64.urlsafe_b64decode(payload.cursor))
             if state['scope']!=identity: raise ValueError('scope mismatch')
             if not isinstance(state['offsets'],dict) or not isinstance(state['seen'],list) or not isinstance(state['documents'],dict): raise ValueError('cursor shape')
-            offsets=state['offsets'];seen=set(state['seen']);per_document=Counter(state['documents'])
+            offsets=state['offsets'];seen=set(state['seen']);per_document=Counter(state['documents']);passages=set(state.get('passages',[]))
             if (len(seen)>80 or any(not isinstance(v,int) or v<0 or v>200 for v in offsets.values())
                 or any(not isinstance(v,int) or v<0 or v>2 for v in per_document.values())): raise ValueError('cursor bounds')
         except (ValueError,TypeError,KeyError) as exc:
@@ -72,7 +72,9 @@ def search_research_evidence(db,user,payload,*,public_only=False):
         clean=re.sub(r'\b(?:'+ '|'.join(re.escape(s) for s in symbols)+r')\b','',payload.query,flags=re.I) if symbols else payload.query
         if sectors: lanes.append(('sector',dict(query=clean+' '+' '.join(sectors),sector_tags=sectors,auto_symbols=False)))
         if symbols or topics:
-            topics=topics or classify_news(payload.query)['topics'] or ['rates','inflation','fx','geopolitics']
+            topics=topics or classify_news(payload.query)['topics']
+            if not topics or set(topics)<= {'earnings','investment','dividends'}:
+                topics=list(dict.fromkeys([*topics,'rates','inflation','fx','geopolitics']))
             expanded=' '.join(term for topic in topics for term in TOPIC_TERMS.get(topic,(topic,)))
             lanes.append(('broader',dict(query=expanded+' '+clean,topics=topics,auto_symbols=False,document_types=['news','macro_report','policy_document'])))
     results=[];coverage={}
@@ -92,7 +94,10 @@ def search_research_evidence(db,user,payload,*,public_only=False):
             if offset>=len(rows) or len(chosen)>=payload.limit: continue
             chunk=rows[offset]
             consumed[name]+=1
-            if chunk.id in seen or per_document[chunk.document_id]>=2: continue
+            passage=hashlib.sha256(' '.join(chunk.chunk_text.split()).casefold().encode()).hexdigest()
+            if chunk.id in seen or passage in passages or per_document[chunk.document_id]>=2: continue
+            if name in ('sector','broader') and not supported_context(chunk.chunk_text, sectors, name): continue
+            passages.add(passage)
             seen.add(chunk.id);per_document[chunk.document_id]+=1;chosen.append((name,chunk))
             coverage[name]['returned']+=1
     for name,rows in results:
@@ -101,8 +106,28 @@ def search_research_evidence(db,user,payload,*,public_only=False):
     next_cursor=None
     if any(c['has_more'] for c in coverage.values()) and len(seen)<=70 and all(v<=190 for v in offsets.values()):
         next_cursor=base64.urlsafe_b64encode(json.dumps({'scope':identity,'offsets':offsets,
-            'seen':sorted(seen),'documents':dict(per_document)},separators=(',',':')).encode()).decode()
+            'seen':sorted(seen),'documents':dict(per_document),'passages':sorted(passages)},separators=(',',':')).encode()).decode()
     return chosen,[chunk.citation for _,chunk in chosen],{'groups':coverage,
         'next_cursor':next_cursor,
         'cursor_window_exhausted':next_cursor is None and any(c['has_more'] for c in coverage.values()),
         'coverage_note':'Matching stored evidence; not a claim of complete news coverage.'}
+
+
+def supported_context(text, sectors, lane):
+    """Explicit transport/commodity transmission or Pakistan context is required.
+
+    This is a conservative v1 gate, not proof of company exposure. The lane label
+    remains visible; stronger indirect relationships need source-backed links.
+    """
+    local=bool(re.search(r'\b(pakistan|pkr|psx|karachi|islamabad|sbp)\b',text,re.I))
+    if local: return True
+    drivers={
+        'cement':r'\b(energy prices|fuel|coal|freight|shipping|oil|gas tariffs|electricity)\b',
+        'fertilizer':r'\b(natural gas|gas prices|urea prices|lng|energy prices|shipping)\b',
+        'textile':r'\b(cotton prices|cotton supply|freight|shipping|energy prices)\b',
+        'energy':r'\b(brent|oil prices|opec|lng|shipping|energy prices)\b',
+        'banking':r'\b(policy rate|interest rates|inflation|sovereign debt)\b',
+    }
+    patterns=[drivers[s] for s in sectors if s in drivers]
+    if lane=='broader': patterns.append(r'\b(shipping|fuel supply|oil prices|trade sanctions|energy prices|policy rate|interest rates|inflation|exchange rate)\b')
+    return any(re.search(pattern,text,re.I) for pattern in patterns)

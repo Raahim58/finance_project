@@ -27,7 +27,7 @@ def main() -> None:
             batch = rows[start:start + args.batch_size]
             vectors = embed_texts([chunk.chunk_text for chunk, _document in batch])
             for (chunk, document), vector in zip(batch, vectors, strict=True):
-                chunk.embedding_json = json.dumps(vector)
+                chunk.embedding_json = json.dumps(vector) if db.bind.dialect.name != "postgresql" else "[]"
                 chunk.embedding_vector = vector if db.bind and db.bind.dialect.name == "postgresql" else json.dumps(vector)
                 chunk.embedding_model = active_embedding_model()
                 chunk.embedding_index_version = settings.embedding_index_version

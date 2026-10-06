@@ -4,12 +4,12 @@ import math
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, literal_column, text
 from sqlalchemy.orm import Session
 
 from app.models.document import Citation, Document, DocumentChunk, DocumentPage
@@ -264,7 +264,7 @@ def parse_document_content(filename: str, content: bytes) -> list[ParsedPage]:
     return parse_plain_text(content)
 
 
-def index_document_pages(db: Session, document: Document, pages: list[ParsedPage]) -> int:
+def index_document_pages(db: Session, document: Document, pages: list[ParsedPage], *, physical_pages: bool = True) -> int:
     """Index an existing document atomically without replacing its identity or financial facts.
 
     Caller holds the document row lock. Partial indexes are repaired by rebuilding only
@@ -290,23 +290,37 @@ def index_document_pages(db: Session, document: Document, pages: list[ParsedPage
                             text=page.text, metadata_json=json.dumps(metadata)))
         units.extend(chunk_page_text(page.text, page.page_number))
     chunk_index = 0
-    for offset in range(0, len(units), 128):
-        batch = units[offset:offset + 128]
-        vectors = embed_texts([text for text, _page in batch])
+    hot_limit=12 if document.document_type=='news' else 30
+    vector_slots=max(0,settings.pipeline_max_vectors-(db.scalar(select(func.count()).select_from(DocumentChunk)
+        .where(DocumentChunk.embedding_vector.is_not(None))) or 0)) if settings.pipeline_enabled else len(units)
+    hot_indexes=set(range(min(hot_limit,vector_slots,len(units)))) if settings.pipeline_enabled else set(range(len(units)))
+    if settings.pipeline_enabled and document.document_type=='news' and document.published_date and document.published_date<date.today()-timedelta(days=90):
+        hot_indexes=set()
+    for offset in range(0, len(units), 32):
+        batch = units[offset:offset + 32]
+        eligible=[i for i in range(len(batch)) if offset+i in hot_indexes]
+        vector_map={}
+        if eligible:
+            try:
+                vector_map=dict(zip(eligible,embed_texts([batch[i][0] for i in eligible]),strict=True))
+            except (RuntimeError,ImportError,OSError):
+                # Full lexical text/citations survive embedding outages.
+                vector_map={}
+        vectors=[vector_map.get(i) for i in range(len(batch))]
         for (text, page_number), vector in zip(batch, vectors, strict=True):
             content_type = classify_chunk_content(text)
             chunk = DocumentChunk(document_id=document.id, company_id=document.company_id,
                 symbol=document.symbol, chunk_index=chunk_index, chunk_text=text,
-                token_count=len(tokenize(text)), embedding_json=json.dumps(vector),
-                embedding_vector=vector if db.bind.dialect.name == "postgresql" else json.dumps(vector),
+                token_count=len(tokenize(text)), embedding_json=json.dumps(vector) if db.bind.dialect.name != "postgresql" and vector is not None else "[]",
+                embedding_vector=(vector if db.bind.dialect.name == "postgresql" else json.dumps(vector)) if vector is not None else None,
                 metadata_json=json.dumps({**metadata, "page_number": page_number, "content_type": content_type}),
-                source_url=document.source_url, page_number=page_number,
+                source_url=document.source_url, page_number=page_number if physical_pages else None,
                 section_title=infer_section_title(text), content_type=content_type,
                 embedding_model=active_embedding_model(), embedding_index_version=settings.embedding_index_version,
-                embedding_status="indexed")
+                embedding_status="indexed" if vector is not None else "lexical_only")
             db.add(chunk); db.flush()
             db.add(Citation(document_id=document.id, chunk_id=chunk.id, source_name=document.source_name,
-                source_url=document.source_url, title=document.title, page_number=page_number,
+                source_url=document.source_url, title=document.title, page_number=page_number if physical_pages else None,
                 quote_snippet=first_snippet(text)))
             chunk_index += 1
     db.flush()
@@ -336,6 +350,7 @@ def create_document_from_pages(
     source_tier_value: int | None = None,
     data_status: str | None = None,
     commit: bool = True,
+    physical_pages: bool = True,
 ) -> Document:
     full_text = "\n\n".join(page.text for page in pages)
     if not full_text.strip():
@@ -378,7 +393,7 @@ def create_document_from_pages(
     db.add(document)
     db.flush()
 
-    index_document_pages(db, document, pages)
+    index_document_pages(db, document, pages, physical_pages=physical_pages)
 
     if commit:
         db.commit()
@@ -609,9 +624,7 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         base_query=base_query.where(or_(public,Document.owner_user_id==user.id,Document.portfolio_id.in_(owned)))
     base_query = base_query.where(
         Document.data_status.not_in(("synthetic_demo", "excluded_irrelevant")),
-        DocumentChunk.embedding_status == "indexed",
-        DocumentChunk.embedding_model == active_embedding_model(),
-        DocumentChunk.embedding_index_version == settings.embedding_index_version,
+        Document.status.not_in(("revoked", "superseded", "failed")),
     )
     if plan.symbols:
         from app.models.document import DocumentEvidenceTag
@@ -638,22 +651,46 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
     if plan.portfolio_id:
         base_query = base_query.where(or_(Document.portfolio_id == plan.portfolio_id, Document.visibility == "public"))
 
-    query_vector = embed_text(plan.query)
-    candidate_depth = max(settings.retrieval_candidate_depth, (payload.rank_offset + plan.limit) * 8)
+    try:
+        query_vector = embed_text(plan.query)
+    except (RuntimeError,ImportError,OSError):
+        query_vector = None
+    # Unembedded history participates in lexical retrieval. Embedding validity
+    # only constrains the semantic lane, never admission to the text corpus.
+    semantic_query = base_query.where(DocumentChunk.embedding_status == "indexed",
+        DocumentChunk.embedding_model == active_embedding_model(),
+        DocumentChunk.embedding_index_version == settings.embedding_index_version)
+    candidate_depth = min(240, max(30, payload.rank_offset + plan.limit))
     if db.bind and db.bind.dialect.name == "postgresql":
+        filtered_count=db.scalar(select(func.count()).select_from(semantic_query.subquery())) or 0
+        distance=DocumentChunk.embedding_vector.cosine_distance(query_vector) if query_vector is not None else None
+        # A non-indexable distance expression makes the small filtered path
+        # exact. Large universes use the HNSW cosine index with bounded retry.
+        if filtered_count>10_000:
+            db.execute(text("SET LOCAL hnsw.ef_search = 100"))
+            db.execute(text("SET LOCAL hnsw.iterative_scan = strict_order"))
         semantic_rows = db.execute(
-            base_query.where(DocumentChunk.embedding_vector.is_not(None))
-            .order_by(DocumentChunk.embedding_vector.cosine_distance(query_vector))
+            semantic_query.where(DocumentChunk.embedding_vector.is_not(None))
+            .order_by(distance if filtered_count>10_000 else distance+0)
             .limit(candidate_depth)
-        ).all()
+        ).all() if distance is not None else []
+        if filtered_count>10_000 and len(semantic_rows)<min(candidate_depth,filtered_count):
+            db.execute(text("SET LOCAL hnsw.ef_search = 200"))
+            semantic_rows=db.execute(semantic_query.where(DocumentChunk.embedding_vector.is_not(None))
+                .order_by(distance).limit(candidate_depth)).all()
         lexical_document = func.concat_ws(
             " ",
             Document.title,
             func.coalesce(DocumentChunk.section_title, ""),
             DocumentChunk.chunk_text,
         )
-        vector = func.to_tsvector("english", lexical_document)
-        lexical_query = func.websearch_to_tsquery("english", plan.query)
+        vector = literal_column('document_chunks.search_vector')
+        # Intent expansion is disjunctive. Exact entity filters remain in SQL.
+        terms=[token for token in plan.query_tokens if token.upper() not in plan.symbols]
+        if payload.topics:
+            from app.ingestion.news_selection import TOPIC_TERMS
+            terms.extend(term for topic in payload.topics for term in TOPIC_TERMS.get(topic,(topic,)))
+        lexical_query = func.websearch_to_tsquery("english", ' OR '.join('"'+term.replace('"','')+'"' for term in terms) or plan.query)
         lexical_rows = db.execute(
             base_query.where(vector.op("@@")(lexical_query))
             .order_by(func.ts_rank_cd(vector, lexical_query).desc())
@@ -677,8 +714,14 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
     rejected: Counter = Counter()
     for chunk_id, (chunk, document, _citation) in candidates.items():
         try:
-            stored_vector = json.loads(chunk.embedding_json)
-            semantic_scores[chunk_id] = cosine_similarity(query_vector, stored_vector)
+            if (query_vector is None or chunk.embedding_status != "indexed" or chunk.embedding_model != active_embedding_model()
+                    or chunk.embedding_index_version != settings.embedding_index_version):
+                semantic_scores[chunk_id] = -1.0
+            else:
+                stored_vector = chunk.embedding_vector
+                if stored_vector is None or isinstance(stored_vector, str):
+                    stored_vector = json.loads(chunk.embedding_json)
+                semantic_scores[chunk_id] = cosine_similarity(query_vector, stored_vector)
         except (TypeError, ValueError, json.JSONDecodeError):
             semantic_scores[chunk_id] = -1.0
             rejected["malformed_embedding"] += 1
@@ -687,15 +730,20 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         )
         lexical_scores[chunk_id] = lexical_score(plan.query_tokens, lexical_text)
         if payload.topics:
-            from app.ingestion.news_selection import TOPIC_TERMS, matches
-            # Expanded topics are alternatives, not a requirement that one
-            # paragraph mention sanctions AND tariffs AND every war synonym.
-            if any(matches(lexical_text, TOPIC_TERMS.get(topic,(topic,))) for topic in payload.topics):
-                lexical_scores[chunk_id]=max(lexical_scores[chunk_id],settings.retrieval_min_lexical_score)
+            # Each expansion is an OR alternative. Score its actual phrase
+            # coverage, rather than forcing every synonym into one denominator.
+            from app.ingestion.news_selection import TOPIC_TERMS
+            alternative_scores=[]
+            for topic in payload.topics:
+                for term in TOPIC_TERMS.get(topic,(topic,)):
+                    term_tokens=tokenize(term,meaningful=True)
+                    if term_tokens and re.search(r'(?<!\w)'+re.escape(term)+r'(?!\w)',lexical_text,re.I):
+                        alternative_scores.append(lexical_score(term_tokens,lexical_text))
+            if alternative_scores: lexical_scores[chunk_id]=max(lexical_scores[chunk_id],max(alternative_scores))
 
     semantic_ranking = (
         sorted(candidates, key=lambda item: (-semantic_scores[item], item))[:candidate_depth]
-        if settings.embedding_backend == "sentence_transformers"
+        if settings.embedding_backend == "sentence_transformers" and query_vector is not None
         else []
     )
     lexical_ranking = [
@@ -715,7 +763,7 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         semantic_ok = (
             settings.embedding_backend == "sentence_transformers"
             and semantic >= settings.retrieval_min_semantic_score
-            and (lexical > 0 or bool(payload.sector_tags or payload.topics))
+            and lexical > 0
         )
         lexical_ok = lexical >= settings.retrieval_min_lexical_score
         if not (semantic_ok or lexical_ok):
@@ -733,12 +781,12 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         if not citation_eligible:
             rejected["missing_citation_provenance"] += 1
             continue
-        final_score = (
-            fused_score
-            + freshness_adjustment(document.published_date)
-            + source_adjustment(document.source_tier)
-            + content_adjustment(chunk.content_type, table_intent=table_intent)
-        )
+        normalized_rrf=min(1.0,fused_score/(2/(settings.retrieval_rrf_k+1)))
+        relevance=1.0 if plan.symbols else .7 if payload.sector_tags else .3
+        quality=max(0.0,min(1.0,(4-document.source_tier)/3))
+        freshness=max(0.0,min(1.0,.5+freshness_adjustment(document.published_date)))
+        final_score = (.55*normalized_rrf+.20*lexical+.15*relevance+.05*quality+.05*freshness
+            +content_adjustment(chunk.content_type,table_intent=table_intent))
         ranked.append((final_score, fused_score, semantic, lexical, chunk, document, citation))
 
     ranked.sort(key=lambda item: (-item[0], item[4].id))

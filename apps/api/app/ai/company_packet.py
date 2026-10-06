@@ -48,7 +48,7 @@ def initial_calls(identity, question, company_only, allowance, *, use_digests=Fa
             add('research.company_sections', {'instrument_id': instrument_id,
                 'sections': [section], 'limit': 20 if section == 'company_facts' else 5,
                 'sector_comparison_limit': 5 if section == 'sector' else 0})
-    if not price_only and (portfolio or (entities and not use_digests)):
+    if not price_only and (portfolio or entities):
         search_args = {'query': question, 'include_broader_context': True, 'limit': 5}
         if entities:
             search_args['symbols'] = [e['symbol'] for e in entities]
@@ -98,7 +98,7 @@ def _merge(old, new):
 
 def _refs(value, mapping):
     if isinstance(value, dict):
-        return {key: (mapping.get(item, item) if key == 'source_ref' and isinstance(item, str)
+        return {key: (mapping.get(item, item) if key in ('source_ref','ref') and isinstance(item, str)
                      else [mapping.get(ref, ref) for ref in item] if key in ('source_refs','evidence_refs','refs') and isinstance(item, list)
                      else _refs(item, mapping)) for key, item in value.items()}
     if isinstance(value, list):
@@ -276,6 +276,11 @@ def model_packet(packet):
         else:
             category = 'additional_evidence'
         output[category].append(copy.deepcopy(section))
+    # Full URLs, artifact IDs and repeated source quotes remain in the encrypted
+    # checkpoint/UI. Compact citation metadata is supplied once to the model.
+    output['sources'] = {ref:{k:source[k] for k in
+        ('title','source_name','source_url','page_number','published_at','as_of') if source.get(k) is not None}
+        for ref,source in output.get('sources',{}).items()}
     return compact_model_data(normalize_json(output))
 
 

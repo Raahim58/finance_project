@@ -199,7 +199,8 @@ def test_digest_tool_resolves_sources_into_execution_citations(monkeypatch):
         packet=new_packet({});merge_result(packet,ContentBlock('tool_call',id='digest',name='research.company_digest',arguments={'instrument_id':company.id}),attached)
         outgoing=model_packet(packet)
         data=expand_model_data(outgoing)['financials'][0]['data']
-        assert data['brief']['thesis'][0]['refs'][0].startswith('E')
+        assert data['brief'] is None
+        assert data['brief_validation_status']=='reference_only'
         assert data['financials'][0]['evidence_refs'][0] in checkpoint['evidence']
 
 
@@ -207,7 +208,7 @@ def test_new_digest_initial_plan_preserves_followup_budget():
     from app.ai.company_packet import initial_calls
     identity={'explicit_instrument':{'instrument_id':'luck','symbol':'LUCK'}}
     calls=initial_calls(identity,'Review LUCK financials',True,12,use_digests=True)
-    assert [c.name for c in calls]==['research.company_digest','market.latest']
+    assert [c.name for c in calls]==['research.company_digest','market.latest','research.search']
 
 
 def test_late_negative_qualification_is_not_dropped():

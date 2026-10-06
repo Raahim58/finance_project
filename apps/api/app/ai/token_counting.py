@@ -81,3 +81,21 @@ async def preflight_count(provider, api_key, payload, *, input_limit, remaining_
             metadata["input_count_error"] = type(exc).__name__
     metadata["input_count_latency_ms"] = round((time.perf_counter() - started) * 1000, 3)
     return count, metadata
+
+
+def payload_breakdown(provider: str, payload: dict) -> dict:
+    """Count-only diagnostic of the actual request; no source/user text escapes.
+
+    Component estimates are independent (token boundaries/templates differ),
+    never asserted to sum to provider usage. Wire bytes are measured exactly.
+    """
+    parts={}
+    for field in ('system','tools','messages','contents','generationConfig'):
+        if field in payload:
+            encoded=json.dumps(payload[field],ensure_ascii=False,separators=(',',':'),default=str)
+            parts[field]={'serialized_bytes':len(encoded.encode()),
+                'independent_text_token_estimate':text_estimate(encoded) or math.ceil(len(encoded.encode())/3)}
+    total,method=local_input_count(provider,payload)
+    return {'components':parts,'total_local_input_tokens':total,'count_method':method,
+        'serialized_bytes':len(json.dumps(payload,ensure_ascii=False,separators=(',',':'),default=str).encode()),
+        'ordinary_request_target_tokens':10000,'over_ordinary_target':total>10000}

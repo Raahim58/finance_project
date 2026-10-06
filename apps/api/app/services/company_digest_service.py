@@ -4,12 +4,13 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from app.core.security import encrypt_secret
+from app.core.config import settings
 from app.domain.research_relevance import canonical, fingerprint
 from app.models.research_intelligence import CompanyDigest, ResearchJob
 from app.services.company_snapshot import dependency_hash
 from app.services.research_job_service import generation_config
 
-BRIEF_VERSION = 'company-brief.v1'
+BRIEF_VERSION = 'company-brief.v2'
 
 
 def digest_key(instrument, input_hash, config):
@@ -30,7 +31,7 @@ def read_digest(db, user, instrument, *, active=False, retry=False):
     root = db.scalar(select(ResearchJob).where(ResearchJob.user_id == user.id, ResearchJob.request_hash == key)
         .order_by(ResearchJob.created_at.desc(),ResearchJob.id).limit(1))
     ready = bool(current and current.brief_json)
-    if active and config and not ready and (root is None or (retry and root.status in ('failed','uncertain','budget_exhausted'))):
+    if active and not settings.pipeline_enabled and config and not ready and (root is None or (retry and root.status in ('failed','uncertain','budget_exhausted'))):
         root = enqueue_refresh(db,user,instrument,input_hash,config,key,retry=retry)
     status = 'ready' if ready else root.status if root else 'provider_unavailable' if not config else 'not_generated'
     brief_row = current if ready else previous
@@ -40,12 +41,20 @@ def read_digest(db, user, instrument, *, active=False, retry=False):
         brief_sources = {ref:[source] for ref,source in evidence['sources'].items()}
         for record in evidence['financials'] + evidence['news'] + evidence.get('corporate_actions',[]):
             brief_sources[record['id']] = [evidence['sources'][ref] for ref in record.get('evidence_refs',[]) if ref in evidence['sources']]
-    return {'brief_sources':brief_sources,'status':status,'current':ready,'input_hash':input_hash,'job_id':root.id if root else None,
+    from app.services.pipeline.intelligence import read as read_prepared
+    prepared = read_prepared(db,instrument.id)
+    if settings.pipeline_enabled and active and (not prepared or any(s.get("state")=="stale" for s in prepared)):
+        from app.services.pipeline.runs import enqueue
+        enqueue(db,'intelligence','instrument:'+instrument.id,{'instrument_id':instrument.id,'input_version':input_hash})
+        db.commit()
+    if settings.pipeline_enabled and prepared and not current:
+        status='source_grounded'
+    return {'prepared_intelligence':prepared,'brief_sources':brief_sources,'status':status,'current':ready,'input_hash':input_hash,'job_id':root.id if root else None,
         'error_code':root.error_code if root else None,
         'snapshot':json.loads(current.snapshot_json) if current else json.loads(previous.snapshot_json) if previous else None,
         # A refreshed snapshot can be ready before its AI brief. Never pair a previous brief with new facts silently.
         'brief':json.loads(current.brief_json) if current and current.brief_json else json.loads(previous.brief_json) if previous else None,
-        'brief_is_current':ready,'generated_at':previous.generated_at if previous and not ready else chosen.generated_at if chosen else None,
+        'brief_validation_status':'reference_only' if brief_row else 'not_generated','brief_is_current':ready,'generated_at':previous.generated_at if previous and not ready else chosen.generated_at if chosen else None,
         'brief_input_hash':current.input_hash if ready else previous.input_hash if previous else None}
 
 

@@ -244,6 +244,12 @@ def test_company_and_portfolio_apis_surface_only_direct_subjects_with_exact_weig
         source_url="https://dps.psx.com.pk/notice/80",
     )
     with SessionLocal() as db:
+        from app.services.rag_service import create_document_from_pages,ParsedPage
+        document=create_document_from_pages(db,[ParsedPage(1,'Meezan Bank Limited declares 80 percent interim cash dividend.')],
+            title='MEBL dividend notice',document_type='announcement',symbol='MEBL',source_name='Pakistan Stock Exchange',
+            source_url='https://dps.psx.com.pk/notice/80',published_date=date.today(),commit=False)
+        source=db.scalar(select(EventSource).where(EventSource.event_id==raw_id));source.document_id=document.id
+        db.commit()
         normalize_raw_event(db, raw_id)
         instrument = db.scalar(select(Instrument).where(Instrument.symbol == "MEBL"))
         assert instrument is not None

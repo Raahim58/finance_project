@@ -106,7 +106,7 @@ def get_latest_market_date(db: Session) -> date | None:
         select(MarketObservation)
         .join(SourceArtifact, SourceArtifact.id == MarketObservation.artifact_id)
         .join(DataSource, DataSource.id == SourceArtifact.data_source_id)
-        .where(MarketObservation.is_selected.is_(True), MarketObservation.frequency == "daily", MarketObservation.instrument_id.is_not(None))
+        .where(MarketObservation.is_selected.is_(True), MarketObservation.frequency.in_(("daily","intraday")), MarketObservation.instrument_id.is_not(None))
         .order_by(MarketObservation.effective_at.desc())
         .limit(1)
     )
@@ -183,7 +183,7 @@ def _price_query(trade_date: date) -> Select[tuple[MarketPrice]]:
 
 
 def _prices_for_date(db: Session, trade_date: date) -> list[MarketPrice | CanonicalPrice]:
-    canonical = canonical_prices_for_date(db, trade_date)
+    canonical = canonical_prices_for_date(db,trade_date,include_intraday=True) if trade_date==datetime.now(ZoneInfo("Asia/Karachi")).date() else canonical_prices_for_date(db,trade_date)
     if canonical:
         return _without_indices(db, canonical)
     return list(db.scalars(_price_query(trade_date)))

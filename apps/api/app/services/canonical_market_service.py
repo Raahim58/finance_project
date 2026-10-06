@@ -58,6 +58,7 @@ class CanonicalPrice:
     adjustment_state: str
     quality_status: str
     capitalization: dict | None = None
+    frequency: str = "daily"
 
     @property
     def change(self) -> Decimal:
@@ -328,7 +329,8 @@ def _from_observation_parts(
         artifact_sha256=artifact.sha256 if artifact else None,
         observed_at=artifact.retrieved_at if artifact else None,
         adjustment_state=observation.adjustment_state,
-        quality_status="selected",
+        quality_status=values.get("quality_status","observed_intraday") if observation.frequency=="intraday" else "selected",
+        frequency=observation.frequency,
     )
 
 
@@ -453,7 +455,7 @@ def price_series(
     ]
 
 
-def canonical_prices_for_date(db: Session, trade_date: date) -> list[CanonicalPrice]:
+def canonical_prices_for_date(db: Session, trade_date: date, *, include_intraday: bool = False) -> list[CanonicalPrice]:
     from app.services.dps_capitalization import capitalization_for_date
     start = _exchange_day_start(trade_date)
     end = start + timedelta(days=1)
@@ -463,12 +465,12 @@ def canonical_prices_for_date(db: Session, trade_date: date) -> list[CanonicalPr
         .join(DataSource, DataSource.id == SourceArtifact.data_source_id)
         .where(
             MarketObservation.is_selected.is_(True),
-            MarketObservation.frequency == "daily",
+            MarketObservation.frequency.in_(("daily","intraday")) if include_intraday else MarketObservation.frequency == "daily",
             MarketObservation.effective_at >= start,
             MarketObservation.effective_at < end,
             MarketObservation.instrument_id.is_not(None),
         )
-        .order_by(MarketObservation.instrument_id)
+        .order_by(MarketObservation.effective_at.desc(),MarketObservation.instrument_id)
     )
     if not synthetic_market_data_allowed():
         statement = statement.where(
@@ -478,8 +480,10 @@ def canonical_prices_for_date(db: Session, trade_date: date) -> list[CanonicalPr
         )
     rows = list(db.scalars(statement))
     capitalization_by_instrument = capitalization_for_date(db, trade_date)
-    output = []
+    output = []; seen=set()
     for row in rows:
+        if row.instrument_id in seen: continue
+        seen.add(row.instrument_id)
         instrument = db.get(Instrument, row.instrument_id)
         if instrument:
             output.append(_from_observation(db, row, instrument.symbol, capitalization_by_instrument))
@@ -499,7 +503,7 @@ def latest_price(db: Session, symbol: str, as_of: date | None = None) -> Canonic
             .where(
                 MarketObservation.instrument_id == instrument.id,
                 MarketObservation.is_selected.is_(True),
-                MarketObservation.frequency == "daily",
+                MarketObservation.frequency.in_(("daily", "intraday")) if as_of is None else MarketObservation.frequency == "daily",
             )
         )
         if not synthetic_market_data_allowed():

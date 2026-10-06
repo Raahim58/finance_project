@@ -150,3 +150,9 @@ from app.models.research_intelligence import (CompanyExposureProfile, CompanyEve
 
 from app.models.assistant_workspace import ExecutionEvent, ConversationSummary, ProviderQueueEntry
 from app.models.research_intelligence import CompanyDigest
+from app.models.pipeline import (
+    SourceTarget, IngestionStageRun, DocumentSection, DocumentEntityLink,
+    EvidenceStatement, StatementEvidence, EventDocumentLink,
+    CompanyIntelligenceSection, IntelligenceDependency, EnrichmentAttempt,
+    ServiceCredential, ArtifactPin,
+)

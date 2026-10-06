@@ -291,9 +291,13 @@ def test_company_research_exposes_normalized_event_publishers(client):
                 confidence=1,
             )
         )
+        from app.services.rag_service import create_document_from_pages,ParsedPage
+        document=create_document_from_pages(db,[ParsedPage(1,event.title+' Meezan Bank Limited.')],
+            title=event.title,document_type='news',symbol='MEBL',source_name='Observed Publisher',
+            source_url='https://publisher.test/mebl',published_date=date(2026,8,13),commit=False)
         db.add(
             EventSource(
-                event_id=event.id,
+                event_id=event.id,document_id=document.id,
                 source_url="https://publisher.test/mebl",
                 source_name="Observed Publisher",
             )

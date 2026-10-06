@@ -3,6 +3,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Date,
     DateTime,
@@ -211,6 +212,7 @@ class ExchangeCalendarDay(Base):
     exchange_code: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     session_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
     is_session: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    session_windows: Mapped[list | None] = mapped_column(JSON, nullable=True)
     open_time: Mapped[str | None] = mapped_column(String(10))
     close_time: Mapped[str | None] = mapped_column(String(10))
     reason: Mapped[str | None] = mapped_column(String(255))

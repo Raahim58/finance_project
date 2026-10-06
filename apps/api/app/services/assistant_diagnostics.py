@@ -14,6 +14,7 @@ from app.models.llm_invocation import LLMInvocation
 
 execution_id: ContextVar[str | None] = ContextVar("assistant_execution_id", default=None)
 SAFE_FIELDS = {
+    "payload_component_measurement",
     "input_bytes",
     "transmitted_input_bytes",
     "retained_context_estimated_tokens",

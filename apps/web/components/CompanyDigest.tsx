@@ -36,7 +36,18 @@ export function CompanyDigestPanel({symbol}:{symbol:string}){
   return <section className="panel mt-4" aria-label="Company brief"><div className="panel-head"><h2 className="panel-title">Company brief</h2>{digest?.generated_at?<span className="text-xs text-muted">Updated {new Date(digest.generated_at).toLocaleString("en-PK")}</span>:null}</div><div className="p-5">
     {error?<p role="alert" className="text-sm">{error}</p>:null}
     {!digest&&!error?<p className="text-sm text-muted">Loading saved company brief…</p>:null}
-    {digest&&!digest.current?<p className="mb-3 text-sm text-muted">{["queued","running"].includes(digest.status)?digest.brief?"Showing previous brief while updated evidence is prepared.":"Preparing company brief…":digest.status==="provider_unavailable"?"Save an AI provider key to prepare the company brief.":"Company brief could not be refreshed. Previous evidence is preserved."}</p>:null}
+    {digest&&!digest.current&&!digest.prepared_intelligence?.length?<p className="mb-3 text-sm text-muted">{["queued","running"].includes(digest.status)?digest.brief?"Showing previous brief while updated evidence is prepared.":"Preparing company brief…":digest.status==="provider_unavailable"?"Save an AI provider key to prepare the company brief.":"Company brief could not be refreshed. Previous evidence is preserved."}</p>:null}
+    {digest?.prepared_intelligence?.map(section=><div key={section.section} className="mb-4">
+      <h3 className="text-sm font-semibold">{section.section.replaceAll("_"," ")}</h3>
+      {section.as_of?<p className="text-xs text-muted">Prepared {new Date(section.as_of).toLocaleString("en-PK")}</p>:null}
+      <ul>{section.content.evidence?.map((row,index)=><li className="mt-2 text-sm leading-6" key={row.statement_id??row.id??index}>
+        {row.text??`${row.metric?.replaceAll("_"," ")}: ${row.value} ${row.unit??""} · ${row.period_start??"start unavailable"} to ${row.period_end??"period unavailable"} · ${row.accounting_basis??"basis unavailable"}`}
+        {row.kind?<span className="ml-2 text-xs text-muted">{row.kind.replaceAll("_"," ")}</span>:null}
+        {section.sources.filter(source=>source.statement_id===row.statement_id&&row.statement_id||source.fact_id===row.id&&row.id).map((source,i)=>source.source_url?<a key={i} href={source.source_url} target="_blank" rel="noreferrer" className="ml-2 text-xs text-accent underline">{source.title??source.source_name??"Source"}{source.page_number?` · p${source.page_number}`:""}</a>:<span key={i} className="ml-2 text-xs text-muted">Source link unavailable</span>)}
+      </li>)}</ul>
+      {section.gaps.map((gap,index)=><p key={index} className="mt-2 text-xs text-muted">{gap}</p>)}
+    </div>)}
+    {digest?.brief&&digest.brief_validation_status==="reference_only"?<p className="mb-3 text-xs text-muted">AI interpretation; citations have been checked, but source support requires review.</p>:null}
     {digest?.brief?([['thesis','Thesis'],['earnings_drivers','Earnings drivers'],['valuation','Valuation context'],['catalysts','Catalysts'],['risks','Risks']] as const).map(([key,label])=>digest.brief![key].length?<div key={key} className="mb-4"><h3 className="text-sm font-semibold">{label}</h3><ul>{digest.brief![key].map(claim)}</ul></div>:null):null}
     {digest?.brief?.unresolved_questions.length?<div><h3 className="text-sm font-semibold">Open questions</h3><ul className="mt-2 text-sm text-muted">{digest.brief.unresolved_questions.map((text,i)=><li key={i}>{text}</li>)}</ul></div>:null}
     {digest&&["failed","uncertain","budget_exhausted"].includes(digest.status)?<button className="btn btn-secondary mt-3" disabled={retrying} onClick={()=>void retry()}>Retry brief</button>:null}

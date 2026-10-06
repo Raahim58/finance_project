@@ -22,6 +22,18 @@ x-evidence-worker: &evidence-worker
   volumes:
     - ${PSX_DATA_ROOT:-/srv/psx}/evidence-spool:/data/evidence-spool
 
+x-pipeline-worker: &pipeline-worker
+  <<: *evidence-worker
+  profiles: ["pipeline"]
+  environment:
+    PIPELINE_ENABLED: "true"
+    PIPELINE_ENRICHMENT_ENABLED: "false"
+    PIPELINE_DATA_ROOT: /pipeline-data
+    PIPELINE_DISPATCH_SCOPE: ${PIPELINE_DISPATCH_SCOPE:-}
+  volumes:
+    - ${PSX_DATA_ROOT:-/srv/psx}/evidence-spool:/data/evidence-spool
+    - ${PSX_DATA_ROOT:-/srv/psx}/evidence-spool:/pipeline-data:ro
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -216,6 +228,47 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  pipeline-scheduler:
+    <<: *pipeline-worker
+    command: python -m app.jobs.pipeline_scheduler
+
+  pipeline-discovery:
+    <<: *pipeline-worker
+    command: celery -A app.celery_app worker -n pipeline-discovery@%h -Q pipeline_discovery --concurrency=1 --loglevel=INFO
+
+  pipeline-fetch:
+    <<: *pipeline-worker
+    command: celery -A app.celery_app worker -n pipeline-fetch@%h -Q pipeline_fetch --concurrency=2 --loglevel=INFO
+
+  pipeline-parse:
+    <<: *pipeline-worker
+    command: celery -A app.celery_app worker -n pipeline-parse@%h -Q pipeline_parse --concurrency=1 --loglevel=INFO
+
+  pipeline-enrich:
+    <<: *pipeline-worker
+    command: celery -A app.celery_app worker -n pipeline-enrich@%h -Q pipeline_enrich --concurrency=1 --loglevel=INFO
+
+  pipeline-heavy:
+    <<: *pipeline-worker
+    command: celery -A app.celery_app worker -n pipeline-heavy@%h -Q pipeline_heavy --concurrency=1 --loglevel=INFO
+
+  pipeline-intelligence:
+    <<: *pipeline-worker
+    command: celery -A app.celery_app worker -n pipeline-intelligence@%h -Q pipeline_intelligence --concurrency=1 --loglevel=INFO
+
+  pipeline-numeric:
+    <<: *pipeline-worker
+    command: celery -A app.celery_app worker -n pipeline-numeric@%h -Q pipeline_numeric --concurrency=1 --loglevel=INFO
+
+  pipeline-model:
+    <<: *pipeline-worker
+    # Only explicit reviewed jobs may enter this queue. No paid fallback.
+    environment:
+      PIPELINE_ENABLED: "true"
+      PIPELINE_ENRICHMENT_ENABLED: "true"
+      PIPELINE_DATA_ROOT: /pipeline-data
+    command: celery -A app.celery_app worker -n pipeline-model@%h -Q pipeline_model --concurrency=1 --loglevel=INFO
 
 volumes:
   evidence_spool:

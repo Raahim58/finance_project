@@ -159,7 +159,7 @@ def _packet_receipt(checkpoint):
 
 
 def _company_tool_allowed(name: str, arguments=None) -> bool:
-    if name == "search_conversation_history":
+    if name in ("search_conversation_history","tools.catalog"):
         return True
     if not name.startswith(("market.", "research.", "documents.")):
         return False
@@ -171,9 +171,20 @@ def _company_tool_allowed(name: str, arguments=None) -> bool:
     return True
 
 
-def _catalog(company_only=False) -> list[ProviderTool]:
-    return [ProviderTool(**item) for item in build_tool_registry().model_catalog()
-            if not company_only or _company_tool_allowed(item["name"])] + [ProviderTool(
+CORE_TOOLS={'market.latest','research.company_sections','research.search','research.events',
+    'documents.search','portfolio.summary','ips.compliance','quant.portfolio'}
+
+def _catalog(company_only=False, selected=()) -> list[ProviderTool]:
+    wanted=CORE_TOOLS|set(selected)
+    result=[ProviderTool(**item) for item in build_tool_registry().model_catalog()
+        if (not company_only or _company_tool_allowed(item["name"]))
+        and (not settings.pipeline_enabled or item['name'] in wanted)]
+    if settings.pipeline_enabled:
+        result.append(ProviderTool('tools.catalog',
+            'Discover additional evidence/calculation tools by query or names; load their full schemas for the next turn. Categories: market, research, documents, portfolio, ips, quant, allocation.',
+            {'type':'object','properties':{'query':{'type':'string','maxLength':120},
+                'names':{'type':'array','items':{'type':'string'},'maxItems':8}},'additionalProperties':False}))
+    return result + [ProviderTool(
                 "search_conversation_history", "Retrieve older discussion in this conversation. Historical claims are not current evidence.",
                 {"type": "object", "properties": {"query": {"type": "string", "maxLength": 300},
                  "before_message_id": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 20}},
@@ -476,8 +487,11 @@ async def _provider_turn(
         with SessionLocal() as count_db:
             row = count_db.get(AssistantExecution, identifier)
             remaining_input = policy["cumulative_input"] - row.reserved_input_tokens
+        from app.ai.token_counting import payload_breakdown
+        component_measurement=payload_breakdown(provider.name,payload)
         estimated, count_metadata = await preflight_count(provider, api_key, payload,
             input_limit=policy["input"], remaining_input=remaining_input)
+        count_metadata["payload_component_measurement"] = component_measurement
         transmitted_bytes = len(json.dumps(payload, default=str, separators=(",", ":")).encode())
         if estimated > policy["input"]:
             diagnostics.record_preflight_rejection({**count_metadata, "counted_input_tokens": estimated,
@@ -588,6 +602,21 @@ def _reserve_calls(checkpoint: dict[str, Any], calls: list[ContentBlock]) -> Non
 
 
 def _sync_tool(user_id: str, call: ContentBlock) -> dict[str, Any]:
+    if call.name=='tools.catalog':
+        from pydantic import BaseModel,Field,ConfigDict
+        class CatalogInput(BaseModel):
+            model_config=ConfigDict(extra='forbid')
+            query:str=Field(default='',max_length=120)
+            names:list[str]=Field(default_factory=list,max_length=8)
+        args=CatalogInput.model_validate(call.arguments or {})
+        available=build_tool_registry().model_catalog()
+        matches=[item for item in available if item['name'] in args.names or
+            (args.query and any(term in (item['name']+' '+item['description']).lower() for term in args.query.lower().split()))]
+        if not args.query and not args.names:
+            return tool_result('ok',{'available_tools':[{'name':item['name'],'description':item['description']} for item in available],'loaded_tools':[]})
+        selected=matches[:8]
+        return tool_result('ok',{'loaded_tools':[item['name'] for item in selected],
+            'available_tools':[{'name':item['name'],'description':item['description']} for item in selected]})
     if call.name == "search_conversation_history":
         from app.services.assistant_memory import search
         from pydantic import BaseModel, Field, ConfigDict
@@ -650,15 +679,18 @@ def _attach_evidence(checkpoint: dict[str, Any], envelope: dict[str, Any]) -> di
         # Preserve the supplied label rather than displaying only an E marker.
         if not source.get("source_name") and isinstance(source.get("source"), str):
             source["source_name"] = source["source"]
-        identity = json.dumps(source, sort_keys=True, separators=(",", ":"))
+        from app.ai.source_identity import source_identity
+        identity = source_identity(source)
         existing = next(
-            (key for key, value in checkpoint["evidence"].items() if value["identity"] == identity),
+            (key for key, value in checkpoint["evidence"].items() if source_identity(value["source"]) == identity),
             None,
         )
         if existing is None:
             existing = f"E{checkpoint['next_evidence']}"
             checkpoint["next_evidence"] += 1
             checkpoint["evidence"][existing] = {"identity": identity, "source": source}
+        else:
+            checkpoint["evidence"][existing]["source"].update({k:v for k,v in source.items() if v is not None})
         sources.append({**source, "evidence_ref": existing})
     result["sources"] = sources
     return result
@@ -899,6 +931,31 @@ async def _prepare_evidence(identifier, user_id, payload, checkpoint):
         _result_blocks(checkpoint, execution)
         checkpoint['completed_tool_call_ids'].append(execution.call.id)
         _save_checkpoint(identifier, checkpoint)
+    # A missing reusable digest is a backend coverage gap, not a task the user
+    # must diagnose and fix by requesting tools individually.
+    fallback=[]
+    for call in calls:
+        if call.name!='research.company_digest': continue
+        envelope=checkpoint.get('initial_evidence_results',{}).get(call.id,{})
+        data=expand_model_data(envelope.get('data')) or {}
+        if envelope.get('status')=='ok' and (data.get('financials') or data.get('prepared_intelligence')): continue
+        for name in ('company_facts','sector','market_risk','events','macro'):
+            fallback.append(ContentBlock('tool_call',id=f'initial-fallback-{len(fallback)+1}',
+                name='research.company_sections',arguments={'instrument_id':call.arguments['instrument_id'],
+                    'sections':[name],'limit':16 if name=='company_facts' else 5,
+                    'sector_comparison_limit':5 if name=='sector' else 0}))
+    remaining=max(0,settings.assistant_max_tool_iterations-checkpoint['reserved_tool_calls']-2)
+    fallback=fallback[:remaining]
+    if fallback:
+        unreserved=[call for call in fallback if call.id not in checkpoint['reserved_tool_call_ids']]
+        _reserve_calls(checkpoint,unreserved)
+        checkpoint['reserved_tool_call_ids'].extend(call.id for call in unreserved)
+        _save_checkpoint(identifier,checkpoint)
+        for execution in await asyncio.gather(*[retrieve(call) for call in fallback if call.id not in checkpoint['completed_tool_call_ids']]):
+            _result_blocks(checkpoint,execution)
+            checkpoint['completed_tool_call_ids'].append(execution.call.id)
+            _save_checkpoint(identifier,checkpoint)
+        calls.extend(fallback)
     visited = {call.arguments.get('instrument_id') for call in calls}
     checkpoint['evidence_packet']['first_pass_coverage'] = {
         item['instrument_id']: [call.arguments.get('sections', [call.name])[0]
@@ -945,7 +1002,7 @@ async def run_tool_loop(
             "reported_input_for_all_calls": True,
         },
     )
-    tools = _catalog(payload.company_only)
+    tools = _catalog(payload.company_only,checkpoint.get("loaded_tools",[]))
     _update_allowance(checkpoint)
     with SessionLocal() as provider_db:
         owned_user = provider_db.get(User, user.id)
@@ -1021,6 +1078,11 @@ async def run_tool_loop(
             blocks = [
                 block for execution in executions for block in _result_blocks(checkpoint, execution)
             ]
+            for execution in executions:
+                if execution.call.name=='tools.catalog' and execution.envelope.get('status')=='ok':
+                    data=expand_model_data(execution.envelope.get('data')) or {}
+                    checkpoint['loaded_tools']=list(dict.fromkeys(checkpoint.get('loaded_tools',[])+data.get('loaded_tools',[])))
+            tools=_catalog(payload.company_only,checkpoint.get('loaded_tools',[]))
             _update_allowance(checkpoint)
             checkpoint["turns"].append(ProviderTurn("user", blocks).to_dict())
             checkpoint["completed_tool_call_ids"].extend(ids)

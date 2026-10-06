@@ -67,8 +67,9 @@ jobs:
             docker compose -f compose.oracle.yml \
               --profile ingestion \
               --profile scheduling \
+              --profile pipeline \
               ps --status running --services
-          } | grep -E '^(worker-|.*-scheduler$)' || true)"
+          } | grep -E '^(worker-|pipeline-|.*-scheduler$)' || true)"
           if [[ -n "$running_ingestion" ]]; then
             echo "Stop these ingestion services before deploying:" >&2
             printf '%s\n' "$running_ingestion" >&2

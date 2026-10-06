@@ -113,6 +113,8 @@ def _latest(db, _user, payload: MarketLatestInput):
     return tool_result("ok", {
         "instrument_id": instrument.id, "symbol": instrument.symbol,
         "date": row.trade_date, "close": row.close, "observed_at": row.observed_at,
+        "frequency":row.frequency,"price_kind":"current_quote" if row.frequency=="intraday" else "daily_close",
+        "timestamp_basis":"retrieved_at" if row.frequency=="intraday" else "source_observation",
         "capitalization": row.capitalization,
         "source_ref": "market_latest",
     }, sources=[{

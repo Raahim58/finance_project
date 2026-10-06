@@ -1,4 +1,5 @@
 import json
+import gzip
 from datetime import UTC, datetime
 from hashlib import sha256
 
@@ -20,9 +21,15 @@ def source(db: Session, name: str, source_type: str, base_url: str | None, prior
     return row
 
 
-def store_artifact(db: Session, data_source: DataSource, content: bytes, *, url: str, method: str, parser_version: str, content_type: str, effective_at: datetime | None = None) -> SourceArtifact:
+def store_artifact(db: Session, data_source: DataSource, content: bytes, *, url: str, method: str, parser_version: str, content_type: str, effective_at: datetime | None = None, request_scope: dict | None = None, lossless: bool = False) -> SourceArtifact:
+    original_digest=sha256(content).hexdigest();original_bytes=len(content);encoding='identity'
+    if lossless and any(marker in content_type.lower() for marker in ('html','json','text/')):
+        compressed=gzip.compress(content,compresslevel=6,mtime=0)
+        if len(compressed)<len(content):
+            content=compressed;encoding='gzip';content_type=f'application/gzip; original={content_type[:80]}'
     digest = sha256(content).hexdigest()
-    request_fingerprint = sha256(f"{method}:{url}".encode()).hexdigest()
+    scope = {k:v for k,v in (request_scope or {}).items() if k.lower() not in {"api_key","token","authorization","password","secret"}}
+    request_fingerprint = sha256(json.dumps({"method":method.upper(),"url":url,"scope":scope}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     identity = (
         SourceArtifact.data_source_id == data_source.id,
         SourceArtifact.request_fingerprint == request_fingerprint,
@@ -32,7 +39,7 @@ def store_artifact(db: Session, data_source: DataSource, content: bytes, *, url:
     if existing: return existing
     suffix = next((value for marker, value in (("pdf", ".pdf"), ("json", ".json"), ("csv", ".csv"), ("excel", ".xlsx")) if marker in content_type.lower()), ".bin")
     stored = get_artifact_store(settings).put(content, suffix)
-    row = SourceArtifact(data_source_id=data_source.id, source_url=url, http_method=method, request_fingerprint=request_fingerprint, effective_at=effective_at, sha256=digest, content_type=content_type, storage_path=stored.storage_path, parser_version=parser_version, status="parsed", response_metadata_json=json.dumps({"bytes": len(content)}))
+    row = SourceArtifact(data_source_id=data_source.id, source_url=url, http_method=method, request_fingerprint=request_fingerprint, effective_at=effective_at, sha256=digest, content_type=content_type, storage_path=stored.storage_path, parser_version=parser_version, status="parsed", response_metadata_json=json.dumps({"bytes": original_bytes, "stored_bytes":len(content), "request_scope":scope, "original_sha256":original_digest, "encoding":encoding}))
     try:
         with db.begin_nested():
             db.add(row); db.flush()

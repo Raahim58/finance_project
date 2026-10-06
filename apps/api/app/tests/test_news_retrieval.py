@@ -70,7 +70,7 @@ def test_dates_ownership_and_cursor_scope():
             title='Private cement costs',document_type='news',owner_user_id=other.id,visibility='private',
             published_date=date(2026,9,4),source_url='https://example.com/private')
         for i in range(5):
-            create_document_from_pages(db,[ParsedPage(1,f'Cement costs sanctions demand market article {i}. '*10)],
+            create_document_from_pages(db,[ParsedPage(1,f'Pakistan cement costs sanctions demand market article {i}. '*10)],
                 title=f'Cement costs {i}',document_type='news',published_date=date(2026,9,4),source_url=f'https://example.com/{i}')
         params=dict(query='LUCK cement costs sanctions',symbols=['LUCK'],topics=['geopolitics'],limit=3,date_from=date(2026,9,2))
         first=search(db,user,ResearchInput(**params))
