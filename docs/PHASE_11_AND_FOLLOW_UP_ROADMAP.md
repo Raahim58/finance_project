@@ -140,3 +140,7 @@ Anthropic switching verification (2026-10-03): the account's existing encrypted 
 5. **Aggressive cleanup.** Remove unused code, speculative scaffolding and redundant abstractions. Make deletion/consolidation explicit goals and verify surviving workflows.
 
 Do not pull these steps into Phase 11.
+
+## Future fixed-income analytics — deferred (2026-10-06)
+
+Add Macaulay duration and modified duration for bonds/fixed-income holdings when dated cash flows, coupon schedule, maturity, settlement date, yield and compounding/day-count conventions are available. Calculate them deterministically from discounted cash flows: Macaulay duration is the present-value-weighted payment time; modified duration adjusts it for the yield-compounding convention and estimates local price sensitivity to yield changes. State assumptions and units, and verify sensitivity against repricing. Do not apply these measures to PSX equity prices or invent missing bond inputs. This is saved future scope, not authorized immediate implementation.
