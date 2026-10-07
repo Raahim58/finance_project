@@ -41,7 +41,7 @@ from app.tools import build_tool_registry
 from app.tools.registry import expand_model_data, normalize_json, tool_result
 
 
-CITATION_RE = re.compile(r"\[\[([A-Za-z][A-Za-z0-9_-]{0,63})\]\]")
+CITATION_RE = re.compile(r"\[\[([A-Za-z][A-Za-z0-9_-]{0,63}(?:\s*,\s*[A-Za-z][A-Za-z0-9_-]{0,63})*)\]\]")
 logger = logging.getLogger(__name__)
 TRUNCATED_REASONS = {
     "length",
@@ -85,6 +85,7 @@ SYSTEM_PROMPT = """You are a read-only PSX investment assistant. Answer the user
 EVIDENCE
 - Use the current evidence JSON first; it contains source-linked database facts and document excerpts already retrieved for this question. Call tools for missing evidence or deeper investigation, not to repeat supplied reads.
 - Get exact prices, financials, holdings and calculations from database tools. Use document tools for supporting text.
+- State the reporting period and consolidated/standalone basis beside financial figures. Never combine group profit with standalone EPS or mix gross and net revenue. Cite the source supporting each metric; an EPS citation alone does not support a profit figure.
 - Check reporting periods, units, data provenance and price adjustments before comparing numbers. Flag demo inputs and unresolved corporate actions; do not use distorted returns to justify advice.
 - Separate reported facts, historical estimates and your own interpretation. Historical returns are not forecasts.
 - Cite factual claims using exactly [[E1]], [[E2]], etc., from the current evidence. Earlier answers are context, not fresh evidence.
@@ -787,11 +788,10 @@ def resolve_citations(text_value: str, checkpoint: dict[str, Any]):
     unknown = []
     seen = set()
 
-    def replace(match: re.Match[str]) -> str:
-        marker = match.group(1)
+    def render_marker(marker,position):
         item = known.get(marker)
         if item is None:
-            unknown.append({"marker": marker, "position": match.start()})
+            unknown.append({"marker": marker, "position": position})
             return f"[{marker} reference unavailable]"
         source = item["source"]
         if marker not in seen:
@@ -799,10 +799,12 @@ def resolve_citations(text_value: str, checkpoint: dict[str, Any]):
             seen.add(marker)
         title = source.get("title") or source.get("source_name") or marker
         page = f", p. {source['page_number']}" if source.get("page_number") else ""
-        if source.get("source_url"):
+        if str(source.get("source_url") or "").startswith(("https://","http://")):
             return f"[{marker}: {title}{page}]({source['source_url']})"
         return f"[{marker}: {title}{page}]"
 
+    def replace(match):
+        return " ".join(render_marker(marker.strip(),match.start()) for marker in match.group(1).split(","))
     rendered = CITATION_RE.sub(replace, text_value)
     return (
         rendered,

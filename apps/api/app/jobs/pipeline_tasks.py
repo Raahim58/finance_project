@@ -129,7 +129,9 @@ def perform(db,run):
         return capture(db,p['symbol']),[]
     if stage=='prices':
         from app.services.pipeline.prices import refresh
-        return refresh(db,symbols=p.get("symbols")),[]
+        result=refresh(db,symbols=p.get("symbols"))
+        if result.get("source_market_state")=="pre-open": raise DeferredStage("market_pre_open")
+        return result,[]
     if stage=='reports':
         from app.providers.fundamentals.psx_financials import PsxFinancialsProvider
         provider=PsxFinancialsProvider()
@@ -200,7 +202,7 @@ def execute(run_id):
         except DeferredStage as exc:
             db.rollback();run=db.get(IngestionStageRun,run_id)
             if run.lease_token==token:
-                run.status='retry_wait';run.next_attempt_at=datetime.now(UTC)+timedelta(hours=1)
+                run.status='retry_wait';run.next_attempt_at=datetime.now(UTC)+timedelta(seconds=60 if str(exc)=='market_pre_open' else 3600)
                 run.attempt_count=max(0,run.attempt_count-1);run.error_code=str(exc)
                 run.lease_token=None;run.lease_until=None;db.commit()
             return {'status':'deferred'}

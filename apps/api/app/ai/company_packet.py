@@ -281,7 +281,13 @@ def model_packet(packet):
     output['sources'] = {ref:{k:source[k] for k in
         ('title','source_name','source_url','page_number','published_at','as_of') if source.get(k) is not None}
         for ref,source in output.get('sources',{}).items()}
-    return compact_model_data(normalize_json(output))
+    def exact_decimal_strings(value):
+        if isinstance(value,dict):
+            return {key:(item.rstrip('0').rstrip('.') if key=='value' and isinstance(item,str)
+                and re.fullmatch(r'-?\d+\.\d+',item) else exact_decimal_strings(item)) for key,item in value.items()}
+        if isinstance(value,list): return [exact_decimal_strings(item) for item in value]
+        return value
+    return compact_model_data(normalize_json(exact_decimal_strings(output)))
 
 
 def project_turns(turns, packet, fused_call_ids):

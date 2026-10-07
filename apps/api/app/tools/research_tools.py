@@ -331,6 +331,11 @@ def _company_digest(db,user,payload):
                 if identifier: row['evidence_refs']=[identifier]
                 for field in ('id','statement_id','document_id','source_name','source_url','page_number','version'):
                     row.pop(field,None)
+            if section.get('section')=='financial_performance':
+                evidence=section.get('content',{}).pop('evidence',[])
+                groups={}
+                for row in evidence: groups.setdefault(row.get('accounting_basis') or 'unverified',[]).append(row)
+                section['content']['reporting_bases']=[{'basis':basis,'facts':facts} for basis,facts in groups.items()]
             for source in section.pop('sources',[]):
                 ref=source.get('fact_id') or source.get('statement_id')
                 section['source_refs'].append(ref)
