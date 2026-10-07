@@ -140,3 +140,5 @@ Proposed acceptance criteria — targets to agree and measure, not achieved resu
 | Portfolio behavior | Ordinary investment/alternative questions automatically receive the selected owned portfolio, confirmed IPS, goals, required-return evidence and required deterministic calculation results. Allocation proposals remain subject to verification; no trade execution is introduced. |
 
 Remaining uncertainties: PSX company-news recall and article access through Tavily; licensing costs; how much retained-report text requires OCR; actual provider quality on the repaired payload; false negatives from material-news filters; adequacy of dependency-driven section refresh; source reliability for suspect financial rows; and achievable end-to-end latency under concurrent load. The exact chat wire body has been evicted, so component attribution uses a matched reconstruction. No current model-quality certification or operational activation is implied.
+
+auto-deploy
