@@ -8,7 +8,7 @@ from app.schemas.pipeline import StatementBatch, StatementCandidate
 from app.ingestion.news_selection import classify_news
 from app.services.pipeline.runs import fingerprint
 
-VERSION='statements-v1'
+VERSION='statements-v2'
 EVENT_TERMS={
  'earnings':r'\b(earnings|profit|revenue|sales)\b', 'dividend':r'\bdividend\b',
  'expansion':r'\b(capacity|expansion|plant|commissioned|commissioning)\b',
@@ -66,6 +66,8 @@ def extract(db,document_id, *, model_output=None):
         .where(DocumentEntityLink.document_id==document_id,DocumentEntityLink.status=='validated')))
     # No company link is invented for sector/macro documents.
     subjects=set(linked or ['market'])
+    if document.symbol in subjects and document.document_type in ('annual_report','quarterly_report','interim_report','announcement'):
+        subjects={document.symbol}
     official=document.document_type in ('annual_report','quarterly_report','announcement','macro_report','policy_document') and document.source_tier<=2
     candidates=[]
     if model_output is not None:

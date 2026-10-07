@@ -112,7 +112,10 @@ def perform(db,run):
         from app.services.pipeline.events import build
         from app.models.pipeline import DocumentEntityLink
         result=build(db,p['document_id'])
-        ids=db.scalars(select(DocumentEntityLink.instrument_id).where(DocumentEntityLink.document_id==p['document_id'])).all()
+        from app.models.document import Document
+        document=db.get(Document,p['document_id'])
+        issuer=db.scalar(select(Instrument.id).where(Instrument.symbol==document.symbol)) if document and document.symbol and document.document_type!='news' else None
+        ids=[issuer] if issuer else db.scalars(select(DocumentEntityLink.instrument_id).where(DocumentEntityLink.document_id==p['document_id'])).all()
         return result,[('intelligence','instrument:'+i,{'instrument_id':i,'document_id':p['document_id'],'version':run.input_hash}) for i in ids]
     if stage=='intelligence':
         from app.services.pipeline.intelligence import refresh

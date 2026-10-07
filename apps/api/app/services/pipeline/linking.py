@@ -11,6 +11,10 @@ def link(db,document_id):
     document=db.get(Document,document_id)
     parts=list(db.scalars(select(DocumentSection).where(DocumentSection.document_id==document_id)))
     instruments=list(db.scalars(select(Instrument)))
+    issuer=next((i for i in instruments if i.symbol==document.symbol),None)
+    if issuer and document.document_type in ('annual_report','quarterly_report','interim_report','announcement'):
+        for existing in db.scalars(select(DocumentEntityLink).where(DocumentEntityLink.document_id==document_id,DocumentEntityLink.instrument_id==issuer.id)):
+            existing.role='issuer'
     aliases={}
     for inst in instruments:
         for value,method in ((inst.name,'company_name'),(inst.symbol,'ticker')):
@@ -33,7 +37,7 @@ def link(db,document_id):
         for section in parts:
             match=re.search(r'(?<!\w)'+re.escape(alias)+r'(?!\w)',section.text,flags)
             if not match: continue
-            db.add(DocumentEntityLink(document_id=document_id,instrument_id=inst.id,role='mentioned',method=method,
+            db.add(DocumentEntityLink(document_id=document_id,instrument_id=inst.id,role='issuer' if document.symbol==inst.symbol and document.document_type!='news' else 'mentioned',method=method,
                 section_id=section.id,support_quote=match.group(),status='validated'))
             if inst.symbol not in tags:
                 db.add(DocumentEvidenceTag(document_id=document_id,kind='company',value=inst.symbol,basis='literal_entity_link'))
