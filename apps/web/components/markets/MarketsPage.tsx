@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Icon } from "@/components/Icon";
-import type { Company, MarketPrice, SectorDailyStats } from "@/lib/api";
+import type { Company, IndexClose, MarketPrice, MarketSnapshot, SectorDailyStats } from "@/lib/api";
 import type { ResearchEventView } from "@/lib/api/research";
 import { clearApiCache } from "@/lib/api";
 import { formatDate, formatNumber, formatPercent, humanize, numeric } from "@/lib/overview";
@@ -33,15 +33,16 @@ export function MarketsPage() {
   const [query, setQuery] = useState("");
   const snapshot = data.market.data?.snapshot;
   const fresh = data.freshness.data;
+  const latest = useMemo(() => indexLatest(data.history.data ?? [], snapshot), [data.history.data, snapshot]);
   const bySymbol = useMemo(() => new Map((data.companies.data ?? []).map(company => [company.symbol, company])), [data.companies.data]);
   const changeBySymbol = useMemo(() => new Map([...(data.market.data?.top_gainers ?? []), ...(data.market.data?.top_losers ?? []), ...(data.market.data?.top_volume ?? [])].map(row => [row.symbol, row.change_percent])), [data.market.data]);
   const failed = [data.market, data.freshness, data.events, data.history, data.companies].some(resource => resource.status === "error");
   return <div className={styles.page}>
     <div className={styles.main}>
       <p className={styles.dateline}>
-        <span>{snapshot ? new Date(`${snapshot.snapshot_date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : "Date unavailable"}</span>
+        <span>{(latest?.date ?? fresh?.latest_trade_date) ? new Date(`${latest?.date ?? fresh?.latest_trade_date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : "Date unavailable"}</span>
         <span>{fresh ? `Market ${fresh.exchange_session_status === "unknown" ? "session unknown" : fresh.exchange_session_status}` : "Session unavailable"}</span>
-        {snapshot ? <span>{snapshot.index_name} <b className={tone(snapshot.index_change_percent)}>{formatPercent(snapshot.index_change_percent)}</b></span> : null}
+        {latest?.percent != null ? <span>{latest.name} <b className={tone(latest.percent)}>{formatPercent(latest.percent)}</b></span> : null}
       </p>
       <h1 className={styles.title}>Markets</h1>
       {fresh?.market_data_mode === "mock" || fresh?.is_stale || fresh?.provider_mode_warning || fresh?.ingestion_staleness_warning ? <div className={styles.notice} role="status"><Icon name="warning" size={15} />
@@ -53,10 +54,19 @@ export function MarketsPage() {
         <MoversPanels data={data} bySymbol={bySymbol} query={query} setQuery={setQuery} />
         <SectorSummary resource={data.market} onViewAll={() => setView("sectors")} />
       </> : null}
-      <p className={styles.source}>{fresh?.latest_used_provider ?? fresh?.latest_source ?? snapshot?.source ?? "Source unavailable"} · trade date {formatDate(snapshot?.snapshot_date ?? fresh?.latest_trade_date)}{fresh?.ingestion_age_seconds != null ? ` · ingested ${Math.round(fresh.ingestion_age_seconds / 60)} min ago` : ""}</p>
+      <p className={styles.source}>{fresh?.latest_used_provider ?? fresh?.latest_source ?? snapshot?.source ?? "Source unavailable"} · trade date {formatDate(fresh?.latest_trade_date ?? snapshot?.snapshot_date)}{fresh?.ingestion_age_seconds != null ? ` · ingested ${Math.round(fresh.ingestion_age_seconds / 60)} min ago` : ""}</p>
     </div>
     <MarketBrief events={data.events} changes={changeBySymbol} />
   </div>;
+}
+
+// Prefer the stored snapshot; otherwise derive level and change from the latest two stored index closes.
+function indexLatest(history: IndexClose[], snapshot?: MarketSnapshot | null) {
+  if (snapshot) return { name: snapshot.index_name, date: snapshot.snapshot_date, level: numeric(snapshot.index_value), change: numeric(snapshot.index_change), percent: numeric(snapshot.index_change_percent), derived: false };
+  const points = closePoints(history);
+  const last = points.at(-1), prior = points.at(-2);
+  if (!last) return null;
+  return { name: "KSE-100", date: last.date, level: last.close, change: prior ? last.close - prior.close : null, percent: prior ? (last.close - prior.close) / prior.close * 100 : null, derived: true };
 }
 
 function IndexPanel({ data }: { data: Data }) {
@@ -65,23 +75,24 @@ function IndexPanel({ data }: { data: Data }) {
   const all = useMemo(() => closePoints(data.history.data ?? []), [data.history.data]);
   const shown = useMemo(() => sliceRange(all, range), [all, range]);
   const extremes = useMemo(() => yearExtremes(all), [all]);
-  if (!snapshot) return <section className={styles.hero}><Note resource={data.market} empty="Market snapshot unavailable." /></section>;
-  const previous = numeric(snapshot.index_value) != null && numeric(snapshot.index_change) != null ? Number(snapshot.index_value) - Number(snapshot.index_change) : null;
-  return <section className={styles.hero} aria-label={`${snapshot.index_name} performance`}>
+  const latest = useMemo(() => indexLatest(data.history.data ?? [], snapshot), [data.history.data, snapshot]);
+  if (!latest) return <section className={styles.hero}><Note resource={data.history.status === "ready" ? data.market : data.history} empty="KSE-100 data unavailable." /></section>;
+  const previous = latest.level != null && latest.change != null ? latest.level - latest.change : null;
+  return <section className={styles.hero} aria-label={`${latest.name} performance`}>
     <div className={styles.heroTop}>
-      <div><h2>{snapshot.index_name}</h2><strong className={styles.level}>{formatNumber(snapshot.index_value)}</strong>
-        <p className={`${styles.change} ${tone(snapshot.index_change_percent)}`}>{signed(snapshot.index_change)} &nbsp;{formatPercent(snapshot.index_change_percent)} <span>latest session</span></p></div>
+      <div><h2>{latest.name}</h2><strong className={styles.level}>{formatNumber(latest.level)}</strong>
+        <p className={`${styles.change} ${tone(latest.percent)}`}>{signed(latest.change)} &nbsp;{formatPercent(latest.percent)} <span>{latest.derived ? `latest stored close · ${formatDate(latest.date)}` : "latest session"}</span></p></div>
       <div className={styles.ranges} role="group" aria-label="Chart range">{chartRanges.map(([label]) => <button key={label} aria-pressed={range === label} onClick={() => setRange(label)}>{label}</button>)}</div>
     </div>
-    {data.history.status === "ready" ? <IndexChart points={shown} name={snapshot.index_name} /> : <Note resource={data.history} empty="Index history unavailable." />}
+    {data.history.status === "ready" ? <IndexChart points={shown} name={latest.name} /> : <Note resource={data.history} empty="Index history unavailable." />}
     <dl className={styles.stats}>
       <Stat label="Previous close" value={formatNumber(previous)} />
       <Stat label="52W high (close)" value={formatNumber(extremes?.high.close)} />
       <Stat label="52W low (close)" value={formatNumber(extremes?.low.close)} />
-      <Stat label="Volume" value={formatNumber(snapshot.total_volume, 1, true)} />
-      <Stat label="Value traded" value={`PKR ${formatNumber(snapshot.total_value, 1, true)}`} />
+      <Stat label="Volume" value={snapshot ? formatNumber(snapshot.total_volume, 1, true) : "—"} />
+      <Stat label="Value traded" value={snapshot ? `PKR ${formatNumber(snapshot.total_value, 1, true)}` : "—"} />
     </dl>
-    {snapshot.totals_note ? <p className={styles.source}>{snapshot.totals_note}</p> : null}
+    {snapshot?.totals_note ? <p className={styles.source}>{snapshot.totals_note}</p> : null}
   </section>;
 }
 

@@ -7,7 +7,8 @@ import type { Resource } from "@/components/overview/useOverviewData";
 
 const loading = <T,>(): Resource<T> => ({ status: "loading", data: null });
 
-// The index tracked by the snapshot, e.g. "KSE-100" -> history key "KSE-100" (server normalises).
+const INDEX_SYMBOL = "KSE-100";
+
 export function useMarketsData() {
   const [revision, setRevision] = useState(0);
   const [market, setMarket] = useState<Resource<MarketOverview>>(loading);
@@ -26,12 +27,9 @@ export function useMarketsData() {
     void read(() => getCompanies(), setCompanies);
     void read(getMarketFreshness, setFreshness);
     void read(async () => (await getEventFeed()).events, setEvents);
-    void read(getMarketOverview, setMarket).then(overview => {
-      const name = overview?.snapshot?.index_name;
-      if (!active) return;
-      if (name) void read(() => getIndexHistory(name), setHistory);
-      else setHistory({ status: "ready", data: [] });
-    });
+    void read(getMarketOverview, setMarket);
+    // Independent of the snapshot: the snapshot can be missing while index closes are stored.
+    void read(() => getIndexHistory(INDEX_SYMBOL), setHistory);
     return () => { active = false; };
   }, [revision]);
 
