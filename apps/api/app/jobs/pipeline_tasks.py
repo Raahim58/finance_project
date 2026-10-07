@@ -146,11 +146,16 @@ def perform(db,run):
             from app.models.document import Document
             known=set(db.scalars(select(Document.source_url).where(Document.symbol==p['symbol'],Document.status!='superseded')))
             recent=datetime.now(UTC).date()-timedelta(days=14)
-            items=[item for item in items[:20] if item.report_url not in known or item.posting_date>=recent]
+            # Live polling is for current disclosures, not unseen archives.
+            latest_by_type={}
+            for item in items: latest_by_type.setdefault('annual' if 'annual' in item.report_type else 'interim',item.report_url)
+            items=[item for item in items[:20] if item.posting_date>=recent or
+                (item.report_url not in known and latest_by_type['annual' if 'annual' in item.report_type else 'interim']==item.report_url)]
         children=[]
         for item in items:
             payload=asdict(item);payload['posting_date']=item.posting_date.isoformat()
-            children.append(('report_fetch','report:'+item.report_id,{'report':payload,'capture_bucket':p.get('bucket') or p.get('as_of')}))
+            mode='historical' if run.mode=='historical' or item.posting_date<datetime.now(UTC).date()-timedelta(days=14) else 'live'
+            children.append(('report_fetch','report:'+item.report_id,{'report':payload,'capture_bucket':p.get('bucket') or p.get('as_of')},mode))
         return {'catalog_items':len(items),'scope':'all_accessible_catalog' if run.mode=='historical' else 'recent_catalog'},children
     if stage in ('report_fetch','report_extract','history_prices'):
         from app.jobs import phase2_tasks
@@ -189,6 +194,14 @@ def perform(db,run):
 def execute(run_id):
     if not settings.pipeline_enabled: return {'status':'disabled'}
     with SessionLocal() as db:
+        # Old broker deliveries can arrive after queue reprioritization. Keep
+        # report work pending rather than letting it bypass news-first dispatch.
+        pending=db.scalar(select(IngestionStageRun).where(IngestionStageRun.id==run_id,
+            IngestionStageRun.status.in_(('queued','retry_wait')),runs.report_work_condition()))
+        if pending and runs.urgent_work_pending(db,scope=settings.pipeline_dispatch_scope):
+            pending.status='retry_wait';pending.next_attempt_at=datetime.now(UTC)+timedelta(seconds=60)
+            pending.dispatch_until=None;db.commit()
+            return {'status':'report_waiting_for_news'}
         token=runs.claim(db,run_id)
         if not token: return {'status':'already_claimed_or_terminal'}
         try:

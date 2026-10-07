@@ -126,3 +126,36 @@ def test_route_gaps_survive_packet_rebuilds_and_reach_the_model():
                  tool_result('ok', {'value': '1'}))
     assert packet['missing_data'][0]['block'] == 'technical_levels'
     assert 'technical_levels' in str(expand_model_data(model_packet(packet)))
+
+
+@pytest.mark.parametrize('question,executes_portfolio', [
+    ("What's happening in the market today?", False),
+    ('What is a P/E ratio?', False),
+    ('Is LUCK RSI overbought, where is support?', False),
+    ('What do you think of my portfolio right now?', True),
+])
+def test_executor_only_fetches_portfolio_when_the_route_allows_it(monkeypatch, question, executes_portfolio):
+    """The preliminary scope fetch is executed, not just planned: check what actually runs."""
+    import asyncio
+    from types import SimpleNamespace
+    from app.ai import tool_loop
+    from app.tools.registry import tool_result
+    executed = []
+
+    async def fake_tool(_owner, call):
+        executed.append(call.name)
+        data = {'holdings': [{'instrument_id': 'luck', 'symbol': 'LUCK'}]} if call.name == 'portfolio.summary' else {}
+        return tool_loop.ToolExecution(call, tool_result('ok', data), 1)
+    monkeypatch.setattr(tool_loop, '_execute_tool', fake_tool)
+    monkeypatch.setattr(tool_loop, '_save_checkpoint', lambda *_: None)
+    identity = {'portfolio': PORTFOLIO}
+    if 'LUCK' in question:
+        identity['explicit_instrument'] = LUCK
+    checkpoint = {'compact_evidence_enabled': True, 'resolved_identity': identity, 'evidence': {}, 'next_evidence': 1,
+                  'tool_trace': [], 'reserved_tool_calls': 0, 'reserved_tool_call_ids': [], 'completed_tool_call_ids': [],
+                  'turns': [tool_loop.ProviderTurn('system', [tool_loop.ContentBlock('text', text='Instructions')]).to_dict()]}
+    asyncio.run(tool_loop._prepare_evidence('execution', 'owner', SimpleNamespace(question=question, company_only=False), checkpoint))
+    assert ('portfolio.summary' in executed) is executes_portfolio
+    if not executes_portfolio:
+        assert not {'portfolio.summary', 'ips.compliance', 'quant.portfolio'} & set(executed)
+        assert not checkpoint['evidence_packet'].get('portfolio_instruments')

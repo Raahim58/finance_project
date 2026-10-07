@@ -3,13 +3,29 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 import json
 from uuid import uuid4
-from sqlalchemy import or_, select, update
+from sqlalchemy import exists, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from app.models.pipeline import IngestionStageRun
 
 VERSION = 'pipeline-v1'
 LEASE_SECONDS = 360
 MAX_ATTEMPTS = 5
+REPORT_STAGES = ('reports','report_fetch','report_extract','report_index')
+URGENT_STAGES = ('briefing','discover','fetch','parse','index','sections','link','extract','events','intelligence','prices')
+
+def report_work_condition():
+    from app.models.document import Document
+    return or_(IngestionStageRun.stage.in_(REPORT_STAGES), exists(select(Document.id).where(
+        Document.id==IngestionStageRun.input['document_id'].as_string(),
+        Document.document_type.in_(('annual_report','quarterly_report','interim_report')))))
+
+def urgent_work_pending(db, *, now=None,scope=''):
+    now=now or datetime.now(UTC)
+    conditions=(~report_work_condition(),IngestionStageRun.stage.in_(URGENT_STAGES),
+        IngestionStageRun.status.in_(('queued','retry_wait','running')),
+        or_(IngestionStageRun.next_attempt_at.is_(None),IngestionStageRun.next_attempt_at<=now))
+    if scope:conditions=(*conditions,IngestionStageRun.subject_key.like(scope+':%'))
+    return bool(db.scalar(select(IngestionStageRun.id).where(*conditions).limit(1)))
 
 def utc(value):
     return value.replace(tzinfo=UTC) if value and value.tzinfo is None else value
@@ -55,11 +71,13 @@ def finish(db, run_id, token, output, *, children=()):
     row = db.scalar(select(IngestionStageRun).where(IngestionStageRun.id==run_id).with_for_update())
     if not row or row.status!='running' or row.lease_token!=token or utc(row.lease_until)<=now:
         raise RuntimeError('stale_stage_lease')
-    for stage, subject, payload in children:
+    for child in children:
+        stage,subject,payload=child[:3]
+        child_mode=child[3] if len(child)>3 else row.mode
         if row.input.get("canary_batch"):
             payload={**payload,"canary_batch":row.input["canary_batch"]}
             if not subject.startswith("canary:"): subject="canary:"+row.input["canary_batch"]+":"+subject
-        enqueue(db, stage, subject, payload, mode=row.mode)
+        enqueue(db, stage, subject, payload, mode=child_mode)
     row.output=output; row.status='completed'; row.finished_at=now
     row.lease_token=None; row.lease_until=None; row.error_code=None
     # Stage writes, completion and successor outbox rows commit together.
@@ -95,14 +113,20 @@ def dispatch(db, publish, *, limit=20, now=None,scope=""):
     if scope:
         conditions=(*conditions,IngestionStageRun.subject_key.like(scope+":%"))
     chosen=[]
-    for mode, quota in (('live',max(1,limit*4//5)),('historical',max(1,limit//5)),('replay',limit)):
-        slots=min(quota,limit-len(chosen))
-        if slots<=0: break
-        rows=db.scalars(select(IngestionStageRun).where(*conditions,IngestionStageRun.mode==mode)
-            .order_by(IngestionStageRun.created_at,IngestionStageRun.id).limit(slots)
-            .with_for_update(skip_locked=True)).all()
-        for row in rows: row.dispatch_until=now+timedelta(seconds=60)
-        chosen.extend((r.id,r.stage,r.mode) for r in rows)
+    report_work=report_work_condition()
+    # News/commentary and current observations finish before report work, across
+    # live/history/replay modes. Deferred future retries do not block the queue.
+    urgent_pending=urgent_work_pending(db,now=now,scope=scope)
+    families=(~report_work,) if urgent_pending else (~report_work,report_work)
+    for family in families:
+        for mode, quota in (('live',max(1,limit*4//5)),('historical',max(1,limit//5)),('replay',limit)):
+            slots=min(quota,limit-len(chosen))
+            if slots<=0: break
+            rows=db.scalars(select(IngestionStageRun).where(*conditions,family,IngestionStageRun.mode==mode)
+                .order_by(IngestionStageRun.created_at,IngestionStageRun.id).limit(slots)
+                .with_for_update(skip_locked=True)).all()
+            for row in rows: row.dispatch_until=now+timedelta(seconds=60)
+            chosen.extend((r.id,r.stage,r.mode) for r in rows)
     db.commit()
     published=0
     for identifier,stage,mode in chosen:

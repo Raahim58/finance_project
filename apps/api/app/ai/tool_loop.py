@@ -946,6 +946,18 @@ def _record_provider_result(checkpoint: dict[str, Any], result: LLMProviderResul
     checkpoint["web_tool_activity"].extend(result.web_tool_activity)
 
 
+def _routed_decision(identity, payload, checkpoint):
+    """Rule decision, with a saved classifier label applied; same result on every call."""
+    from app.ai.routing.classifier import TieBreak, apply_tie_break
+    from app.ai.routing.planner import rule_decision
+    from app.ai.routing.types import Route
+    decision = rule_decision(identity, payload.question, payload.company_only)
+    saved = checkpoint.get('route_tiebreak')
+    if saved and saved.get('route'):
+        decision = apply_tie_break(decision, TieBreak(Route(saved['route']), saved['confidence'], 'applied'))
+    return decision
+
+
 async def _prepare_evidence(identifier, user_id, payload, checkpoint):
     if not checkpoint.get('compact_evidence_enabled') or checkpoint.get('initial_evidence_prepared'):
         return
@@ -955,8 +967,14 @@ async def _prepare_evidence(identifier, user_id, payload, checkpoint):
     checkpoint.setdefault('evidence_packet', new_packet(identity))
     # Resolve held issuers from the ownership-checked SQL summary before planning
     # company and sector evidence. Never infer holdings from conversational prose.
+    route_decision = _routed_decision(identity, payload, checkpoint)
+    from app.ai.routing.contracts import CONTRACTS
+    contract = CONTRACTS[route_decision.primary]
+    # The route contract decides whether portfolio context is allowed at all:
+    # market briefs, technical setups and definitions never receive it.
     if (identity.get('portfolio') and not payload.company_only
-            and not price_only_question(payload.question)
+            and contract.portfolio_context != 'never' and contract.entity_blocks
+            and 'price_only' not in route_decision.flags
             and not checkpoint.get('portfolio_scope_prepared')
             and not checkpoint.get('initial_evidence_plan')):
         call=ContentBlock('tool_call',id='initial-portfolio-scope',name='portfolio.summary',
@@ -975,22 +993,17 @@ async def _prepare_evidence(identifier, user_id, payload, checkpoint):
         checkpoint['portfolio_scope_prepared']=True
         _save_checkpoint(identifier,checkpoint)
     if 'initial_evidence_plan' not in checkpoint:
-        from app.ai.routing.planner import plan_initial_evidence, rule_decision
-        from app.ai.routing.classifier import TieBreak, apply_tie_break
+        from app.ai.routing.planner import plan_initial_evidence
         from app.ai.routing.persistence import record_routing
-        from app.ai.routing.types import Route
-        decision = rule_decision(identity, payload.question, payload.company_only)
-        saved = checkpoint.get('route_tiebreak')
-        if saved and saved.get('route'):
-            decision = apply_tie_break(decision, TieBreak(Route(saved['route']), saved['confidence'], 'applied'))
+        decision = route_decision
         routed = plan_initial_evidence(
             identity, payload.question, payload.company_only,
             settings.assistant_max_tool_iterations - checkpoint['reserved_tool_calls'],
             use_digests=checkpoint.get("company_digest_enabled", settings.assistant_company_digest_enabled),
             decision=decision)
         checkpoint['routing'] = routed.to_record()
-        if saved:
-            checkpoint['routing']['tiebreak_outcome'] = saved['outcome']
+        if checkpoint.get('route_tiebreak'):
+            checkpoint['routing']['tiebreak_outcome'] = checkpoint['route_tiebreak']['outcome']
         record_routing(user_id, identifier, checkpoint['routing'])
         # Required blocks with no source are explicit gaps, never silently omitted.
         checkpoint['evidence_packet']['route_gaps'] = [

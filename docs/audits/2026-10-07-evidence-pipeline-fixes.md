@@ -132,3 +132,11 @@ The retrieval/cache/scalar increment completed all five targeted questions with 
 Corporate-action evidence now comes from SQL with unchanged details, original source artifact and explicit effective/ex/payment dates. Percentage of par is not yield; missing cash-per-share or par value stays unknown. The dividend question selects dividend/risk/development sections and retains disclosure of omitted available sections.
 
 Public briefing endpoint live verification: HTTP 200 for news (40 entries), generation metadata and research JSON. Production had **zero briefing targets, candidates or stages** at verification. Adapter deployment is not activation. Its source setup also omitted enabling the research DataSource; the setup code now corrects that and rejects unscoped activation under canary dispatch. Production activation remains separately recorded.
+
+## News-first dispatch correction
+
+User authorized full scope, then prioritized all news/commentary before reports. Older pending report work (9,044 jobs at repair time) was moved to historical mode without deleting job inputs, documents or artifacts. Dedicated pipeline broker deliveries were rebuilt from durable SQL after consumers stopped; unrelated queues were preserved.
+
+Dispatcher gives scoped news/commentary document work and current observations priority over reports. A worker guard defers redelivered report tasks while urgent work is pending, without spending retry attempts. Unstaffed enrichment and historical numerical jobs do not block reports. Live catalog polling selects recent disclosures and at most the newest annual/interim baseline; old PDF children carry explicit historical mode. Existing historical download quotas and byte budgets remain. No migration is required.
+
+Validation: 50 focused tests passed across pipeline restoration, discovery recovery and news-priority tests. Sub-agent critique identified an unscoped blocker and an overly broad urgent definition; both were fixed and regression-tested.
