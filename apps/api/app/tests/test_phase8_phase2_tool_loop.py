@@ -745,6 +745,14 @@ def test_allocation_tools_reject_overselling_and_ips_breaches(client, monkeypatc
             "content": [{"type": "text", "text": "Both proposals were rejected."}],
             "usage": {},
         },
+        {
+            # The uncited final answer triggers exactly one no-tool citation repair.
+            "id": "allocation-repair",
+            "model": "claude-test",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "Both proposals were rejected [[E1]]."}],
+            "usage": {},
+        },
     ]
 
     async def fake_post(_url, _key, payload):

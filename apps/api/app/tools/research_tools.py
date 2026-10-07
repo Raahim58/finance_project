@@ -3,7 +3,7 @@ import json
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from app.core.config import settings
 
@@ -32,6 +32,16 @@ class ResearchInput(BaseModel):
     include_broader_context: bool = True
     cursor: str | None = Field(default=None, max_length=6000)
     limit: int = Field(default=5, ge=1, le=10)
+
+    @field_validator('symbols','sectors','topics','document_types',mode='before')
+    @classmethod
+    def singleton_filters(cls,value):
+        # A single issuer/category string has an unambiguous list equivalent.
+        # Keep the filter: never silently discard malformed model arguments.
+        if isinstance(value,str):
+            if not value.strip(): raise ValueError('Filter must not be empty')
+            return [value.strip()]
+        return value
 
     @model_validator(mode='after')
     def check_dates(self):
@@ -323,6 +333,18 @@ def _company_digest(db,user,payload):
     if instrument is None:
         return tool_result('missing',error={'code':'instrument_not_found'})
     saved = read_digest(db,user,instrument,active=False)
+    # Rebuild deterministic public sections from retained SQL/source evidence on
+    # a cache miss/correction. This performs no acquisition or model generation
+    # and does not change the ingestion cohort or source targets.
+    if settings.pipeline_enabled and (not saved.get('prepared_intelligence') or
+            any(section.get('state')=='stale' for section in saved['prepared_intelligence'])):
+        from app.services.pipeline.intelligence import refresh,read
+        db.scalar(select(Instrument).where(Instrument.id==instrument.id).with_for_update())
+        current_prepared=read(db,instrument.id)
+        if not current_prepared or any(section.get('state')=='stale' for section in current_prepared):
+            refresh(db,instrument.id)
+        db.flush()
+        saved['prepared_intelligence']=read(db,instrument.id)
     from app.services.pipeline.briefing import read as read_extra_analysis
     extra=read_extra_analysis(db,symbols=[instrument.symbol],sectors=[instrument.sector] if instrument.sector else None,limit=2)
     snapshot = saved['snapshot']
@@ -335,6 +357,25 @@ def _company_digest(db,user,payload):
         selected=set(payload.sections) if payload.sections else {section['section'] for section in all_prepared}
         prepared=copy.deepcopy([section for section in all_prepared if section['section'] in selected])
         sources=[]
+        actions=[]
+        if 'dividends' in selected:
+            from app.models.workstation import CorporateAction,SourceArtifact,DataSource
+            for action in db.scalars(select(CorporateAction).where(
+                    CorporateAction.instrument_id==instrument.id,
+                    CorporateAction.effective_date<=date.today())
+                    .order_by(CorporateAction.effective_date.desc(),CorporateAction.id).limit(10)):
+                artifact=db.get(SourceArtifact,action.artifact_id) if action.artifact_id else None
+                publisher=db.get(DataSource,artifact.data_source_id) if artifact else None
+                ref='corporate-action:'+action.id
+                actions.append({'type':action.action_type,'effective_date':str(action.effective_date),
+                    'ex_date':str(action.ex_date) if action.ex_date else None,
+                    'payment_date':str(action.payment_date) if action.payment_date else None,
+                    'details':json.loads(action.details_json),'source_backed':bool(artifact),
+                    'evidence_refs':[ref]})
+                sources.append({'id':ref,'underlying_id':ref,
+                    'source_name':publisher.name if publisher else None,
+                    'source_url':artifact.source_url if artifact else None,'artifact_id':action.artifact_id,
+                    'as_of':str(action.effective_date)})
         for section in prepared:
             section['source_refs']=[]
             for row in section.get('content',{}).get('evidence',[]):
@@ -359,8 +400,10 @@ def _company_digest(db,user,payload):
         usable=any(section.get('state')=='source_grounded' and
             (section.get('content',{}).get('reporting_bases') or section.get('content',{}).get('evidence'))
             for section in prepared)
-        return tool_result('ok' if usable else 'missing',{'prepared_intelligence':prepared,'extra_analysis':analysis,
-            'brief_is_current':False,'status':'source_grounded' if usable else 'missing',
+        return tool_result('ok' if usable or actions else 'missing',{'prepared_intelligence':prepared,'extra_analysis':analysis,
+            'corporate_actions':actions,
+            'corporate_action_qualification':'Stored announcement dates are not payment dates. Percentage of par is not dividend yield; missing cash-per-share/par value remains unknown. Unbacked observations are unverified.',
+            'brief_is_current':False,'status':'source_grounded' if usable else 'stored_observations' if actions else 'missing',
             'available_sections':available,'omitted_available_sections':[section for section in available if section not in selected],
             'unavailable_sections':[{'section':section['section'],'state':section['state'],'gaps':section.get('gaps',[])}
                 for section in all_prepared if section['section'] not in available],

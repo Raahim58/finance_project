@@ -47,8 +47,9 @@ def test_presence_identity_gate_preserves_rejected_prose(text,error):
     if error:
         fallback=citation_failure_answer(checkpoint)
         assert 'Unsupported conclusion' not in fallback
-        _,sources,_=resolve_citations(fallback,checkpoint)
-        assert sources[0]['source_url']=='https://example.test/original'
+        # Rejected prose is never decorated with citations; sources stay in the source panel.
+        assert '[[' not in fallback
+        assert '1 evidence references are available in the source panel' in fallback
 
 
 def test_packet_breakdown_is_measured_after_provider_assembly_and_not_additive():

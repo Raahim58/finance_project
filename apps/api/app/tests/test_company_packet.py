@@ -159,7 +159,8 @@ def test_actual_loop_has_evidence_before_first_model_call_and_no_summary_call(cl
         assert packet['identity']['explicit_instrument']['instrument_id'] == instrument.id
         from app.ai.company_packet import PACKET_SECTIONS
         assert sum(len(packet[key]) for key in PACKET_SECTIONS) == 6
-        assert packet['sources']['E1']['source_url'] == 'https://source.test/fixture'
+        # Document metadata is interned once; each reference keeps its own location.
+        assert packet['source_documents'][packet['sources']['E1']['document_ref']]['source_url'] == 'https://source.test/fixture'
         return {'model': 'claude-test', 'stop_reason': 'end_turn', 'content': [{'type': 'text', 'text': 'Stored fact [[E1]].'}], 'usage': {'input_tokens': 200, 'output_tokens': 10}}
     monkeypatch.setattr(provider, '_post', fake_post)
     monkeypatch.setattr('app.ai.tool_loop.get_provider', lambda _: provider)

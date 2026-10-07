@@ -235,7 +235,7 @@ def test_company_completeness_counts_observed_standardized_fundamentals():
     assert completeness["fundamentals"]["latest_period"].date() == date(2025, 12, 31)
 
 
-def test_company_research_exposes_observed_standardized_fundamentals(client):
+def test_company_research_withholds_unverified_standardized_fundamentals(client):
     headers = _auth(client)
     with SessionLocal() as db:
         generate_mock_market_data(db, days=1, end_date=date(2026, 8, 13))
@@ -262,9 +262,9 @@ def test_company_research_exposes_observed_standardized_fundamentals(client):
     response = client.get(f"/companies/{instrument_id}/overview", headers=headers)
 
     assert response.status_code == 200
-    fact = next(row for row in response.json()["fundamentals"] if row["taxonomy_key"] == "revenue")
-    assert fact["classification"] == "standardized_secondary"
-    assert fact["provenance"]["source_name"] == "DPS"
+    # Secondary DPS rows lack a verified fiscal period/basis, so they fail closed: they
+    # are never presented as exact company fundamentals (the observation stays in SQL).
+    assert not any(row["taxonomy_key"] == "revenue" for row in response.json()["fundamentals"])
 
 
 def test_company_research_exposes_normalized_event_publishers(client):

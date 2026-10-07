@@ -5,12 +5,16 @@ from app.db.session import SessionLocal
 from app.models.pipeline import SourceTarget
 from app.services.evidence_pipeline import ensure_source_config
 from app.services.ingestion_persistence import source
+from app.core.config import settings
 
 
 def configure(db, *, batch=None):
+    if settings.pipeline_dispatch_scope and not batch:
+        raise ValueError('Existing canary batch is required; refusing unscoped activation')
     publisher,config,_=ensure_source_config(db,'briefing_news');publisher.enabled=True
     research=source(db,'Public morning research feed','commentary','https://stock-market-analysis-7l5.pages.dev',50,1440,
         'Extra sector/company interpretation; original article publishers supply news evidence.')
+    research.enabled=True
     targets=[]
     for data_source,scope,adapter,schedule,configid in ((publisher,'briefing:original_news','briefing_news','news',config.id),
             (research,'briefing:morning_analysis','briefing','briefing',None)):

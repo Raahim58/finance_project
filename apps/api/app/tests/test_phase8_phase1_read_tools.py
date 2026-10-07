@@ -134,11 +134,9 @@ def test_company_sections_preserve_period_unit_source_and_have_no_side_effects(m
             ("2023-12-31", "101.25000000", "million", "Issuer annual report"),
             ("2023-12-31", "99.75000000", "million", "Exchange filing"),
         }
-        assert {row["period_end"] for row in facts} >= {
-            "2023-12-31",
-            "2024-12-31",
-            "2025-12-31",
-        }
+        # Legacy secondary observations (no verified fiscal period, duration or
+        # basis) fail closed: stored, but never exact company facts.
+        assert {row["period_end"] for row in facts} == {"2023-12-31"}
         assert data["measurements"][0]["size_kind"] == "estimate"
         assert set(result["data"]["sections"]) == {"columns", "rows"}
         assert _counts(db) == before

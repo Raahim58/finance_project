@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     assistant_max_tool_iterations: int = 12
     assistant_compact_evidence_enabled: bool = True
     assistant_company_digest_enabled: bool = True
+    # One bounded no-tool call that picks a route LABEL only when the rules are ambiguous.
+    assistant_route_classifier_enabled: bool = True
     assistant_max_retrieved_chunks: int = 8
     assistant_timeout_seconds: int = 30
     assistant_execution_deadline_seconds: int = Field(default=300, ge=1)

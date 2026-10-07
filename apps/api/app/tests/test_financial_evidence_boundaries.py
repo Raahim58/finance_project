@@ -111,6 +111,14 @@ def prepared_section(key,*,state='source_grounded'):
         'gaps':['Evidence dependency changed.'] if state=='stale' else []}
 
 
+def stub_rebuild(monkeypatch,prepared):
+    """Stale public sections are rebuilt from retained evidence; stub that with no corpus."""
+    calls=[]
+    monkeypatch.setattr('app.services.pipeline.intelligence.refresh',lambda _db,instrument_id:calls.append(instrument_id))
+    monkeypatch.setattr('app.services.pipeline.intelligence.read',lambda _db,_instrument_id:prepared)
+    return calls
+
+
 @pytest.mark.parametrize('snapshot_hash',['old','current'])
 def test_pipeline_uses_prepared_evidence_instead_of_legacy_snapshot(monkeypatch,snapshot_hash):
     from app.services import company_digest_service
@@ -118,10 +126,12 @@ def test_pipeline_uses_prepared_evidence_instead_of_legacy_snapshot(monkeypatch,
     saved=saved_fixture({'input_hash':snapshot_hash,'legacy_wrong_claim':'DO NOT REUSE'},
         [prepared_section('dividends'),prepared_section('risks',state='stale')])
     monkeypatch.setattr(company_digest_service,'read_digest',lambda *_args,**_kwargs:saved)
+    rebuilt=stub_rebuild(monkeypatch,saved['prepared_intelligence'])
     with SessionLocal() as db:
         company=instrument(db)
         result=_company_digest(db,SimpleNamespace(id='fixture-user'),CompanyDigestInput(instrument_id=company.id,sections=['dividends']))
         data=expand_model_data(result['data'])
+        assert rebuilt==[company.id]  # a stale section triggers one deterministic rebuild, no fetch
         assert result['status']=='ok' and 'DO NOT REUSE' not in str(result)
         assert [section['section'] for section in data['prepared_intelligence']]==['dividends']
         assert data['available_sections']==['dividends']
@@ -146,6 +156,7 @@ def test_unusable_requested_sections_trigger_detail_fallback_without_hiding_othe
     monkeypatch.setattr(settings,'pipeline_enabled',True)
     monkeypatch.setattr(company_digest_service,'read_digest',lambda *_args,**_kwargs:
         saved_fixture(prepared=[prepared_section('dividends',state='stale'),prepared_section('risks')]))
+    stub_rebuild(monkeypatch,[prepared_section('dividends',state='stale'),prepared_section('risks')])
     with SessionLocal() as db:
         company=instrument(db)
         result=_company_digest(db,SimpleNamespace(id='fixture-user'),CompanyDigestInput(instrument_id=company.id,sections=['dividends']))

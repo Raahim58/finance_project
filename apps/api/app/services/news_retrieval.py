@@ -96,6 +96,7 @@ def search_research_evidence(db,user,payload,*,public_only=False):
             consumed[name]+=1
             passage=hashlib.sha256(' '.join(chunk.chunk_text.split()).casefold().encode()).hexdigest()
             if chunk.id in seen or passage in passages or per_document[chunk.document_id]>=2: continue
+            if not substantive_passage(chunk.chunk_text,payload.query): continue
             if name in ('sector','broader') and not supported_context(chunk.chunk_text, sectors, name): continue
             passages.add(passage)
             seen.add(chunk.id);per_document[chunk.document_id]+=1;chosen.append((name,chunk))
@@ -126,8 +127,23 @@ def supported_context(text, sectors, lane):
         'fertilizer':r'\b(natural gas|gas prices|urea prices|lng|energy prices|shipping)\b',
         'textile':r'\b(cotton prices|cotton supply|freight|shipping|energy prices)\b',
         'energy':r'\b(brent|oil prices|opec|lng|shipping|energy prices)\b',
-        'banking':r'\b(policy rate|interest rates|inflation|sovereign debt)\b',
+        'banking':r'\b(federal reserve|fed rate|us dollar|u\.s\. dollar|dollar index|global funding|global inflation)\b',
     }
     patterns=[drivers[s] for s in sectors if s in drivers]
-    if lane=='broader': patterns.append(r'\b(shipping|fuel supply|oil prices|trade sanctions|energy prices|policy rate|interest rates|inflation|exchange rate)\b')
+    if lane=='broader': patterns.append(r'\b(shipping|fuel supply|oil prices|trade sanctions|energy prices|brent|opec|hormuz|suez|federal reserve|dollar index|global inflation)\b')
     return any(re.search(pattern,text,re.I) for pattern in patterns)
+
+
+def substantive_passage(text,query):
+    """Withhold observed generic/metadata-only excerpts, not whole filings."""
+    normalized=' '.join(text.split())
+    if (re.search(r'\btransmission of (?:annual|quarterly|financial) report',normalized,re.I)
+            and len(normalized.split())<60
+            and not re.search(r'\b(transmission|filing date|report date)\b',query,re.I)):
+        return False
+    governance=re.search(r'\b(review and approve|recommend to the board|committee shall|investment mandates)\b',normalized,re.I)
+    promotion=re.search(r'\b(create value for our stakeholders|remains steady in its purpose|strong foundations,? disciplined execution)\b',normalized,re.I)
+    detail=re.search(r'\b(dividend|cash flow|earnings|revenue|profit|debt|produced|sales|dispatch|capacity|gas tariff|coal|shipment|closure|acquisition|resign|audit qualification)\b',normalized,re.I)
+    if (governance or promotion) and not detail and not re.search(r'\b(governance|committee|mandate|culture|mission)\b',query,re.I):
+        return False
+    return True

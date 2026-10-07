@@ -23,6 +23,13 @@ def offline_token_preflight(monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
+def route_classifier_off_by_default(monkeypatch, request):
+    # Canned-provider tests count model calls; the classifier has its own tests.
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "assistant_route_classifier_enabled", request.path.name == "test_routing_classifier.py")
+
+
+@pytest.fixture(autouse=True)
 def reset_database():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)

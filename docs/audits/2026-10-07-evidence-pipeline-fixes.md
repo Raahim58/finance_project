@@ -75,3 +75,60 @@ DATABASE_URL=sqlite:////tmp/psx-evidence-fixes-tests.sqlite EMBEDDING_BACKEND=ha
 `python -m app.jobs.pipeline_status` is the existing read-only operational report. `briefing_source_setup` is a target-creation operation, not a read-only verification command. Do not expand live targets or enable unscoped reconstruction to repair historical gaps without authorization.
 
 Remaining uncertainties include source/archive completeness, audited primary financial parsing, numerical answer entailment, genre repair, relevance/diversity judgment, unknown provider usage, existing canary orphan recovery, production scheduler cause/recovery, and actual unchanged-prompt before/after performance. Pipeline discovery failures preserve stage error/retry records; independent source-health updates in the deferred-commit failure path still require review. Commentary public links remain mutable even though dated source artifacts and pointers are retained internally.
+
+## Completed live suite: deployed first patch
+
+ZAI `glm-4.5-flash`, existing selected portfolio/confirmed IPS, unchanged prompts. Prompts 1–7 used separate conversations; 8–10 continued the comparison conversation. Every outcome is retained. The table reports sums of actual provider-reported input across attempts, including failed executions. Fallback source-panel links are not counted as model citations.
+
+| Prompt | Outcome | Provider input | Calls | Total ms | Raw final markers |
+|---|---|---:|---:|---:|---|
+| 1. What do you think of my portfolio right now? | synthesis_unavailable (citation_missing) | 16,486 | 1 | 72,805 | False |
+| 2. Should I buy more LUCK or FFC? | completed (valid references) | 82,131 | 4 | 109,480 | True |
+| 3. Can my portfolio meet my goals? | completed (valid references) | 14,916 | 1 | 45,355 | True |
+| 4. What’s happening in the market, and how does it affect me? | completed (valid references) | 16,469 | 1 | 51,889 | True |
+| 5. Why has LUCK been moving lately? | failed (tool_call_limit_exhausted) | 87,962 | 5 | 76,918 | False |
+| 6. What could go wrong with my investments? | completed (valid references) | 16,146 | 1 | 74,912 | True |
+| 7. Are there better options than what I currently hold? | synthesis_unavailable (citation_missing) | 33,263 | 2 | 79,970 | False |
+| 8. What about dividends? | failed (tool_call_limit_exhausted) | 77,116 | 5 | 50,973 | False |
+| 9. Does that change your view? | synthesis_unavailable (citation_missing) | 67,019 | 3 | 57,631 | False |
+| 10. Where did you get that number? | synthesis_unavailable (citation_missing) | 21,749 | 1 | 50,636 | False |
+
+Results: **4/10 completed with model citation markers; 4 citation rejections; 2 tool-call-limit failures.** No unknown input-token usage in these attempts. This patch did not achieve the 10K target. The comparison used 82,131 input tokens across four calls, exceeding the earlier 59,907-token observation. Dynamic market/corpus state was not frozen, so token differences are observed comparisons, not isolated causal estimates.
+
+Manual relevance judgment on the first five passages: portfolio question **2/5 useful or plausibly relevant**, comparison **3/5**. Portfolio selection included generic FFC committee mandates, LUCK promotional prose and Australian domestic budget/inflation context. Comparison included substantive FFC operations and LUCK drivers, Pakistani debt context, a metadata-only transmission notice and the same Australian story. These are small inspected samples, not certified corpus-wide relevance scores.
+
+Live tool trace showed repeated `research.search` failures because `symbols` was a string; the dividend follow-up repeated this shape five times. Company digest prefetch returned missing; stale deterministic sections were not rebuilt by chat reads. The model also continued omitting citations despite available sources.
+
+## Second live-observed increment
+
+The next patch preserves a single string issuer/category filter as a singleton list; excludes inspected metadata-only and generic promotional/governance excerpts unless explicitly requested; requires a global transmission channel for foreign macro context rather than accepting generic inflation/rate words; rebuilds stale public deterministic intelligence from retained evidence without fetching sources or changing ingestion scope; shortens rejected-answer history while retaining source-panel references; permits one no-tool citation repair within existing provider-call/deadline budgets. Regression optimization is deferred per the user’s instruction to test live first. Targeted live results are pending.
+
+## Actual public passage trace
+
+Execution `2b672a01-12e3-4f08-85a2-d85ad922acc6` selected public document `86344785-1d3a-478e-856c-c6b0755ce03a`, artifact `497b3d97-797f-4a1a-8504-cb40d90328cd`, unchanged content hash `add542e86c29e89afd8cc2e568c0e62456c80ae00b036c720593f598c62dd881`. The dated `news` source [Trump Says U.S. Controls Strait of Hormuz as Iran Denies Talks](https://gcaptain.com/trump-says-u-s-controls-strait-of-hormuz-as-iran-denies-talks) supplied chunk `02f7694c-1ad5-4c52-9170-18a58496900d` through the broader lane as `E6`. Its stored passage describes shipping uncertainty; it is context, not proof of company price causation or a verified numerical SQL observation.
+
+Actual attempt `d77f05c3-fe38-4f72-8179-659232b62bd9`: 16486 provider input tokens, 65948 ms, final HTTP-body hash `d861e5308467bed8f04e7721aa20ec32c55c87d7d2f63a3bfb4fc024d2748222`. Retained request reconstructed through the same HTTP JSON encoding matched that hash: **True**. Count-only packet components are retained in the JSON ledger and must not be summed as exact provider usage. The raw answer had no citation markers and was rejected (`citation_missing`), completing a trace of a preserved failure.
+
+## Further live iterations (all outcomes retained)
+
+| Iteration | Prompt | Outcome | Provider input | Calls | Total ms |
+|---|---:|---|---:|---:|---:|
+| retrieval/cache/scalar fix | 1 | completed (valid references) | 59,207 | 2 | 119,199 |
+| retrieval/cache/scalar fix | 2 | completed (valid references) | 70,181 | 2 | 130,978 |
+| retrieval/cache/scalar fix | 8 | completed (valid references) | 48,348 | 2 | 75,471 |
+| retrieval/cache/scalar fix | 9 | completed (valid references) | 63,112 | 2 | 89,104 |
+| retrieval/cache/scalar fix | 10 | completed (valid references) | 62,021 | 2 | 77,115 |
+| packet v2 / SQL actions | 2 | completed (valid references) | 34,585 | 1 | 65,349 |
+| packet v2 / SQL actions | 8 | synthesis_unavailable (citation_reference_unknown) | 45,326 | 2 | 75,242 |
+| packet v2 / SQL actions | 9 | completed (valid references) | 70,871 | 2 | 85,065 |
+| packet v2 / SQL actions | 10 | completed (valid references) | 37,253 | 1 | 31,327 |
+| historical reference fix | 2 | completed (valid references) | 67,856 | 2 | 115,656 |
+| historical reference fix | 8 | completed (valid references) | 23,171 | 1 | 36,301 |
+| historical reference fix | 9 | completed (valid references) | 72,275 | 2 | 113,532 |
+| historical reference fix | 10 | completed (valid references) | 75,156 | 2 | 79,367 |
+
+The retrieval/cache/scalar increment completed all five targeted questions with references, but remained expensive. Packet v2 completed the comparison in one call (34,585 input); its dividend follow-up was rejected for unknown E130, and that failure is preserved. Historical source titles/URLs remain in model history while old execution-local E labels are removed. The subsequent four-question run completed all four with valid references; input costs still varied greatly with citation repairs. This is identity/presence validation, **not factual entailment certification**. No 10K request budget or six-excerpt/company cap is claimed.
+
+Corporate-action evidence now comes from SQL with unchanged details, original source artifact and explicit effective/ex/payment dates. Percentage of par is not yield; missing cash-per-share or par value stays unknown. The dividend question selects dividend/risk/development sections and retains disclosure of omitted available sections.
+
+Public briefing endpoint live verification: HTTP 200 for news (40 entries), generation metadata and research JSON. Production had **zero briefing targets, candidates or stages** at verification. Adapter deployment is not activation. Its source setup also omitted enabling the research DataSource; the setup code now corrects that and rejects unscoped activation under canary dispatch. Production activation remains separately recorded.

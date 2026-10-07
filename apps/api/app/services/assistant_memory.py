@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import re
 import time
 from sqlalchemy import select, func, literal_column
 from fastapi import HTTPException
@@ -32,8 +33,16 @@ def latest_summary(db, conversation_id):
 
 
 def message_record(row):
+    content=row.content
+    if row.role=='assistant':
+        # Display labels are local to their original execution. Preserve source
+        # titles/URLs and the immutable saved message, but do not offer old E
+        # labels as current citation identities in a new provider request.
+        content=re.sub(r'\[E\d+:\s*','[',content)
+        content=re.sub(r'\[E\d+ reference unavailable\]','[historical reference unavailable]',content)
+        content=re.sub(r'\[\[E\d+(?:\s*,\s*E\d+)*\]\]','[historical evidence reference]',content)
     return {"message_id": row.id, "date": row.created_at.isoformat(), "role": row.role,
-            "context": json.loads(row.context_json), "text": row.content}
+            "context": json.loads(row.context_json), "text": content}
 
 
 def retained_history(db, conversation_id, current_execution):
