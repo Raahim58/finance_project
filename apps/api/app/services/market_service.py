@@ -19,6 +19,7 @@ from app.schemas.market import (
     CompanyDetailResponse,
     CompanyResponse,
     ExchangeResponse,
+    IndexCloseResponse,
     MarketFreshnessResponse,
     MarketPriceResponse,
     MarketSnapshotResponse,
@@ -173,6 +174,14 @@ def get_market_snapshot(db: Session, requested_date: date | None = None) -> Mark
         total_volume=sum(row.volume for row in prices),total_value=sum((row.value for row in prices),Decimal('0')),
         source='PSX DPS',source_url=artifact.source_url,ingested_at=artifact.retrieved_at,
         totals_note=f'Totals cover {len(prices)} stored securities, excluding indices; value is close × volume, not reported turnover.')
+
+
+def get_index_history(db: Session, symbol: str, limit: int = 400) -> list[IndexCloseResponse]:
+    from app.services.canonical_market_service import close_series
+    closes = close_series(db, symbol.replace("-", "").upper())
+    if not closes:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Index history not found")
+    return [IndexCloseResponse(trade_date=day, close=closes[day]) for day in sorted(closes)[-limit:]]
 
 
 def _price_query(trade_date: date) -> Select[tuple[MarketPrice]]:

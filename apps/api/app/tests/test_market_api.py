@@ -169,3 +169,7 @@ def test_canonical_share_metadata_survives_company_api_serialization():
     assert result.free_float_shares==Decimal(439500000)
     assert result.capitalization_date==date(2026,10,2)
     assert result.volume==837001 and result.market_cap==Decimal(601470400000)
+
+
+def test_index_history_returns_404_without_stored_closes(client):
+    assert client.get("/market/index/KSE-100/history").status_code == 404

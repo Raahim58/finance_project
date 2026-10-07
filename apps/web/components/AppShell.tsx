@@ -100,6 +100,7 @@ function MobileNavDrawer({ pathname, onClose }: { pathname: string; onClose: () 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const overview = pathname === "/dashboard";
+  const editorial = overview || pathname === "/market";
   const navigationGroups = overview ? groups.map(group => group.label === "Investment" ? { ...group, items: [group.items[1], group.items[0], group.items[2]] } : group) : groups;
   const publicRoute = pathname === "/" || pathname === "/login" || pathname === "/signup" || pathname === "/onboarding";
   const [menuOpen, setMenuOpen] = useState(false);
@@ -109,10 +110,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (publicRoute) return <>{children}</>;
 
   return (
-    <AssistantWorkspaceProvider><div className={`app-shell ${overview ? overviewStyles.overviewShell : ""}`}>
+    <AssistantWorkspaceProvider><div className={`app-shell ${editorial ? overviewStyles.overviewShell : ""}`}>
       <aside className="app-sidebar" aria-label="Primary navigation">
         <Link href="/dashboard" className="flex h-[76px] w-full items-center gap-3 px-5 max-lg:justify-center max-lg:px-0">
-          {overview ? <span className={overviewStyles.wordmark}>RAAHIM</span> : <><span className="brand-mark">PX</span>
+          {editorial ? <span className={overviewStyles.wordmark}>RAAHIM</span> : <><span className="brand-mark">PX</span>
           <span className="sidebar-wordmark min-w-0">
             <strong className="block text-[13px] font-semibold tracking-[-.01em]">PSX Workstation</strong>
             <span className="block text-[11px] text-muted">Portfolio intelligence</span>

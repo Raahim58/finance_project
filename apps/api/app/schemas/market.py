@@ -60,6 +60,11 @@ class MarketSnapshotResponse(BaseModel):
     totals_note: str | None = None
 
 
+class IndexCloseResponse(BaseModel):
+    trade_date: date
+    close: Decimal
+
+
 class SectorDailyStatsResponse(BaseModel):
     sector: str
     trade_date: date

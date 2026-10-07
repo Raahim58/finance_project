@@ -7,6 +7,7 @@ from app.db.session import get_db
 from app.schemas.market import (
     CompanyDetailResponse,
     CompanyResponse,
+    IndexCloseResponse,
     MarketFreshnessResponse,
     MarketOverviewResponse,
     MarketPriceResponse,
@@ -16,6 +17,7 @@ from app.schemas.market import (
 from app.services.market_service import (
     get_company_detail,
     get_company_history,
+    get_index_history,
     get_market_freshness,
     get_market_snapshot,
     get_sectors,
@@ -90,6 +92,11 @@ def sector_performance(
     db: Session = Depends(get_db),
 ):
     return get_sector_performance(db, sector, start_date, end_date)
+
+
+@router.get("/index/{symbol}/history", response_model=list[IndexCloseResponse])
+def index_history(symbol: str, limit: int = Query(default=400, ge=1, le=2000), db: Session = Depends(get_db)):
+    return get_index_history(db, symbol, limit)
 
 
 @router.get("/companies", response_model=list[CompanyResponse])
