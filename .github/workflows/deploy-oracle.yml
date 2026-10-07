@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - company-evidence
   workflow_dispatch:
 
 concurrency:
