@@ -1,0 +1,71 @@
+/* Editorial palette is provided by the shell's .overviewShell scope. */
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 0; color: #1b211b; font-variant-numeric: tabular-nums; }
+.layout button, .layout input { font: inherit; }
+.layout button:focus-visible, .layout input:focus-visible { outline: 2px solid #176044; outline-offset: 3px; }
+.main { min-width: 0; padding-right: 28px; }
+.rail { min-width: 0; padding-left: 26px; border-left: 1px solid #e6e0d4; }
+.subtabs { display: flex; gap: 30px; margin-bottom: 18px; border-bottom: 1px solid #e6e0d4; overflow-x: auto; }
+.subtabs button { padding: 0 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #4b5149; font-size: 14px; cursor: pointer; white-space: nowrap; }
+.subtabs button[aria-selected="true"] { border-color: #1b211b; color: #1b211b; font-weight: 600; }
+.caption { margin-bottom: 8px; color: #73736b; font-size: 12px; line-height: 1.5; }
+.caption b { color: #1b211b; font-weight: 600; }
+.chartBox { min-height: 300px; }
+.legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 22px; margin: 8px 0 4px; font-size: 12px; color: #4b5149; }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; }
+.stats { display: flex; flex-wrap: wrap; gap: 8px 26px; margin-top: 14px; font-size: 12px; color: #73736b; }
+.stats b { color: #1b211b; font-weight: 600; }
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: 22px; padding-top: 18px; border-top: 1px solid #e6e0d4; }
+.kpi { padding: 0 16px; border-left: 1px solid #e6e0d4; min-width: 0; }
+.kpi:first-child { padding-left: 0; border-left: 0; }
+.kpi dt { color: #73736b; font-size: 12px; }
+.kpi dd { margin: 4px 0 0; }
+.kpiValue { display: block; font-family: Georgia, "Times New Roman", serif; font-size: 30px; font-weight: 500; letter-spacing: -.02em; line-height: 1.15; }
+.kpiDelta { display: block; margin-top: 2px; font-size: 12px; color: #73736b; }
+.positive { color: #176044; }
+.negative { color: #b44d41; }
+.basis { margin-top: 12px; color: #73736b; font-size: 11px; line-height: 1.5; }
+.railTitle { font-family: Georgia, "Times New Roman", serif; font-size: 20px; font-weight: 500; margin: 0 0 12px; }
+.railSection + .railSection { margin-top: 28px; }
+.rows { margin: 0; }
+.row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 10px; padding: 10px 0; border-bottom: 1px solid #efeae0; font-size: 12px; }
+.row dt { color: #73736b; }
+.row dd { margin: 0; text-align: right; font-weight: 500; }
+.row small { display: block; margin-top: 2px; color: #73736b; font-size: 11px; font-weight: 400; }
+.readonly { margin-top: 8px; color: #73736b; font-size: 11px; line-height: 1.5; }
+.compare { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.compare label { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 4px 10px; align-items: start; padding: 8px 0; cursor: pointer; font-size: 13px; }
+.compare label[data-disabled="true"] { cursor: default; opacity: .62; }
+.compare input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: #176044; }
+.compareName { display: inline-flex; align-items: center; gap: 8px; }
+.compareNote { grid-column: 2; color: #73736b; font-size: 11px; line-height: 1.4; }
+.exportWrap { position: relative; margin-top: 24px; }
+.exportBtn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 42px; border: 0; border-radius: 5px; background: #1b211b; color: #fff; font-size: 13px; cursor: pointer; }
+.exportBtn:disabled { opacity: .45; cursor: default; }
+.exportMenu { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 20; border: 1px solid #dcd6c9; border-radius: 5px; background: #fcfaf5; box-shadow: 0 8px 25px #1b211b1a; overflow: hidden; }
+.exportMenu button { display: block; width: 100%; padding: 10px 12px; border: 0; border-bottom: 1px solid #e6e0d4; background: transparent; text-align: left; font-size: 12px; cursor: pointer; color: #1b211b; }
+.exportMenu button:last-child { border-bottom: 0; }
+.exportMenu button:hover:not(:disabled) { background: #edf0e6; }
+.exportMenu button:disabled { color: #73736b; cursor: default; }
+.exportHint { margin-top: 8px; text-align: center; color: #73736b; font-size: 11px; }
+.state { display: grid; align-content: center; justify-items: start; gap: 6px; min-height: 220px; padding: 12px 0; color: #73736b; font-size: 12px; line-height: 1.6; }
+.state strong { color: #1b211b; font-size: 14px; font-weight: 600; }
+.state button { margin-top: 6px; height: 32px; padding: 0 14px; border: 1px solid #dcd6c9; border-radius: 5px; background: #fcfaf5; cursor: pointer; font-size: 12px; }
+.skeleton { height: 340px; border-radius: 6px; background: linear-gradient(90deg, #f0eee5, #f7f4ea, #f0eee5); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+.notes { margin: 14px 0 0; padding: 0; list-style: none; font-size: 11px; line-height: 1.6; color: #73736b; }
+.notes li { padding: 3px 0 3px 12px; border-left: 2px solid #e7dabc; }
+.budget { margin-top: 26px; overflow-x: auto; }
+.budget h3 { margin-bottom: 4px; font-family: Georgia, serif; font-size: 18px; font-weight: 500; }
+.budget table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.budget th { padding: 9px 6px; text-align: right; color: #73736b; font-size: 11px; font-weight: 400; border-bottom: 1px solid #e6e0d4; }
+.budget td { padding: 8px 6px; border-bottom: 1px solid #efeae0; text-align: right; }
+.budget th:first-child, .budget td:first-child { text-align: left; font-weight: 600; }
+@media (max-width: 1100px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .main { padding-right: 0; }
+  .rail { margin-top: 28px; padding: 24px 0 0; border-left: 0; border-top: 1px solid #e6e0d4; }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 0; }
+  .kpi:nth-child(odd) { padding-left: 0; border-left: 0; }
+}
+.link { border: 0; background: transparent; padding: 0; color: #176044; font-size: 11px; cursor: pointer; text-decoration: underline; }

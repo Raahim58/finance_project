@@ -1,4 +1,4 @@
-import type { IndexClose } from "@/lib/api/market";
+import type { IndexClose, MarketSnapshot } from "@/lib/api/market";
 import { numeric } from "@/lib/overview";
 
 export const chartRanges = [["1W", 7], ["1M", 31], ["3M", 92], ["1Y", 366], ["ALL", null]] as const;
@@ -49,3 +49,13 @@ export function websiteHost(url?: string | null): string | null {
   try { return new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`).hostname.replace(/^www\./, "") || null; }
   catch { return null; }
 }
+
+// Prefer the stored snapshot; otherwise derive level and change from the latest two stored index closes.
+export function indexLatest(history: IndexClose[], snapshot?: MarketSnapshot | null) {
+  if (snapshot) return { name: snapshot.index_name, date: snapshot.snapshot_date, level: numeric(snapshot.index_value), change: numeric(snapshot.index_change), percent: numeric(snapshot.index_change_percent), derived: false };
+  const points = closePoints(history);
+  const last = points.at(-1), prior = points.at(-2);
+  if (!last) return null;
+  return { name: "KSE-100", date: last.date, level: last.close, change: prior ? last.close - prior.close : null, percent: prior ? (last.close - prior.close) / prior.close * 100 : null, derived: true };
+}
+

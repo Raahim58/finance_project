@@ -17,6 +17,11 @@ api_router.include_router(assistant.router, tags=["assistant"])
 api_router.include_router(assistant_workspace.router, tags=["assistant"])
 api_router.include_router(intelligence.router, tags=["intelligence"])
 api_router.include_router(monitoring.router, tags=["monitoring"])
+from app.api.routes import portfolio_build_extras
+api_router.include_router(portfolio_build_extras.router, tags=["portfolio build"])
+
+from app.api.routes import portfolio_scenarios_extras
+api_router.include_router(portfolio_scenarios_extras.router, tags=["portfolio scenarios"])
 
 from app.api.routes import research_intelligence
 api_router.include_router(research_intelligence.router, tags=["research intelligence"])

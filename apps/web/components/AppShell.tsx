@@ -100,7 +100,7 @@ function MobileNavDrawer({ pathname, onClose }: { pathname: string; onClose: () 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const overview = pathname === "/dashboard";
-  const editorial = overview || pathname === "/market";
+  const editorial = overview || pathname === "/market" || pathname.startsWith("/portfolios");
   const navigationGroups = overview ? groups.map(group => group.label === "Investment" ? { ...group, items: [group.items[1], group.items[0], group.items[2]] } : group) : groups;
   const publicRoute = pathname === "/" || pathname === "/login" || pathname === "/signup" || pathname === "/onboarding";
   const [menuOpen, setMenuOpen] = useState(false);

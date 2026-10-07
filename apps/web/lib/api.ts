@@ -366,6 +366,10 @@ export function getPortfolios() {
   return request<Portfolio[]>("/portfolios");
 }
 
+export function selectDefaultPortfolio(portfolioId: string) {
+  return request<Portfolio>(`/portfolios/${encodeURIComponent(portfolioId)}/select-default`, { method: "POST" });
+}
+
 export function createPortfolio(name: string, baseCurrency = "PKR") {
   return request<Portfolio>("/portfolios", {
     method: "POST",

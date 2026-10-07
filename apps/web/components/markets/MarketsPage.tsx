@@ -3,11 +3,11 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Icon } from "@/components/Icon";
-import type { Company, IndexClose, MarketPrice, MarketSnapshot, SectorDailyStats } from "@/lib/api";
+import type { Company, MarketPrice, SectorDailyStats } from "@/lib/api";
 import type { ResearchEventView } from "@/lib/api/research";
 import { clearApiCache } from "@/lib/api";
 import { formatDate, formatNumber, formatPercent, humanize, numeric } from "@/lib/overview";
-import { chartRanges, closePoints, sliceRange, timeAgo, yearExtremes, type ChartRange } from "@/lib/markets";
+import { chartRanges, closePoints, indexLatest, sliceRange, timeAgo, yearExtremes, type ChartRange } from "@/lib/markets";
 import type { Resource } from "@/components/overview/useOverviewData";
 import { CompanyLogo } from "./CompanyLogo";
 import { IndexChart } from "./IndexChart";
@@ -58,15 +58,6 @@ export function MarketsPage() {
     </div>
     <MarketBrief events={data.events} changes={changeBySymbol} />
   </div>;
-}
-
-// Prefer the stored snapshot; otherwise derive level and change from the latest two stored index closes.
-function indexLatest(history: IndexClose[], snapshot?: MarketSnapshot | null) {
-  if (snapshot) return { name: snapshot.index_name, date: snapshot.snapshot_date, level: numeric(snapshot.index_value), change: numeric(snapshot.index_change), percent: numeric(snapshot.index_change_percent), derived: false };
-  const points = closePoints(history);
-  const last = points.at(-1), prior = points.at(-2);
-  if (!last) return null;
-  return { name: "KSE-100", date: last.date, level: last.close, change: prior ? last.close - prior.close : null, percent: prior ? (last.close - prior.close) / prior.close * 100 : null, derived: true };
 }
 
 function IndexPanel({ data }: { data: Data }) {
