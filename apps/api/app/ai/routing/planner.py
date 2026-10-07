@@ -22,12 +22,17 @@ log = logging.getLogger(__name__)
 
 FOLLOW_UP_RESERVE = 4          # calls kept for model-directed follow-ups/verification
 SECONDARY_PRIORITY = 1000      # secondary-route blocks are trimmed before primary ones
-PLANNER_VERSION = 'route-planner.v2'
+PLANNER_VERSION = 'route-planner.v3'
 
 # Optional blocks the question itself asks for are promoted to required, so budget
 # pressure cannot trim them ahead of per-holding detail (seen live: the model had to
 # fetch market data / performance itself because pass 1 dropped or lacked them).
 RISK_WORDS = re.compile(r'\brisks?\b|\bvolatil|\bbeta\b|\bsharpe\b|\bdrawdown\b|\bdownside\b', re.I)
+ALTERNATIVE_WORDS = re.compile(
+    r'\bbetter options?\b|\balternatives?\b|\boutside\b|\bother (stocks?|companies|names|options)\b|'
+    r'\bwhat else\b|\bnew (stocks?|positions?|ideas?)\b|\binstead\b|\bbeyond\b|\bdiversify into\b', re.I)
+MAX_HOLDINGS_QUANT = 10
+UNIVERSE_SCREEN = ['score', 'sector_percentile', 'completeness', 'growth_flag', 'net_margin', 'liquidity']
 PERFORMANCE_WORDS = re.compile(r'\bgoals?\b|\bperformance\b|\breturns?\b|\bdrawdown\b|\bcagr\b|\bmeet\b', re.I)
 
 
@@ -149,11 +154,15 @@ def plan_initial_evidence(identity: dict, question: str, company_only: bool, all
         for block in (Block.IPS_COMPLIANCE, Block.PORTFOLIO_SNAPSHOT):
             if block not in contract.forbidden:
                 allowed = {block: contract.route, **allowed} if block not in allowed else allowed
+    holdings_wide = bool(portfolio and not entities and contract.entity_blocks
+                         and Block.SECURITY_QUANT in contract.required)
     if portfolio and not entities and contract.entity_blocks:
         entities = list(identity.get('portfolio_instruments') or [])
     if not contract.entity_blocks:
         entities = []
-    entities = entities[:contract.max_entities]
+    # Portfolio-wide rebalancing needs risk/return for every holding in pass 1 (a follow-up
+    # call per holding was the cost driver); everything else stays at max_entities.
+    entities = entities[:MAX_HOLDINGS_QUANT if holdings_wide else contract.max_entities]
     for block in contract.required:
         if block in UNAVAILABLE_BLOCKS:
             missing.append({'block': block.value, 'reason': 'no_data_source'})
@@ -189,6 +198,10 @@ def plan_initial_evidence(identity: dict, question: str, company_only: bool, all
     for index, entity in enumerate(entities):
         instrument_id = entity['instrument_id']
         first_ones = index < 2   # required blocks cover at most two entities
+        if holdings_wide:
+            if Block.SECURITY_QUANT in allowed:
+                add(Block.SECURITY_QUANT, 'quant.security', {'instrument_id': instrument_id})
+            continue
         if digest_mode:
             block = Block.COMPANY_DIGEST
             allowed.setdefault(block, contract.route)
@@ -217,6 +230,13 @@ def plan_initial_evidence(identity: dict, question: str, company_only: bool, all
         if portfolio:
             args['portfolio_id'] = portfolio['portfolio_id']
         add(Block.EVIDENCE_SEARCH, 'research.search', args)
+
+    if (Block.MARKET_UNIVERSE in allowed and portfolio and not price_only
+            and ALTERNATIVE_WORDS.search(question)):
+        held = [e['instrument_id'] for e in (identity.get('portfolio_instruments') or [])]
+        add(Block.MARKET_UNIVERSE, 'market.universe',
+            {'limit': 8, 'rank_by': 'score', 'screening_fields': UNIVERSE_SCREEN,
+             'exclude_instrument_ids': held[:50]}, promote=True)
 
     market_asked = 'market_terms' in decision.flags
     if Block.MARKET_SNAPSHOT in allowed and not price_only and (

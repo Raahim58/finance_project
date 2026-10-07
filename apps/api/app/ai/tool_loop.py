@@ -159,6 +159,17 @@ def _packet_receipt(checkpoint):
     }
 
 
+PORTFOLIO_SCOPED_TOOLS = {'portfolio.summary', 'portfolio.performance', 'ips.compliance', 'quant.portfolio'}
+
+
+def _pin_selected_portfolio(call: ContentBlock, identity: dict) -> None:
+    """The user's selected portfolio id is server-resolved; never trust a model-typed one
+    (seen live: a mistyped id burned a call on not_found)."""
+    selected = (identity.get('portfolio') or {}).get('portfolio_id')
+    if selected and call.name in PORTFOLIO_SCOPED_TOOLS and isinstance(call.arguments, dict):
+        call.arguments['portfolio_id'] = selected
+
+
 def _company_tool_allowed(name: str, arguments=None) -> bool:
     if name in ("search_conversation_history","tools.catalog"):
         return True
@@ -1205,6 +1216,7 @@ async def run_tool_loop(
                 async with semaphore:
                     if payload.company_only and not _company_tool_allowed(call.name or "", call.arguments):
                         return ToolExecution(call, tool_result("invalid_arguments", error={"code": "company_scope_violation"}), 0.0)
+                    _pin_selected_portfolio(call, checkpoint.get('resolved_identity', {}))
                     return await _execute_tool(user.id, call)
 
             executions = await asyncio.gather(

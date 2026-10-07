@@ -1277,7 +1277,7 @@ def test_accepted_allocation_delivery_and_local_recovery_do_not_repeat_provider(
         row = db.scalar(select(AssistantExecution).where(AssistantExecution.user_id == user_id))
         identifier = row.id
         checkpoint = json.loads(decrypt_secret(row.transcript_encrypted))
-        assert checkpoint["reserved_tool_calls"] == 11  # held-company first pass plus three model tools
+        assert checkpoint["reserved_tool_calls"] == 8  # portfolio-wide first pass (summary, ips, quant, per-holding risk) plus three model tools
         assert "cost units" not in json.dumps(captured)
         assert checkpoint["allocation_check"]["accepted"] is True
         assert "Execution allowance (not evidence)" in json.dumps(captured[1])

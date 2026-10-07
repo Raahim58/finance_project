@@ -225,8 +225,81 @@ def test_digest_sections_follow_the_route_not_a_seven_section_default():
     held = [{'instrument_id': 'a', 'symbol': 'A'}, {'instrument_id': 'b', 'symbol': 'B'}]
     for question, limit in (('What do you think of my portfolio?', 2), ('Should I buy more A or B?', 3),
                             ("What’s happening in the market, and how does it affect me?", 3)):
-        plan = plan_initial_evidence({'portfolio': PORTFOLIO, 'portfolio_instruments': held}, question, False, 20, use_digests=True)
+        plan = plan_initial_evidence({'portfolio': PORTFOLIO, 'portfolio_instruments': held,
+                                      'mentioned_instrument_candidates': held if 'buy' in question else []},
+                                     question, False, 20, use_digests=True)
         digests = [s for s in plan.steps if s.tool == 'research.company_digest']
         assert digests and all(len(s.arguments['sections']) <= limit for s in digests), question
     full = plan_initial_evidence({'explicit_instrument': LUCK}, 'How are LUCK margins and debt?', True, 12, use_digests=True)
     assert len(next(s for s in full.steps if s.tool == 'research.company_digest').arguments['sections']) == 7
+
+
+HOLDINGS = [{'instrument_id': f'h{i}', 'symbol': f'S{i}'} for i in range(9)]
+
+
+def test_portfolio_wide_rebalance_loads_risk_for_every_holding_in_pass_one():
+    plan = plan_initial_evidence({'portfolio': PORTFOLIO, 'portfolio_instruments': HOLDINGS},
+                                 'Are there better options than what I currently hold?', False, 32)
+    assert plan.decision.primary is Route.PORTFOLIO_REBALANCE
+    quant = [c for c in plan.calls if c.name == 'quant.security']
+    assert len(quant) == 9 and not plan.budget.missing_required
+    # per-holding digests/prices are not fetched: portfolio.summary already carries prices
+    assert 'research.company_digest' not in names(plan) and 'market.latest' not in names(plan)
+
+
+def test_alternatives_question_screens_the_universe_excluding_holdings():
+    plan = plan_initial_evidence({'portfolio': PORTFOLIO, 'portfolio_instruments': HOLDINGS},
+                                 'give options outside just my current portfolio holdings', False, 32)
+    screen = [c for c in plan.calls if c.name == 'market.universe']
+    assert len(screen) == 1
+    args = screen[0].arguments
+    assert args['rank_by'] == 'score' and set(args['exclude_instrument_ids']) == {h['instrument_id'] for h in HOLDINGS}
+    assert not plan.budget.missing_required
+
+
+def test_non_alternative_rebalance_does_not_screen_the_universe():
+    plan = plan_initial_evidence({'portfolio': PORTFOLIO, 'portfolio_instruments': HOLDINGS},
+                                 'Should I rebalance my portfolio?', False, 32)
+    assert 'market.universe' not in names(plan)
+
+
+def test_model_typed_portfolio_id_is_replaced_by_the_selected_one():
+    from app.ai.providers.base import ContentBlock
+    from app.ai.tool_loop import _pin_selected_portfolio
+    call = ContentBlock('tool_call', id='x', name='portfolio.summary', arguments={'portfolio_id': 'typo'})
+    _pin_selected_portfolio(call, {'portfolio': {'portfolio_id': 'real'}})
+    assert call.arguments['portfolio_id'] == 'real'
+    other = ContentBlock('tool_call', id='y', name='market.latest', arguments={'instrument_id': 'i'})
+    _pin_selected_portfolio(other, {'portfolio': {'portfolio_id': 'real'}})
+    assert 'portfolio_id' not in other.arguments
+
+
+def test_universe_screen_ranks_by_score_screenable_only_and_excludes_held():
+    import uuid
+    from datetime import date
+    from decimal import Decimal
+    from app.db.session import SessionLocal
+    from app.models.market import Company, Exchange
+    from app.models.workstation import CompanyScreeningSnapshot, Instrument
+    from app.tools.market_tools import MarketUniverseInput, _universe
+
+    tag = uuid.uuid4().hex[:6].upper()
+    with SessionLocal() as db:
+        exchange = Exchange(code=f'X{tag}', name='Test exchange'); db.add(exchange); db.flush()
+        made = {}
+        for name, score, screenable in (('A', '0.9', True), ('B', '0.5', True), ('C', '0.99', False), ('D', '0.7', True)):
+            company = Company(exchange_id=exchange.id, name=f'{tag}{name} Ltd', symbol=f'{tag}{name}', sector='Banks', is_active=True)
+            db.add(company); db.flush()
+            inst = Instrument(company_id=company.id, symbol=f'{tag}{name}', name=company.name,
+                              instrument_type='equity', currency='PKR')
+            db.add(inst); db.flush()
+            db.add(CompanyScreeningSnapshot(instrument_id=inst.id, as_of_date=date(2026, 10, 1), sector='Banks',
+                                            score=Decimal(score), completeness=Decimal('1'), screenable=screenable))
+            made[name] = inst.id
+        db.flush()
+        out = _universe(db, None, MarketUniverseInput(
+            sector='Banks', limit=10, rank_by='score', screening_fields=['score'],
+            exclude_instrument_ids=[made['D']]))
+        symbols = [row[1] for row in out['data']['rows'] if row[1].startswith(tag)]
+        db.rollback()
+    assert symbols == [f'{tag}A', f'{tag}B']

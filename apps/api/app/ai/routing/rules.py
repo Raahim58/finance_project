@@ -28,7 +28,7 @@ def _rx(pattern: str) -> re.Pattern:
 
 PORTFOLIO = _rx(r"\bmy (portfolio|holdings?|positions?|investments?|stocks|money|allocation)\b|\bi (currently )?(hold|own)\b|\bwhat i (currently )?(hold|own)\b|\bportfolio\b")
 IMPACT = _rx(r"\b(affect|impact|hurt|help|mean for|exposure)\b")
-REBALANCE = _rx(r"\brebalanc|\bconcentrat|\bdiversif|\btrim\b|\boverweight|\bunderweight|\bbuy more\b|\bsell\b|\bbetter options?\b|\balternatives?\b|\breduce\b|\bshould i (buy|add)\b|\ballocat|\brecommend|\bwhat (should|can) i do\b|\bnext (step|action)")
+REBALANCE = _rx(r"\brebalanc|\bconcentrat|\bdiversif|\btrim\b|\boverweight|\bunderweight|\bbuy more\b|\bsell\b|\bbetter options?\b|\balternatives?\b|\boptions? outside\b|\boutside (of )?(my|the|just)\b|\bother (stocks?|options|names)\b|\bwhat else (should|could|can) i\b|\bnew (stocks?|ideas?)\b|\breduce\b|\bshould i (buy|add)\b|\ballocat|\brecommend|\bwhat (should|can) i do\b|\bnext (step|action)")
 PORTFOLIO_REVIEW = _rx(r"\bgoals?\b|what could go wrong|\brisks?\b|\bhow (is|am)\b|what do you think of|\breview\b|\bmandate\b|\bips\b|\bcompliance\b|\bperformance\b")
 MARKET = _rx(r"\bmarket\b|\bkse\b|\bindex\b|\bsector\b|\bbreadth\b|\bpsx\b|\bmacro\b|\bmorning\b|\bnews\b")
 MARKET_BRIEF = _rx(r"(what'?s|what is) (happening|going on) in the market|\bmarket (today|overview|brief|update|status)\b|\bhow is the market\b|\bmorning brief\b|\bnews today\b")

@@ -37,6 +37,7 @@ class Block(str, Enum):
     IPS_COMPLIANCE = 'ips_compliance'            # ips.compliance
     PORTFOLIO_QUANT = 'portfolio_quant'          # quant.portfolio
     EVIDENCE_SEARCH = 'evidence_search'          # research.search (document text only)
+    MARKET_UNIVERSE = 'market_universe'          # market.universe ranked by stored screening score
     MARKET_SNAPSHOT = 'market_snapshot'          # market.overview (SQL index/movers/sectors)
     MARKET_BRIEF = 'market_brief'                # research.morning_brief (commentary, never exact numbers)
     PORTFOLIO_PERFORMANCE = 'portfolio_performance'  # portfolio.performance (ledger history)
