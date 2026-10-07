@@ -29,6 +29,8 @@ from app.services.portfolio_service import get_portfolio_summary, get_portfolio_
 from app.services.rag_service import active_embedding_model
 from app.core.config import settings
 from app.services.financial_evidence_eligibility import public_primary_financials, verified_secondary_financials
+from app.services.pipeline.event_reads import event_records, rank_score
+from app.services.pipeline.events import VERSION as RECORD_VERSION
 
 
 def resolve_company(db, symbol):
@@ -89,6 +91,8 @@ def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=Non
             Event.occurred_at <= datetime.now(UTC),
             NormalizedEvent.classification_status == "classified",
             NormalizedEvent.materiality.in_(("medium", "high")),
+            # Classified event records are read whole by event_records(), not per raw member.
+            NormalizedEvent.detection_version != RECORD_VERSION,
         )
     )
     if end:
@@ -289,8 +293,19 @@ def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=Non
     return merged
 
 
+def event_candidates(db, *, window_days=90, limit=1000, start=None, end=None):
+    """Classified event records first, then legacy rows not already inside one."""
+    records = event_records(db, window_days=window_days, start=start, end=end, limit=limit, candidate_limit=limit)
+    covered = {raw for row in records for raw in row["raw_event_ids"]}
+    legacy = [row for row in event_views(db, window_days=window_days, limit=limit, start=start, end=end)
+              if row.get("raw_event_id") not in covered]
+    return records + legacy
+
+
 def _company_event_matches(db, user, instrument, *, limit=5, window_days=90, candidate_events=None, start=None, end=None):
-    direct = event_views(db, symbol=instrument.symbol, window_days=window_days, limit=limit, start=start, end=end)
+    records = event_records(db, symbols=[instrument.symbol], window_days=window_days, start=start, end=end,
+                            limit=limit, candidate_limit=max(limit, 500))
+    direct = records + event_views(db, symbol=instrument.symbol, window_days=window_days, limit=limit, start=start, end=end)
     for row in direct:
         row["relationship_kind"] = "direct"
     profile = current_profile(db, user, instrument) if user else None
@@ -302,7 +317,7 @@ def _company_event_matches(db, user, instrument, *, limit=5, window_days=90, can
         for candidate in (
             candidate_events
             if candidate_events is not None
-            else event_views(db, window_days=window_days, limit=1000, start=start, end=end)
+            else event_candidates(db, window_days=window_days, start=start, end=end)
         ):
             row = dict(candidate)
             matched = factors.intersection(row["factors"])
@@ -315,7 +330,7 @@ def _company_event_matches(db, user, instrument, *, limit=5, window_days=90, can
     return direct, indirect, profile is not None
 
 
-def company_event_page(db, user, instrument, *, offset=0, limit=5, start=None, end=None):
+def company_event_page(db, user, instrument, *, offset=0, limit=5, start=None, end=None, event_types=None):
     """One bounded matching query for Assistant readers; no model generation.
 
     Reuse the company page's exposure matching, preserve legacy directly linked
@@ -346,17 +361,21 @@ def company_event_page(db, user, instrument, *, offset=0, limit=5, start=None, e
     # members already merged by event_views must not reappear as raw duplicates.
     clustered = {raw_id for row in matched.values() for raw_id in row.get("raw_event_ids", [])}
     rows = [row for row in matched.values() if row["id"] not in clustered or row.get("raw_event_ids")]
-    rows.sort(key=lambda row: (-int(row.get("materiality") == "high"), -utc(row["occurred_at"]).timestamp(), row["event_key"]))
+    if event_types:
+        rows = [row for row in rows if row.get("event_type") in event_types]
+    rows.sort(key=lambda row: (-rank_score(row), row["event_key"]))
     selected = rows[offset:offset + limit]
     more = offset + len(selected) < len(rows)
     return {"events": selected, "coverage": {
-        "symbol": instrument.symbol, "period_start": str(start) if start else None,
+        "symbol": instrument.symbol, "event_types": sorted(event_types) if event_types else None,
+        "period_start": str(start) if start else None,
         "period_end": str(end) if end else None,
         "indirect_window_days": 90 if start is None else None,
         "direct_window": "explicit_dates" if start else "stored_history",
         "exposure_profile_available": profile_available,
         "indirect_factors": ["oil_price", "pk_policy_rate", "usd_pkr"],
         "candidate_limit": candidate_limit, "completeness": "bounded_scan",
+        "ranking": "freshness 0.45 + materiality 0.35 + confidence 0.20",
         "matched_in_scan": len(rows), "returned": len(selected), "has_more": more,
         "continuation": str(offset + len(selected)) if more else None,
         "empty_meaning": "No matches on this page within the stated window and bounded candidate scan.",
@@ -372,13 +391,7 @@ def company_events(db, user, instrument, *, limit=5, window_days=90, candidate_e
     chosen += [r for r in direct[3:] + indirect[2:] if r["event_key"] not in seen][
         : max(0, limit - len(chosen))
     ]
-    chosen.sort(
-        key=lambda r: (
-            -int(r["materiality"] == "high"),
-            -utc(r["occurred_at"]).timestamp(),
-            r["event_key"],
-        )
-    )
+    chosen.sort(key=lambda r: (-rank_score(r), r["event_key"]))
     return chosen[:limit]
 
 
@@ -549,7 +562,7 @@ def company_intelligence(db, user, symbol):
 def portfolio_intelligence(db, user, portfolio_id, limit=5):
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     summary = get_portfolio_summary(db, user, portfolio_id)
-    candidates = event_views(db, limit=1000)
+    candidates = event_candidates(db)
     instruments = {h.symbol: resolve_company(db, h.symbol) for h in summary.holdings}
     profiles = {
         symbol: current_profile(db, user, instrument) for symbol, instrument in instruments.items()

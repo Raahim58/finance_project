@@ -131,6 +131,9 @@ class Settings(BaseSettings):
     pipeline_dispatch_scope: str = ""
     pipeline_enabled: bool = False
     pipeline_enrichment_enabled: bool = False
+    # Operator opt-in: public news/announcement text may be sent to the free
+    # application-owned classifier. Off means the rules classifier is used.
+    pipeline_classification_model_enabled: bool = False
     pipeline_max_live_articles: int = 300
     pipeline_max_history_articles: int = Field(default=100, ge=0)
     pipeline_max_history_pdfs: int = Field(default=25, ge=0)

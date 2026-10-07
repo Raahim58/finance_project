@@ -334,15 +334,19 @@ def test_strict_financial_extraction_preserves_basis_duration_and_scale():
 
 def test_new_statement_events_reach_existing_company_consumers():
     from app.services.pipeline.events import build
-    from app.services.research_intelligence_service import event_views
+    from app.services.research_intelligence_service import company_event_page, event_views
     from app.schemas.event_intelligence import NormalizedEventResponse
     with SessionLocal() as db:
         inst,doc=seed(db);sections(db,doc.id);link(db,doc.id);extract(db,doc.id)
         result=build(db,doc.id);assert result['events']
         assert build(db,doc.id)==result
-        rows=event_views(db,symbol=inst.symbol)
-        assert rows and rows[0]['statement_kind'] in ('reported_fact','guidance')
-        assert rows[0]['source_document_type']=='announcement'
+        # Classified records are read whole, never as one row per raw member.
+        assert event_views(db,symbol=inst.symbol)==[]
+        rows=company_event_page(db,None,inst)['events']
+        assert rows and rows[0]['record']=='classified_event'
+        assert rows[0]['statement_kind'] in ('reported_fact','guidance')
+        assert {e['document_id'] for e in rows[0]['evidence']}=={doc.id}
+        assert len({r['event_key'] for r in rows})==len(rows)
         NormalizedEventResponse.model_validate(rows[0])
 
 

@@ -28,6 +28,8 @@ x-pipeline-worker: &pipeline-worker
   environment:
     PIPELINE_ENABLED: "true"
     PIPELINE_ENRICHMENT_ENABLED: "false"
+    # Operator opt-in to the free application-owned article classifier; rules otherwise.
+    PIPELINE_CLASSIFICATION_MODEL_ENABLED: "${PIPELINE_CLASSIFICATION_MODEL_ENABLED:-false}"
     PIPELINE_DATA_ROOT: /pipeline-data
     # Continuous backfill is bounded by storage and worker concurrency.
     PIPELINE_MAX_HISTORY_ARTICLES: "0"

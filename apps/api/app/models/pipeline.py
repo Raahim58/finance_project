@@ -169,3 +169,28 @@ class ArtifactPin(Base):
     artifact_id: Mapped[str] = mapped_column(ForeignKey('source_artifacts.id'), primary_key=True)
     consumer_type: Mapped[str] = mapped_column(String(40), primary_key=True)
     consumer_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+
+class DocumentClassification(Identified, Base):
+    """One validated classification per document body and classifier version."""
+    __tablename__ = 'document_classifications'
+    __table_args__ = (UniqueConstraint('document_id','content_hash','classifier_version',name='uq_document_classification'),)
+    document_id: Mapped[str] = mapped_column(ForeignKey('documents.id'), nullable=False, index=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    classifier_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    method: Mapped[str] = mapped_column(String(20), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    gaps: Mapped[list] = mapped_column(JSON_TYPE, default=list, nullable=False)
+    output: Mapped[dict] = mapped_column(JSON_TYPE, default=dict, nullable=False)
+
+class EventClusterFeature(Base):
+    """Merge inputs for a normalized event; kept out of the user-facing details."""
+    __tablename__ = 'event_cluster_features'
+    event_id: Mapped[str] = mapped_column(ForeignKey('normalized_events.id'), primary_key=True)
+    entities: Mapped[list] = mapped_column(JSON_TYPE, default=list, nullable=False)
+    reporting_period: Mapped[str | None] = mapped_column(String(40), index=True)
+    counterparties: Mapped[list] = mapped_column(JSON_TYPE, default=list, nullable=False)
+    amounts: Mapped[list] = mapped_column(JSON_TYPE, default=list, nullable=False)
+    direction: Mapped[str] = mapped_column(String(20), default='unknown', nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(120), nullable=False)
+    embedding: Mapped[list] = mapped_column(JSON_TYPE, default=list, nullable=False)

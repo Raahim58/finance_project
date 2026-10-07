@@ -12,9 +12,9 @@ LEASE_SECONDS = 360
 MAX_ATTEMPTS = 5
 REPORT_STAGES = ('reports','report_fetch','report_extract','report_index')
 REPORT_ACQUISITION_STAGES = ('reports', 'report_fetch')
-PROCESSING_PRIORITY = ('intelligence', 'events', 'extract', 'link', 'sections',
+PROCESSING_PRIORITY = ('intelligence', 'events', 'classify', 'extract', 'link', 'sections',
                        'report_index', 'report_extract', 'index', 'parse')
-URGENT_STAGES = ('briefing','discover','fetch','parse','index','sections','link','extract','events','intelligence','prices')
+URGENT_STAGES = ('briefing','discover','fetch','parse','index','sections','link','extract','classify','events','intelligence','prices')
 
 def report_work_condition():
     from app.models.document import Document

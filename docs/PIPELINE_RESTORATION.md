@@ -20,6 +20,8 @@ Migration `0034_pipeline_restoration` adds the tables below; `0035_pipeline_text
 | `enrichment_attempts` | stage, attempt, requested/actual model, encrypted transport, usage and error code |
 | `service_credentials` | application purpose/provider, encrypted key, active flag; no frontend key read |
 | `artifact_pins` | artifact + consumer type/ID; protects referenced bytes |
+| `document_classifications` (0037) | document, content hash, classifier version, method/model, gaps, validated output; unique document + hash + version |
+| `event_cluster_features` (0037) | per event record: entities, canonical reporting period, counterparties, attributed amount claims, direction, evidence embedding |
 
 Existing documents, pages, chunks, citations, financial facts, market observations, macro observations and coverage records retain their identities. `exchange_calendar_days.session_windows` supports Friday's two sessions and exceptional calendars.
 
@@ -34,9 +36,9 @@ All Celery messages contain **one stage-run ID**. Arguments and cursors live in 
 | parse / parse | raw artifact; HTML main text or PDF text | parsed evidence, source/body dedupe, legacy story link → index |
 | index / heavy | accepted parsed evidence | document, pages, lexical chunks/citations and bounded embeddings → sections |
 | sections / parse | document ID | unchanged sections and offsets → link |
-| link / parse | sections + instrument/name dictionaries | literal issuer/entity links; ambiguous aliases skipped → extract |
-| extract / enrich | source sections and linked subjects | rule-based statements and supporting quotes → events |
-| events / enrich | validated fact/claim/guidance statements | conservative clusters, multi-document links and compatibility records → affected issuer intelligence |
+| link / parse | sections + instrument/name dictionaries | literal issuer/entity links; ambiguous aliases skipped → classify |
+| classify / enrich | source sections and stored entities | one validated record per event in the article (model when enabled, rules otherwise); older statements for the document superseded → events (`extract` runs queued earlier take this path) |
+| events / enrich | validated fact/report/claim/guidance statements | SQL candidates + embedding similarity + merge blockers; one event record with 1–3 evidence spans, lifecycle history and compatibility records → affected issuer intelligence |
 | intelligence / intelligence | issuer + changed input version | eight source-linked sections; unchanged section versions reused |
 | enrich / model | explicitly reviewed public nonpersonal sections | free-only strict-schema proposals and encrypted attempt; human review required |
 | reports / discovery | issuer | accessible PSX report catalogue → report fetches |
@@ -152,3 +154,33 @@ The user-approved site exposes `/news.json`, `/news-meta.json`, and `/research.j
 The `briefing` stage captures the research JSON, then indexes its overview, sector highlights and registered stock commentary as `commentary`, with physical pages null and numerical promotion prohibited. Its dated analysis is available through `research.morning_brief` and company digest extra-analysis fields. News citations link to the original articles; research commentary links transparently to its research JSON under the label "Market research commentary". The research feed's embedded FIPI/LIPI or market values do not become canonical database observations.
 
 `python -m app.jobs.briefing_source_setup` creates two source targets, preserving the existing canary batch: six original news URLs per scheduled news slot, and commentary discovery at 09:00 Pakistan time. Existing source/body budgets still apply. No paid model or application enrichment credential is required for capture.
+
+## Event classification and event records (0037)
+
+Questions are answered from saved event records, not by matching question phrases at read time.
+
+**Classify once per article body.** `services/pipeline/classification.py` returns, per distinct event: entities, event type, statement kind, lifecycle, direction, event date, reporting period, counterparties, amount claims, topics, sentiment (subject, aspect, horizon, supporting quote) and one to three verbatim evidence spans. Sectors come from the stored `Instrument.sector` (PSX classification), never from the model.
+
+- *Model path* — only when `PIPELINE_CLASSIFICATION_MODEL_ENABLED=true` **and** an active `pipeline_enrichment` OpenRouter credential exists (`python -m app.jobs.pipeline_review --credential pipeline_enrichment`). Enabling the flag is the operator's attestation that public news/announcement text may be sent to the free provider. The same free-only, zero-price, strict-schema checks as `enrich` apply; requests/responses are stored encrypted in `enrichment_attempts`. Documents needing more than four ~2,800-token batches use rules.
+- *Rules fallback* — same contract, used when the flag is off, the credential is missing, the provider returns 429/503, or output fails validation. It groups sentences by entity/type/period per article. It is phrase-based, so its confidence is lower (0.45 vs 0.65) and model output always outranks it.
+
+**Validation before saving.** Evidence quotes must occur in a section of the document, or the event is dropped. Entities must resolve to a stored instrument named in the document (symbol, name or current alias); otherwise the event becomes market-level. Dates need the month and day (or a numeric form) inside the supporting quote. Periods must canonicalise (e.g. `1QFY26` = `first quarter of FY2026` = `Q1-FY2026`) and appear in their quote. Amount digits must appear in their quote. Counterparties must appear in the document, and sentiment needs its quote and a resolved subject. Anything unsupported becomes unknown. Publisher text cannot be a `reported_fact` (it becomes `secondary_report`), and a quoted proposal cannot be promoted to approved/completed. Amounts are stored as `attributed_claim`, never as `FinancialFact` rows.
+
+**Clustering.** `services/pipeline/events.py` takes SQL candidates that share an entity and event type and fall in a compatible window: ±10 days, or ±60 days with a matching or unknown reporting period. It then compares evidence text with the configured embeddings (MiniLM in production); cosine ≥ 0.72 is required. Similarity alone never merges: different reporting periods, opposite directions, disjoint counterparties, or the same amount unit with no shared value all block a merge. The same article never merges with itself; the classifier already separated its events. A proposal followed by an approval or completion is one event: `lifecycle_history` keeps each state with its document, and `lifecycle` is the latest known state.
+
+**Event record.** `NormalizedEvent` (`detection_version='pipeline-v2'`) holds a sourced title (the primary quote), event date (`date_basis` says whether it is a quoted event date or the publication date), current lifecycle, classification, sentiment, confidence, materiality and up to three evidence spans from distinct documents. `EventDocumentLink` lists every member article/statement. Raw `events` rows remain for compatibility, and every original document and citation stays behind the record.
+
+**Reads.** `services/pipeline/event_reads.event_records` filters by entity, type and date in SQL, then ranks by `0.45·freshness + 0.35·materiality + 0.20·confidence`, with freshness recomputed at read time. Company pages, the Assistant `research.events` / company tools (optional `event_types` filter) and portfolio intelligence all read through `research_intelligence_service`. Portfolio intelligence joins records to owned holdings and their stored weights. Legacy rows already inside a record are deduplicated. Document search stays available for deeper evidence.
+
+**Backfill of the existing corpus.**
+
+```bash
+cd apps/api
+alembic upgrade head                                     # adds 0037
+python -m app.jobs.classify_backfill --dry-run           # count pending documents
+python -m app.jobs.classify_backfill --limit 500         # queue historical-mode runs
+python -m app.jobs.classify_backfill --since 2026-01-01 --document-type news
+```
+
+A document is skipped once a classification exists for its current content hash and the target version (model output satisfies a rules target). Rules-classified documents are re-queued after the model is enabled. Unparsed documents run the full chain from `sections`. Stage-run input hashes include the content hash and classifier version, so re-running the job does not duplicate work.
+

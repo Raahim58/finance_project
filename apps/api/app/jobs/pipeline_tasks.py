@@ -13,7 +13,7 @@ from app.models.workstation import EventSource, Instrument
 from app.services.pipeline import runs
 
 QUEUES={'briefing':'pipeline_heavy','discover':'pipeline_discovery','fetch':'pipeline_fetch','parse':'pipeline_parse',
-    'index':'pipeline_heavy','sections':'pipeline_parse','link':'pipeline_parse','extract':'pipeline_enrich',
+    'index':'pipeline_heavy','sections':'pipeline_parse','link':'pipeline_parse','extract':'pipeline_enrich','classify':'pipeline_enrich',
     'events':'pipeline_enrich','intelligence':'pipeline_intelligence','enrich':'pipeline_model',
     'secondary_tables':'pipeline_numeric','prices':'pipeline_numeric','reports':'pipeline_discovery','report_fetch':'pipeline_fetch',
     'report_index':'pipeline_heavy','report_extract':'pipeline_heavy','history_prices':'pipeline_numeric','maintenance':'pipeline_parse'}
@@ -108,11 +108,11 @@ def perform(db,run):
     if stage=='link':
         from app.services.pipeline.linking import link
         result=link(db,p['document_id'])
-        return {'instruments':result},successor(db,run,'extract',p)
-    if stage=='extract':
-        from app.services.pipeline.statements import extract
-        result=extract(db,p['document_id'])
-        return {'statements':result},successor(db,run,'events',p)
+        return {'instruments':result},successor(db,run,'classify',p)
+    if stage in ('classify','extract'):
+        # 'extract' runs queued before classification existed take the same path.
+        from app.services.pipeline.classification import classify
+        return classify(db,p['document_id'],run=run),successor(db,run,'events',p)
     if stage=='events':
         from app.services.pipeline.events import build
         from app.models.pipeline import DocumentEntityLink
@@ -121,6 +121,12 @@ def perform(db,run):
         document=db.get(Document,p['document_id'])
         issuer=db.scalar(select(Instrument.id).where(Instrument.symbol==document.symbol)) if document and document.symbol and document.document_type!='news' else None
         ids=[issuer] if issuer else db.scalars(select(DocumentEntityLink.instrument_id).where(DocumentEntityLink.document_id==p['document_id'])).all()
+        # Entities the classifier resolved from stored aliases also get refreshed views.
+        from app.models.pipeline import EvidenceStatement
+        classified=db.scalars(select(Instrument.id).join(EvidenceStatement,EvidenceStatement.subject_key==Instrument.symbol).where(
+            EvidenceStatement.document_id==p['document_id'],EvidenceStatement.validation_status=='validated',
+            EvidenceStatement.subject_type=='instrument')).all()
+        ids=list(dict.fromkeys([*ids,*([] if issuer else classified)]))
         return result,[('intelligence','instrument:'+i,{'instrument_id':i,'document_id':p['document_id'],'version':run.input_hash}) for i in ids]
     if stage=='intelligence':
         from app.services.pipeline.intelligence import refresh
@@ -211,7 +217,7 @@ def execute(run_id):
             run=db.get(IngestionStageRun,run_id)
             # New document stages lock their subject before writing. Legacy
             # adapters keep their own commit/replay rules until migrated.
-            if run.stage in ('sections','link','extract','events'):
+            if run.stage in ('sections','link','extract','classify','events'):
                 from app.models.document import Document
                 db.scalar(select(Document).where(Document.id==run.input['document_id']).with_for_update())
             elif run.stage=='intelligence':

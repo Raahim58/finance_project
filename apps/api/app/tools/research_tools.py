@@ -70,6 +70,8 @@ class CompanySectionsInput(BaseModel):
 class EventInput(BaseModel):
     query: str | None = Field(default=None, min_length=1, max_length=120)
     entity_key: str | None = None
+    event_types: list[Literal['earnings','guidance','dividend','corporate_action','financing','expansion','disruption',
+        'regulatory','governance','ownership','macro','geopolitics']] | None = Field(default=None, max_length=12)
     period_start: date | None = None
     period_end: date | None = None
     cursor: str | None = Field(default=None, pattern=r"^[0-9]+$")
@@ -282,10 +284,19 @@ def _events(db, user, payload: EventInput):
         from app.services.research_intelligence_service import company_event_page, resolve_company
         instrument = resolve_company(db, payload.entity_key)
         page = company_event_page(db, user, instrument, start=payload.period_start,
-            end=payload.period_end, offset=offset, limit=payload.limit)
+            end=payload.period_end, offset=offset, limit=payload.limit, event_types=payload.event_types)
         fetched = page["events"]
         coverage = page["coverage"]
         has_more = coverage["has_more"]
+    elif payload.event_types and not payload.query:
+        # Typed questions read classified event records directly, ranked once.
+        from app.services.pipeline.event_reads import RANK_BASIS, event_records
+        fetched = event_records(db, event_types=payload.event_types, start=payload.period_start,
+            end=payload.period_end, min_materiality=None, offset=offset, limit=payload.limit + 1)
+        has_more = len(fetched) > payload.limit
+        fetched = fetched[:payload.limit]
+        coverage = {"event_types": payload.event_types, "period_start": payload.period_start,
+                    "period_end": payload.period_end, "scope": "classified_event_records", "ranking": RANK_BASIS}
     else:
         # Broad market/geopolitical retrieval has no three-factor or issuer gate.
         arguments = {"entity_key": None, "occurred_start": payload.period_start,
@@ -523,7 +534,7 @@ def register_research_tools(registry: ToolRegistry) -> None:
         ToolDefinition(
             "research.events",
             "1.0",
-            "Stored events with citations and pagination: company symbol includes direct/stored indirect relevance; omit symbol for broader geopolitical/macro news and optional headline query",
+            "Stored events with citations and pagination: company symbol includes direct/stored indirect relevance; omit symbol for broader geopolitical/macro news and optional headline query; optional event_types filters classified event records",
             EventInput,
             "research:read",
             True,
