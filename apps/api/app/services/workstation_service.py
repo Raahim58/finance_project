@@ -776,12 +776,14 @@ def security_quant(db: Session, instrument_id: str):
     instrument = db.get(Instrument, instrument_id)
     if instrument is None:
         raise HTTPException(status_code=404, detail="Instrument not found")
-    rows = price_series(db, instrument.symbol)
+    rows = split_adjusted_price_series(db, instrument.symbol)
     if len(rows) < 31:
         raise HTTPException(status_code=422, detail="At least 31 price observations are required")
     values = np.array([float(row.close) for row in rows])
     returns = values[1:] / values[:-1] - 1
-    return {"instrument_id": instrument.id, "symbol": instrument.symbol, "data_cutoff": rows[-1].trade_date, "sample_size": len(returns), "annualization": 252, "metrics": risk_metrics(returns).to_dict(), "source": rows[-1].source}
+    return {"instrument_id": instrument.id, "symbol": instrument.symbol, "data_cutoff": rows[-1].trade_date, "sample_size": len(returns), "annualization": 252, "metrics": risk_metrics(returns).to_dict(), "source": rows[-1].source,
+            "return_basis": "price_return_with_verified_split_adjustments",
+            "adjustment_states": sorted({row.adjustment_state for row in rows}), "total_return_available": False}
 
 
 def efficient_frontier(db: Session, user: User, portfolio_id: str, points: int = 20):

@@ -11,6 +11,9 @@ VERSION = 'pipeline-v1'
 LEASE_SECONDS = 360
 MAX_ATTEMPTS = 5
 REPORT_STAGES = ('reports','report_fetch','report_extract','report_index')
+REPORT_ACQUISITION_STAGES = ('reports', 'report_fetch')
+PROCESSING_PRIORITY = ('intelligence', 'events', 'extract', 'link', 'sections',
+                       'report_index', 'report_extract', 'index', 'parse')
 URGENT_STAGES = ('briefing','discover','fetch','parse','index','sections','link','extract','events','intelligence','prices')
 
 def report_work_condition():
@@ -117,16 +120,25 @@ def dispatch(db, publish, *, limit=20, now=None,scope=""):
     # News/commentary and current observations finish before report work, across
     # live/history/replay modes. Deferred future retries do not block the queue.
     urgent_pending=urgent_work_pending(db,now=now,scope=scope)
-    families=(~report_work,) if urgent_pending else (~report_work,report_work)
-    for family in families:
+    from sqlalchemy import case
+    processing = report_work & ~IngestionStageRun.stage.in_(REPORT_ACQUISITION_STAGES)
+    # Already downloaded reports must keep moving while fresh news is arriving.
+    # Reserve a small processing share; news retains priority over new downloads.
+    families = ((processing, max(1, limit//5)), (~report_work, limit)) if urgent_pending else (
+        (processing, max(1, limit//5)), (~report_work, limit), (report_work, limit))
+    priority = case({stage: rank for rank, stage in enumerate(PROCESSING_PRIORITY)},
+                    value=IngestionStageRun.stage, else_=len(PROCESSING_PRIORITY))
+    for family, family_cap in families:
+        family_selected = 0
         for mode, quota in (('live',max(1,limit*4//5)),('historical',max(1,limit//5)),('replay',limit)):
-            slots=min(quota,limit-len(chosen))
+            slots=min(quota,limit-len(chosen),family_cap-family_selected)
             if slots<=0: break
             rows=db.scalars(select(IngestionStageRun).where(*conditions,family,IngestionStageRun.mode==mode)
-                .order_by(IngestionStageRun.created_at,IngestionStageRun.id).limit(slots)
+                .order_by(priority, IngestionStageRun.created_at,IngestionStageRun.id).limit(slots)
                 .with_for_update(skip_locked=True)).all()
             for row in rows: row.dispatch_until=now+timedelta(seconds=60)
             chosen.extend((r.id,r.stage,r.mode) for r in rows)
+            family_selected += len(rows)
     db.commit()
     published=0
     for identifier,stage,mode in chosen:

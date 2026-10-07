@@ -255,7 +255,7 @@ def model_packet(packet):
         if identity not in identities:
             identities[identity]=f'D{len(identities)+1}'
             documents[identities[identity]]=metadata
-        location={k:source[k] for k in ('source_name','page_number','as_of') if source.get(k) is not None}
+        location={k:source[k] for k in ('source_name','page_number','as_of','symbol','instrument_id') if source.get(k) is not None}
         location['document_ref']=identities[identity]
         locations[ref]=location
     output['sources']=locations
@@ -266,7 +266,42 @@ def model_packet(packet):
                 and re.fullmatch(r'-?\d+\.\d+',item) else exact_decimal_strings(item)) for key,item in value.items()}
         if isinstance(value,list): return [exact_decimal_strings(item) for item in value]
         return value
-    return compact_model_data(normalize_json(exact_decimal_strings(output)))
+    def action_projection(value):
+        if isinstance(value, dict):
+            projected = {key: action_projection(item) for key, item in value.items()}
+            if value.get('type') and isinstance(value.get('details'), dict) and (
+                    'dividend' in str(value['type']) or value['type'] in ('stock_split', 'bonus_issue')):
+                # Original quotes and artifact provenance remain in the saved
+                # tool envelope. Values, lifecycle, date gaps and verified ratio
+                # evidence stay in the answering packet.
+                projected['details'] = {key: item for key, item in projected['details'].items()
+                                        if key not in ('quote', 'evidence', 'source_url', 'symbol')}
+                projected['detail_location'] = 'retained tool evidence and cited source'
+            return projected
+        if isinstance(value, list): return [action_projection(item) for item in value]
+        return value
+    projected = action_projection(output)
+    quotes = {}
+    def count_quotes(value):
+        if isinstance(value, dict):
+            if isinstance(value.get('source_quote'), str) and len(value['source_quote']) >= 80:
+                quote = value['source_quote']; quotes[quote] = quotes.get(quote, 0)+1
+            for item in value.values(): count_quotes(item)
+        elif isinstance(value, list):
+            for item in value: count_quotes(item)
+    count_quotes(projected)
+    repeated = {quote: f'Q{index+1}' for index, quote in enumerate(quote for quote, count in quotes.items() if count > 1)}
+    def intern_quotes(value):
+        if isinstance(value, dict):
+            row = {key: intern_quotes(item) for key, item in value.items()}
+            if row.get('source_quote') in repeated:
+                row['source_quote_ref'] = repeated[row.pop('source_quote')]
+            return row
+        if isinstance(value, list): return [intern_quotes(item) for item in value]
+        return value
+    projected = intern_quotes(projected)
+    if repeated: projected['source_quotes'] = {ref: quote for quote, ref in repeated.items()}
+    return compact_model_data(normalize_json(exact_decimal_strings(projected)))
 
 
 def project_turns(turns, packet, fused_call_ids):

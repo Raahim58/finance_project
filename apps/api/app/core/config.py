@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     retrieval_rrf_k: int = Field(default=60, ge=1, le=1000)
     retrieval_candidate_depth: int = Field(default=50, ge=10, le=500)
     retrieval_min_semantic_score: float = Field(default=0.25, ge=-1, le=1)
+    retrieval_semantic_only_min_score: float = Field(default=0.65, ge=0, le=1)
     retrieval_min_lexical_score: float = Field(default=0.50, ge=0, le=1)
     assistant_max_tool_iterations: int = 12
     assistant_compact_evidence_enabled: bool = True
@@ -131,8 +132,10 @@ class Settings(BaseSettings):
     pipeline_enabled: bool = False
     pipeline_enrichment_enabled: bool = False
     pipeline_max_live_articles: int = 300
-    pipeline_max_history_articles: int = 100
-    pipeline_max_history_pdfs: int = 25
+    pipeline_max_history_articles: int = Field(default=100, ge=0)
+    pipeline_max_history_pdfs: int = Field(default=25, ge=0)
+    # Zero disables a daily backfill quota; storage checks still apply.
+    pipeline_max_history_mib: int = Field(default=768, ge=0)
     pipeline_max_vectors: int = 200_000
     pipeline_data_root: str = "/data"
     pipeline_raw_budget_gib: int = 48

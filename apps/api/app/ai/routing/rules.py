@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from app.ai.routing.types import Route, RouteDecision, RouterInput
+from app.domain.evidence_query import ALTERNATIVES, dividend_query
 
 MIN_SCORE = 2.0            # below this the question is ambiguous -> fallback
 SECONDARY_MIN_SCORE = 2.0
@@ -75,12 +76,13 @@ RULES: tuple[Rule, ...] = (
     (Route.EVENT_REACTION, 2.5, lambda f: f.has(EVENT)),
     (Route.TECHNICAL_SETUP, 3.0, lambda f: f.has(TECHNICAL)),
     (Route.ANALYST_SENTIMENT, 3.0, lambda f: f.has(ANALYST)),
-    (Route.FUNDAMENTALS_SNAPSHOT, 2.5, lambda f: f.has(FUNDAMENTALS)),
+    (Route.FUNDAMENTALS_SNAPSHOT, 2.5, lambda f: f.has(FUNDAMENTALS) or dividend_query(f.text)),
+    (Route.FUNDAMENTALS_SNAPSHOT, 2.0, lambda f: f.entities > 0 and dividend_query(f.text) and not f.has(REBALANCE) and not f.has(IMPACT)),
     (Route.PORTFOLIO_REVIEW, 3.0, lambda f: f.portfolio_words and f.has(PORTFOLIO_REVIEW)),
     (Route.PORTFOLIO_REVIEW, 1.0, lambda f: f.portfolio_words),
     (Route.PORTFOLIO_IMPACT, 3.5, lambda f: (f.portfolio_words or f.has(_rx(r"\bme\b"))) and f.has(IMPACT) and (f.market_words or f.entities > 0)),
     (Route.PORTFOLIO_IMPACT, 3.0, lambda f: f.portfolio_selected and f.entities > 0 and f.has(_rx(r"\bfit\b|\bworth adding\b"))),
-    (Route.PORTFOLIO_REBALANCE, 3.0, lambda f: (f.portfolio_words or f.portfolio_selected) and f.has(REBALANCE)),
+    (Route.PORTFOLIO_REBALANCE, 3.0, lambda f: (f.portfolio_words or f.portfolio_selected) and (f.has(REBALANCE) or f.has(ALTERNATIVES))),
     (Route.WATCHLIST_MONITOR, 3.0, lambda f: f.has(WATCHLIST)),
     (Route.DEFINITION_OR_CONCEPT, 3.5, lambda f: f.has(DEFINITION_START) and f.entities == 0
         and not f.market_words and not f.portfolio_words and not f.has(_rx(r"going on|happening"))),

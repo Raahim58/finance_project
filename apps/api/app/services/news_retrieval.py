@@ -39,7 +39,9 @@ def tag_document(db, document, text):
 
 def search_research_evidence(db,user,payload,*,public_only=False):
     from app.services.rag_service import search_rag, _query_symbols
+    from app.domain.evidence_query import search_policy, dividend_query, shareholder_payout_passage
     identity=hashlib.sha256(json.dumps({'user':user.id,'request':payload.model_dump(mode='json',exclude={'cursor'})},sort_keys=True).encode()).hexdigest()
+    payload, purpose = search_policy(payload)
     offsets={};seen=set();per_document=Counter();passages=set()
     if payload.cursor:
         try:
@@ -64,7 +66,11 @@ def search_research_evidence(db,user,payload,*,public_only=False):
     base=dict(portfolio_id=payload.portfolio_id,date_from=payload.date_from,date_to=payload.date_to,
         document_types=payload.document_types,limit=min(25,payload.limit*2+1))
     lanes=[]
-    if symbols: lanes.append(('company',dict(query=payload.query,symbols=symbols)))
+    primary_query = 'dividend' if purpose == 'dividends' else payload.query
+    if symbols:
+        # Each named issuer receives its own primary lane. One issuer cannot
+        # consume every company slot in a multi-company comparison.
+        lanes.extend(('company:'+symbol,dict(query=primary_query,symbols=[symbol])) for symbol in symbols)
     else: lanes.append(('requested',dict(query=payload.query,sectors=payload.sectors,topics=topics)))
     # Broader lanes opt out of symbol auto-resolution: a company name in the
     # prose query must not reinstate the very filter these lanes bypass.
@@ -97,6 +103,7 @@ def search_research_evidence(db,user,payload,*,public_only=False):
             passage=hashlib.sha256(' '.join(chunk.chunk_text.split()).casefold().encode()).hexdigest()
             if chunk.id in seen or passage in passages or per_document[chunk.document_id]>=2: continue
             if not substantive_passage(chunk.chunk_text,payload.query): continue
+            if purpose == 'dividends' and (name.startswith('company:') or name == 'requested') and not shareholder_payout_passage(chunk.chunk_text): continue
             if name in ('sector','broader') and not supported_context(chunk.chunk_text, sectors, name): continue
             passages.add(passage)
             seen.add(chunk.id);per_document[chunk.document_id]+=1;chosen.append((name,chunk))
@@ -108,7 +115,11 @@ def search_research_evidence(db,user,payload,*,public_only=False):
     if any(c['has_more'] for c in coverage.values()) and len(seen)<=70 and all(v<=190 for v in offsets.values()):
         next_cursor=base64.urlsafe_b64encode(json.dumps({'scope':identity,'offsets':offsets,
             'seen':sorted(seen),'documents':dict(per_document),'passages':sorted(passages)},separators=(',',':')).encode()).decode()
+    primary_names = ['company:'+symbol for symbol in symbols] or ['requested']
+    primary_missing = [name for name in primary_names if not coverage.get(name, {}).get('returned')]
     return chosen,[chunk.citation for _,chunk in chosen],{'groups':coverage,
+        'purpose':purpose, 'primary_evidence':'missing' if len(primary_missing)==len(primary_names) else 'partial' if primary_missing else 'available',
+        'missing_primary_scopes':primary_missing,
         'next_cursor':next_cursor,
         'cursor_window_exhausted':next_cursor is None and any(c['has_more'] for c in coverage.values()),
         'coverage_note':'Matching stored evidence; not a claim of complete news coverage.'}

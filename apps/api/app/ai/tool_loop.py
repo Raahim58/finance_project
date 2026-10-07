@@ -89,6 +89,7 @@ EVIDENCE
 - Check reporting periods, units, data provenance and price adjustments before comparing numbers. Flag demo inputs and unresolved corporate actions; do not use distorted returns to justify advice.
 - Separate reported facts, historical estimates and your own interpretation. Historical returns are not forecasts.
 - Cite factual claims using exactly [[E1]], [[E2]], etc., from the current evidence. Earlier answers are context, not fresh evidence.
+- For exact reported financial amounts, prefer {{fact:E1:cash:2025-12-31:standalone}} placeholders, choosing the actual reference, metric, period_end and accounting_basis from the delivered SQL row. Use none only for absent period/basis. The server renders its recorded value and unit. Never infer par value or convert dividend percentage to cash without sourced inputs. Cite the correct issuer; a valid marker for another company is invalid support.
 - State missing evidence briefly. Never invent values or claim external verification; external web tools are unavailable.
 
 ALLOCATION
@@ -114,7 +115,8 @@ EXECUTION
 - Never claim a budget is exhausted unless the server reports it. If capacity remains, continue necessary work rather than merely describing tools you could call.
 
 RESPONSE
-Lead with the conclusion, then the evidence and material limitations. Keep it concise. Complete the requested analysis; avoid a checklist that postpones the actual decision."""
+Lead with the conclusion, then the evidence and material limitations. Keep it concise. Complete the requested analysis; avoid a checklist that postpones the actual decision.
+Every factual bullet in your first final answer must include its current inline [[E<number>]] citation. An answer without these markers fails server validation and cannot be displayed. Use the reference attached to that issuer and record."""
 
 
 class AssistantTerminalError(RuntimeError):
@@ -184,7 +186,7 @@ def _company_tool_allowed(name: str, arguments=None) -> bool:
 
 
 CORE_TOOLS={'research.morning_brief','market.latest','research.company_sections','research.search','research.events',
-    'documents.search','portfolio.summary','ips.compliance','quant.portfolio'}
+    'documents.search','portfolio.summary','ips.compliance','quant.portfolio','quant.securities','market.universe'}
 
 def _catalog(company_only=False, selected=()) -> list[ProviderTool]:
     wanted=CORE_TOOLS|set(selected)
@@ -333,7 +335,7 @@ def _initial_checkpoint(
         )
     )
     if (not mentioned and explicit_instrument is None
-            and re.match(r'^\s*(what about|does that|where did you)\b',payload.question,re.I)):
+            and re.match(r'^\s*(what about|does that|where did you|wdym|what do you mean|what does that|what is that|what is the percentage|and what|and how)\b',payload.question,re.I)):
         # Resolve the discussed securities from earlier owned user requests.
         # Historical answers supply no financial truth or portfolio selection.
         previous_requests=db.scalars(select(AssistantExecution).where(
@@ -704,7 +706,7 @@ async def _execute_tool(user_id: str, call: ContentBlock) -> ToolExecution:
     )
 
 
-def _attach_evidence(checkpoint: dict[str, Any], envelope: dict[str, Any]) -> dict[str, Any]:
+def _attach_evidence(checkpoint: dict[str, Any], envelope: dict[str, Any], scope=None) -> dict[str, Any]:
     result = normalize_json(copy.deepcopy(envelope))
     sources = []
     for source in result.get("sources", []):
@@ -726,11 +728,28 @@ def _attach_evidence(checkpoint: dict[str, Any], envelope: dict[str, Any]) -> di
             checkpoint["evidence"][existing]["source"].update({k:v for k,v in source.items() if v is not None})
         sources.append({**source, "evidence_ref": existing})
     result["sources"] = sources
+    from app.ai.claim_support import financial_observations
+    mapping = {str(source[key]): source['evidence_ref'] for source in sources
+               for key in ('id', 'evidence_id', 'fact_id', 'statement_id') if source.get(key)}
+    for source in sources:
+        underlying = str(source.get('underlying_id') or '')
+        if underlying.startswith(('financial_fact:', 'standardized_fact:')):
+            mapping[underlying.split(':')[1]] = source['evidence_ref']
+    for ref, observation in financial_observations(result.get('data'), mapping, scope or {}):
+        recorded = checkpoint['evidence'][ref].setdefault('observations', [])
+        if observation not in recorded: recorded.append(observation)
     return result
 
 
 def _result_blocks(checkpoint: dict[str, Any], execution: ToolExecution) -> list[ContentBlock]:
-    envelope = _attach_evidence(checkpoint, execution.envelope)
+    identity = checkpoint.get('resolved_identity', {})
+    instrument_id = (execution.call.arguments or {}).get('instrument_id')
+    entities = [*(identity.get('mentioned_instrument_candidates') or []), *(identity.get('portfolio_instruments') or []), identity.get('explicit_instrument') or {}]
+    scope = next((row for row in entities if row.get('instrument_id') == instrument_id), {}) if instrument_id else {}
+    incoming = copy.deepcopy(execution.envelope)
+    if execution.call.name in ('research.company_digest', 'research.company_sections', 'market.latest'):
+        incoming['sources'] = [{**source, **{key: scope[key] for key in ('instrument_id', 'symbol') if scope.get(key)}} for source in incoming.get('sources', [])]
+    envelope = _attach_evidence(checkpoint, incoming, scope)
     if execution.call.name == 'research.search':
         from app.tools.registry import compact_model_data
         envelope['data']=expand_model_data(envelope.get('data'))
@@ -816,6 +835,10 @@ def unwrap_final_text(raw: str) -> str:
 
 def resolve_citations(text_value: str, checkpoint: dict[str, Any]):
     known = checkpoint["evidence"]
+    from app.ai.claim_support import render_financial_placeholders, scope_errors, numeric_errors
+    text_value, selector_errors = render_financial_placeholders(text_value, known)
+    support_errors = selector_errors + scope_errors(text_value, known, CITATION_RE, checkpoint.get('resolved_identity', {}))
+    support_errors += numeric_errors(text_value, known, CITATION_RE)
     resolved: list[dict[str, Any]] = []
     unknown = []
     seen = set()
@@ -851,6 +874,8 @@ def resolve_citations(text_value: str, checkpoint: dict[str, Any]):
             "unknown_references": unknown,
             "missing_citations": not bool(CITATION_RE.search(text_value)),
             "semantic_verification": "not_performed",
+            "support_errors": support_errors,
+            "financial_value_check": "recorded_amounts_only",
         },
     )
 
@@ -859,6 +884,10 @@ def citation_gate(outcome, checkpoint):
     """Presence/identity gate only; resolving a reference is not entailment."""
     if outcome.get('unknown_references'):
         return 'citation_reference_unknown'
+    if outcome.get('support_errors'):
+        return 'citation_support_invalid'
+    if not checkpoint.get('evidence') and checkpoint.get('routing', {}).get('decision', {}).get('primary') == 'definition_or_concept':
+        return None  # A generic concept answer has no current financial observations.
     if not outcome.get('resolved_count'):
         return 'citation_missing'
     return None
@@ -1011,7 +1040,8 @@ async def _prepare_evidence(identifier, user_id, payload, checkpoint):
             identity, payload.question, payload.company_only,
             settings.assistant_max_tool_iterations - checkpoint['reserved_tool_calls'],
             use_digests=checkpoint.get("company_digest_enabled", settings.assistant_company_digest_enabled),
-            decision=decision)
+            decision=decision,
+            completed_tools=('portfolio.summary',) if checkpoint.get('portfolio_scope_prepared') else ())
         checkpoint['routing'] = routed.to_record()
         if checkpoint.get('route_tiebreak'):
             checkpoint['routing']['tiebreak_outcome'] = checkpoint['route_tiebreak']['outcome']
@@ -1064,12 +1094,14 @@ async def _prepare_evidence(identifier, user_id, payload, checkpoint):
             checkpoint['completed_tool_call_ids'].append(execution.call.id)
             _save_checkpoint(identifier,checkpoint)
         calls.extend(fallback)
-    visited = {(call.arguments or {}).get('instrument_id') for call in calls}
+    visited = {identifier for call in calls for identifier in (
+        [(call.arguments or {}).get('instrument_id')] + (call.arguments or {}).get('instrument_ids', [])) if identifier}
     scoped_instruments={item['instrument_id']:item for item in [
         *identity.get('mentioned_instrument_candidates', []),*identity.get('portfolio_instruments', [])]}
     checkpoint['evidence_packet']['first_pass_coverage'] = {
         item['instrument_id']: [call.arguments.get('sections', [call.name])[0]
-            for call in calls if (call.arguments or {}).get('instrument_id') == item['instrument_id']]
+            for call in calls if (call.arguments or {}).get('instrument_id') == item['instrument_id']
+            or item['instrument_id'] in (call.arguments or {}).get('instrument_ids', [])]
         for item in scoped_instruments.values()}
     prefetched = ['portfolio.summary'] if checkpoint.get('portfolio_scope_prepared') else []
     checkpoint['evidence_packet']['already_retrieved'] = {
@@ -1336,6 +1368,7 @@ async def run_tool_loop(
                     checkpoint['turns'].append(ProviderTurn('user',[ContentBlock('text',text=
                         'The previous final answer failed server citation validation. '
                         + (f'Unknown references: {invalid_refs}. These references have no current source. ' if invalid_refs else '')
+                        + ('Source support failures: '+json.dumps(citation_outcome['support_errors'])+'. ' if citation_outcome.get('support_errors') else '')
                         + 'Historical citation labels cannot be reused as current evidence. Reassess the answer '
                         'against the supplied evidence and remove unsupported claims. Cite each material '
                         'factual claim using a valid inline [[E<number>]] reference. Preserve period, units, '

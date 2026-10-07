@@ -104,8 +104,10 @@ def saved_fixture(snapshot=None,prepared=None):
 
 
 def prepared_section(key,*,state='source_grounded'):
+    statement = ('The Board proposed an interim dividend, subject to approval. '
+                 if key == 'dividends' else '')+'Source qualification must survive.'
     return {'section':key,'state':state,'content':{'evidence':[{'statement_id':'statement-'+key,
-        'text':'Source qualification must survive.'}]} if state=='source_grounded' else {},
+        'text':statement}]} if state=='source_grounded' else {},
         'sources':[{'statement_id':'statement-'+key,'source_url':'https://example.com/original',
             'source_name':'Original Publisher','title':'Original Article'}] if state=='source_grounded' else [],
         'gaps':['Evidence dependency changed.'] if state=='stale' else []}
@@ -136,7 +138,7 @@ def test_pipeline_uses_prepared_evidence_instead_of_legacy_snapshot(monkeypatch,
         assert [section['section'] for section in data['prepared_intelligence']]==['dividends']
         assert data['available_sections']==['dividends']
         assert data['unavailable_sections'][0]['state']=='stale'
-        assert data['prepared_intelligence'][0]['content']['evidence'][0]['text']=='Source qualification must survive.'
+        assert data['prepared_intelligence'][0]['content']['evidence'][0]['text']==prepared_section('dividends')['content']['evidence'][0]['text']
 
 
 def test_stale_snapshot_without_prepared_data_is_withheld(monkeypatch):

@@ -37,3 +37,26 @@ def test_unstaffed_enrichment_does_not_block_reports():
         db.commit();sent=[]
         runs.dispatch(db,lambda *args:sent.append(args))
         assert any(stage=='report_fetch' for _,stage,_ in sent)
+
+
+def test_downloaded_report_processing_gets_slots_during_news_backlog():
+    with SessionLocal() as db:
+        for i in range(25):
+            runs.enqueue(db, 'fetch', f'news:{i}', {'candidate_id': str(i)})
+        downloaded = runs.enqueue(db, 'report_extract', 'downloaded', {'document_id': 'fixture'}, mode='historical')
+        runs.enqueue(db, 'report_fetch', 'new-download', {'report': {}}, mode='historical')
+        db.commit(); sent = []
+        runs.dispatch(db, lambda *args: sent.append(args), limit=10)
+        assert any(identifier == downloaded.id for identifier, _, _ in sent)
+        assert any(stage == 'fetch' for _, stage, _ in sent)
+        assert not any(stage == 'report_fetch' for _, stage, _ in sent)
+
+
+def test_report_extraction_precedes_older_downloads_and_catalogs():
+    with SessionLocal() as db:
+        for i in range(25):
+            runs.enqueue(db, 'report_fetch', f'old-download:{i}', {'report': {}}, mode='historical')
+        downloaded = runs.enqueue(db, 'report_extract', 'downloaded', {'document_id': 'fixture'}, mode='historical')
+        db.commit(); sent = []
+        runs.dispatch(db, lambda *args: sent.append(args), limit=10)
+        assert sent[0][0] == downloaded.id

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from datetime import date, datetime
 from typing import Literal
 
@@ -94,12 +95,13 @@ def _search(db, user, payload: ResearchInput, *, public_only=False):
     chosen,citations,coverage=search_research_evidence(db,user,payload,public_only=public_only)
     sources=[item.model_dump(mode='json') for item in citations]
     dates={row.id:row.published_date for row in db.scalars(select(Document).where(Document.id.in_([c.document_id for _,c in chosen])))}
-    chunks=[{'id':c.id,'document_id':c.document_id,'group':name,'title':c.citation.title,
+    chunks=[{'id':c.id,'document_id':c.document_id,'group':name.split(':')[0],
+        'scope_symbol':name.split(':',1)[1] if name.startswith('company:') else None,'title':c.citation.title,
         'published_date':str(dates[c.document_id]) if dates.get(c.document_id) else None,
         'text':c.chunk_text,'source_ref':c.citation.id,'document_type':c.document_type,
         'evidence_kind':c.metadata.get('evidence_kind', 'reporting' if c.document_type == 'news' else c.document_type)} for name,c in chosen]
     return tool_result(
-        "ok" if chunks else "missing", {"chunks":chunks, "coverage":coverage},
+        "ok" if chunks and coverage.get('primary_evidence') != 'missing' else "missing", {"chunks":chunks, "coverage":coverage},
         sources=sources,
         returned=len(chunks),
         remaining=None,
@@ -356,7 +358,29 @@ def _company_digest(db,user,payload):
             and section.get('content',{}).get('evidence')]
         selected=set(payload.sections) if payload.sections else {section['section'] for section in all_prepared}
         prepared=copy.deepcopy([section for section in all_prepared if section['section'] in selected])
+        payout_only = payload.sections == ['dividends']
+        if payout_only:
+            from app.domain.evidence_query import shareholder_payout_passage
+            for section in prepared:
+                rows = section.get('content', {}).get('evidence', [])
+                section['content']['evidence'] = [row for row in rows if shareholder_payout_passage(row.get('text', ''))
+                    and re.search(r'\b(?:per share|interim dividend|final dividend|declared|proposed|recommended|announced)\b', row.get('text', ''), re.I)]
+                kept_ids = {row.get('statement_id') for row in section['content']['evidence']}
+                section['sources'] = [source for source in section.get('sources', []) if source.get('statement_id') in kept_ids]
+        dividend_facts = []
+        dividend_sources = []
+        if 'dividends' in selected and 'financial_performance' not in selected:
+            for section in all_prepared:
+                if section['section'] != 'financial_performance' or section.get('state') != 'source_grounded': continue
+                dividend_facts = copy.deepcopy([row for row in section.get('content', {}).get('evidence', [])
+                                                if row.get('metric') == 'dividend_per_share'])
+                fact_ids = {row.get('id') for row in dividend_facts}
+                dividend_sources = [source for source in section.get('sources', []) if source.get('fact_id') in fact_ids]
+            for row in dividend_facts:
+                row['evidence_refs'] = [row.pop('id')]
+                for field in ('source_name','source_url','document_id','page_number','version'): row.pop(field, None)
         sources=[]
+        sources.extend({'id': source['fact_id'], **source} for source in dividend_sources)
         actions=[]
         if 'dividends' in selected:
             from app.models.workstation import CorporateAction,SourceArtifact,DataSource
@@ -395,12 +419,14 @@ def _company_digest(db,user,payload):
                 section['source_refs'].append(ref)
                 sources.append({'id':ref,**source})
         for row in extra:
-            sources.append({k:row[k] for k in ('id','source_name','source_url','title','published_date')})
-        analysis=[{'text':row['text'],'classification':'interpretation','source_ref':row['id'],'published_date':row['published_date']} for row in extra]
-        usable=any(section.get('state')=='source_grounded' and
+            if selected & {'sector_macro','material_developments'}:
+                sources.append({k:row[k] for k in ('id','source_name','source_url','title','published_date')})
+        analysis=[{'text':row['text'],'classification':'interpretation','source_ref':row['id'],'published_date':row['published_date']} for row in extra] if selected & {'sector_macro','material_developments'} else []
+        usable=bool(dividend_facts) or any(section.get('state')=='source_grounded' and
             (section.get('content',{}).get('reporting_bases') or section.get('content',{}).get('evidence'))
             for section in prepared)
-        return tool_result('ok' if usable or actions else 'missing',{'prepared_intelligence':prepared,'extra_analysis':analysis,
+        return tool_result('ok' if usable or actions or dividend_facts else 'missing',{'prepared_intelligence':prepared,'extra_analysis':analysis,
+            'dividend_financials': dividend_facts,
             'corporate_actions':actions,
             'corporate_action_qualification':'Stored announcement dates are not payment dates. Percentage of par is not dividend yield; missing cash-per-share/par value remains unknown. Unbacked observations are unverified.',
             'brief_is_current':False,'status':'source_grounded' if usable else 'stored_observations' if actions else 'missing',
@@ -415,6 +441,8 @@ def _company_digest(db,user,payload):
             'detail':'Saved company evidence is missing or its dependencies changed. Read company_sections/market.latest/search for current evidence.',
             'detail_tools':['research.company_sections','market.latest','research.search']},returned=0)
     # Map snapshot-local refs to unique execution evidence IDs before packet fusion.
+    from app.services.digest_projection import select_digest_evidence
+    snapshot = select_digest_evidence(snapshot, payload.sections)
     prefix = 'digest-'+saved['input_hash'][:12]+'-'
     def refs(value):
         if isinstance(value,dict):
@@ -432,7 +460,12 @@ def _company_digest(db,user,payload):
     data['snapshot_is_current'] = snapshot.get('input_hash') == saved['input_hash']
     if not data['snapshot_is_current']:
         data.setdefault('missing_data',[]).append({'code':'snapshot_inputs_changed','detail':'Saved snapshot is historical. Read company_sections/market.latest/search for current evidence.'})
-    return tool_result('ok',data,sources=[{'id':prefix+ref,**source} for ref,source in snapshot['sources'].items()],returned=1)
+    usable = bool(snapshot.get('financials') or snapshot.get('news') or snapshot.get('corporate_actions')
+                  or any((snapshot.get(key) or {}).get('data') for key in ('risk','sector','macro','disclosures')))
+    if payload.sections and not usable:
+        data.setdefault('missing_data', []).append({'code': 'requested_digest_evidence_missing', 'sections': payload.sections})
+    return tool_result('ok' if usable or payload.sections is None else 'missing',data,sources=[{'id':prefix+ref,**source,'instrument_id':instrument.id,'symbol':instrument.symbol}
+                                        for ref,source in snapshot['sources'].items()],returned=1)
 
 
 class MorningBriefInput(BaseModel):

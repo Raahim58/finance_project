@@ -7,6 +7,9 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
+from functools import lru_cache
+from threading import local
+import snowballstemmer
 
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._%-]*")
@@ -15,7 +18,18 @@ STOP_WORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how",
     "in", "is", "it", "of", "on", "or", "that", "the", "this", "to", "was",
     "were", "what", "when", "where", "which", "who", "why", "with",
+    "about", "has", "have", "had", "been", "please", "you", "your", "my", "me", "i",
 }
+
+_stemmer_context = local()
+
+
+@lru_cache(maxsize=8192)
+def search_stem(token: str) -> str:
+    # Snowball objects are mutable: concurrent retrieval threads need their own.
+    if not hasattr(_stemmer_context, 'english'):
+        _stemmer_context.english = snowballstemmer.stemmer('english')
+    return _stemmer_context.english.stemWord(token)
 
 DOCUMENT_TYPE_ALIASES = {
     "announcement": "announcement",
@@ -117,10 +131,12 @@ def lexical_score(query_tokens: Sequence[str], chunk_text: str) -> float:
     chunk_tokens = tokenize(chunk_text, meaningful=True)
     if not chunk_tokens:
         return 0.0
-    chunk_set = set(chunk_tokens)
-    coverage = len(set(query_tokens).intersection(chunk_set)) / len(set(query_tokens))
-    phrase = " ".join(query_tokens)
-    compact_chunk = " ".join(chunk_tokens)
+    normalized_query = [search_stem(token) for token in query_tokens]
+    normalized_chunk = [search_stem(token) for token in chunk_tokens]
+    chunk_set = set(normalized_chunk)
+    coverage = len(set(normalized_query).intersection(chunk_set)) / len(set(normalized_query))
+    phrase = " ".join(normalized_query)
+    compact_chunk = " ".join(normalized_chunk)
     phrase_bonus = 0.15 if len(query_tokens) > 1 and phrase in compact_chunk else 0.0
     return min(1.0, coverage + phrase_bonus)
 

@@ -29,6 +29,10 @@ x-pipeline-worker: &pipeline-worker
     PIPELINE_ENABLED: "true"
     PIPELINE_ENRICHMENT_ENABLED: "false"
     PIPELINE_DATA_ROOT: /pipeline-data
+    # Continuous backfill is bounded by storage and worker concurrency.
+    PIPELINE_MAX_HISTORY_ARTICLES: "0"
+    PIPELINE_MAX_HISTORY_PDFS: "0"
+    PIPELINE_MAX_HISTORY_MIB: "0"
   volumes:
     - ${PSX_DATA_ROOT:-/srv/psx}/evidence-spool:/data/evidence-spool
     - ${PSX_DATA_ROOT:-/srv/psx}/evidence-spool:/pipeline-data:ro

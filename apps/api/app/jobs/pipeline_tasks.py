@@ -66,7 +66,8 @@ def perform(db,run):
         if stage=='fetch':
             from app.services.pipeline.retention import capacity,daily_allowance
             pressure=capacity(db)
-            if not pressure['allow_history' if run.mode=='historical' else 'allow_live'] or not daily_allowance(db,run): raise DeferredStage('capacity_deferred')
+            if not pressure['allow_history' if run.mode=='historical' else 'allow_live']: raise DeferredStage('storage_capacity_deferred')
+            if not daily_allowance(db,run): raise DeferredStage('daily_budget_deferred')
             result=fetch_stage(db,source,row.id)
             if result.outcome.endswith('deferred') or result.outcome.endswith('budget_reached'):
                 raise DeferredStage(result.outcome)
@@ -162,7 +163,8 @@ def perform(db,run):
         from app.services.pipeline.retention import capacity,daily_allowance
         if stage=='report_fetch':
             pressure=capacity(db)
-            if not pressure['allow_history' if run.mode=='historical' else 'allow_live'] or not daily_allowance(db,run,is_pdf=True): raise DeferredStage('capacity_deferred')
+            if not pressure['allow_history' if run.mode=='historical' else 'allow_live']: raise DeferredStage('storage_capacity_deferred')
+            if not daily_allowance(db,run,is_pdf=True): raise DeferredStage('daily_budget_deferred')
             # Existing download task persists report + numeric work. It is
             # idempotent; the DB outbox below also reconstructs its extraction.
             result=phase2_tasks.financial_download_pdf(p['report'])
@@ -197,7 +199,8 @@ def execute(run_id):
         # Old broker deliveries can arrive after queue reprioritization. Keep
         # report work pending rather than letting it bypass news-first dispatch.
         pending=db.scalar(select(IngestionStageRun).where(IngestionStageRun.id==run_id,
-            IngestionStageRun.status.in_(('queued','retry_wait')),runs.report_work_condition()))
+            IngestionStageRun.status.in_(('queued','retry_wait')),
+            IngestionStageRun.stage.in_(runs.REPORT_ACQUISITION_STAGES)))
         if pending and runs.urgent_work_pending(db,scope=settings.pipeline_dispatch_scope):
             pending.status='retry_wait';pending.next_attempt_at=datetime.now(UTC)+timedelta(seconds=60)
             pending.dispatch_until=None;db.commit()
@@ -219,7 +222,9 @@ def execute(run_id):
         except DeferredStage as exc:
             db.rollback();run=db.get(IngestionStageRun,run_id)
             if run.lease_token==token:
-                run.status='retry_wait';run.next_attempt_at=datetime.now(UTC)+timedelta(seconds=60 if str(exc)=='market_pre_open' else 3600)
+                now=datetime.now(UTC)
+                run.status='retry_wait';run.next_attempt_at=(now.replace(hour=0,minute=0,second=0,microsecond=0)+timedelta(days=1)
+                    if str(exc)=='daily_budget_deferred' else now+timedelta(seconds=60 if str(exc)=='market_pre_open' else 3600))
                 run.attempt_count=max(0,run.attempt_count-1);run.error_code=str(exc)
                 run.lease_token=None;run.lease_until=None;db.commit()
             return {'status':'deferred'}

@@ -47,9 +47,9 @@ def daily_allowance(db,run, *, is_pdf=False,now=None):
         try: recorded=json.loads(metadata or '{}')
         except ValueError: continue
         if recorded.get('ingestion_mode')==run.mode: used_bytes+=int(recorded.get('bytes',0))
-    byte_limit=(768 if historical else 256)*1024**2
+    byte_limit=(settings.pipeline_max_history_mib if historical else 256)*1024**2
     reserve=(25 if is_pdf else 5)*1024**2
-    return (limit is None or count<=limit) and used_bytes+reserve<=byte_limit
+    return (limit is None or limit == 0 or count<=limit) and (byte_limit == 0 or used_bytes+reserve<=byte_limit)
 
 
 def purge_attempt_payloads(db, *, now=None):

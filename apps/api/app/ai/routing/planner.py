@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from app.ai.providers.base import ContentBlock
 from app.ai.routing.contracts import CONTRACTS, SECTIONS
 from app.ai.routing.rules import route_query
+from app.domain.evidence_query import ALTERNATIVES
 from app.ai.routing.types import (
     UNAVAILABLE_BLOCKS, Block, BudgetLog, PlanStep, RetrievalContract, Route,
     RouteDecision, RouterInput,
@@ -22,15 +23,13 @@ log = logging.getLogger(__name__)
 
 FOLLOW_UP_RESERVE = 4          # calls kept for model-directed follow-ups/verification
 SECONDARY_PRIORITY = 1000      # secondary-route blocks are trimmed before primary ones
-PLANNER_VERSION = 'route-planner.v3'
+PLANNER_VERSION = 'route-planner.v4'
 
 # Optional blocks the question itself asks for are promoted to required, so budget
 # pressure cannot trim them ahead of per-holding detail (seen live: the model had to
 # fetch market data / performance itself because pass 1 dropped or lacked them).
 RISK_WORDS = re.compile(r'\brisks?\b|\bvolatil|\bbeta\b|\bsharpe\b|\bdrawdown\b|\bdownside\b', re.I)
-ALTERNATIVE_WORDS = re.compile(
-    r'\bbetter options?\b|\balternatives?\b|\boutside\b|\bother (stocks?|companies|names|options)\b|'
-    r'\bwhat else\b|\bnew (stocks?|positions?|ideas?)\b|\binstead\b|\bbeyond\b|\bdiversify into\b', re.I)
+ALTERNATIVE_WORDS = ALTERNATIVES
 MAX_HOLDINGS_QUANT = 10
 UNIVERSE_SCREEN = ['score', 'sector_percentile', 'completeness', 'growth_flag', 'net_margin', 'liquidity']
 PERFORMANCE_WORDS = re.compile(r'\bgoals?\b|\bperformance\b|\breturns?\b|\bdrawdown\b|\bcagr\b|\bmeet\b', re.I)
@@ -68,8 +67,11 @@ ROUTE_DIGEST_SECTIONS = {
 
 
 def digest_sections(question: str, route: Route | None = None) -> list[str]:
-    if re.search(r'\bdividend', question, re.I):
-        return ['dividends', 'material_developments', 'risks']
+    from app.domain.evidence_query import dividend_query, DIVIDEND_SUPPORT
+    if dividend_query(question):
+        if re.search(r'\b(subsidiar\w*|associates?|dividends? received|dividend income)\b', question, re.I):
+            return ['financial_performance', 'earnings_drivers', 'dividends']
+        return ['dividends', 'financial_performance', 'risks'] if DIVIDEND_SUPPORT.search(question) else ['dividends']
     if route in ROUTE_DIGEST_SECTIONS:
         return list(ROUTE_DIGEST_SECTIONS[route])
     if re.search(r'\b(risk|wrong|investments)\b', question, re.I):
@@ -130,7 +132,8 @@ def rule_decision(identity: dict, question: str, company_only: bool) -> RouteDec
 
 
 def plan_initial_evidence(identity: dict, question: str, company_only: bool, allowance: int,
-                          *, use_digests: bool = False, decision: RouteDecision | None = None) -> RoutedPlan:
+                          *, use_digests: bool = False, decision: RouteDecision | None = None,
+                          completed_tools: tuple[str, ...] = ()) -> RoutedPlan:
     entities = _entities(identity)
     named_entities = bool(entities)
     selected = identity.get('portfolio')
@@ -180,7 +183,7 @@ def plan_initial_evidence(identity: dict, question: str, company_only: bool, all
 
     if portfolio:
         pid = {'portfolio_id': portfolio['portfolio_id']}
-        if Block.PORTFOLIO_SNAPSHOT in allowed:
+        if Block.PORTFOLIO_SNAPSHOT in allowed and 'portfolio.summary' not in completed_tools:
             add(Block.PORTFOLIO_SNAPSHOT, 'portfolio.summary', dict(pid))
         if Block.IPS_COMPLIANCE in allowed:
             add(Block.IPS_COMPLIANCE, 'ips.compliance', dict(pid))
@@ -191,6 +194,16 @@ def plan_initial_evidence(identity: dict, question: str, company_only: bool, all
             add(Block.PORTFOLIO_PERFORMANCE, 'portfolio.performance', {**pid, 'limit': 365},
                 promote=wants_performance)
 
+    if (Block.MARKET_UNIVERSE in allowed and portfolio and not price_only
+            and ALTERNATIVE_WORDS.search(question)):
+        held = [e['instrument_id'] for e in (identity.get('portfolio_instruments') or [])]
+        add(Block.MARKET_UNIVERSE, 'market.universe',
+            {'limit': 8, 'rank_by': 'score', 'screening_fields': UNIVERSE_SCREEN,
+             'exclude_instrument_ids': held[:50]}, promote=True)
+    if holdings_wide and entities:
+        add(Block.SECURITY_QUANT, 'quant.securities',
+            {'instrument_ids': [entity['instrument_id'] for entity in entities]})
+
     sections_wanted = any(b in allowed for b in SECTIONS + (Block.COMPANY_DIGEST,))
     digest_mode = (use_digests and sections_wanted and not price_only
                    and Block.COMPANY_DIGEST not in contract.forbidden
@@ -199,8 +212,6 @@ def plan_initial_evidence(identity: dict, question: str, company_only: bool, all
         instrument_id = entity['instrument_id']
         first_ones = index < 2   # required blocks cover at most two entities
         if holdings_wide:
-            if Block.SECURITY_QUANT in allowed:
-                add(Block.SECURITY_QUANT, 'quant.security', {'instrument_id': instrument_id})
             continue
         if digest_mode:
             block = Block.COMPANY_DIGEST
@@ -230,13 +241,6 @@ def plan_initial_evidence(identity: dict, question: str, company_only: bool, all
         if portfolio:
             args['portfolio_id'] = portfolio['portfolio_id']
         add(Block.EVIDENCE_SEARCH, 'research.search', args)
-
-    if (Block.MARKET_UNIVERSE in allowed and portfolio and not price_only
-            and ALTERNATIVE_WORDS.search(question)):
-        held = [e['instrument_id'] for e in (identity.get('portfolio_instruments') or [])]
-        add(Block.MARKET_UNIVERSE, 'market.universe',
-            {'limit': 8, 'rank_by': 'score', 'screening_fields': UNIVERSE_SCREEN,
-             'exclude_instrument_ids': held[:50]}, promote=True)
 
     market_asked = 'market_terms' in decision.flags
     if Block.MARKET_SNAPSHOT in allowed and not price_only and (

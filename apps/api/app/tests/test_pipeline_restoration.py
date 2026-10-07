@@ -204,6 +204,25 @@ def test_capacity_missing_volume_defers_without_deleting(tmp_path,monkeypatch):
         assert db.scalar(select(func.count()).select_from(Document))==0
 
 
+def test_continuous_history_ignores_daily_quotas_but_live_stays_bounded(monkeypatch):
+    from app.services.pipeline.retention import daily_allowance
+    now = datetime.now(UTC)
+    monkeypatch.setattr(settings, 'pipeline_max_history_pdfs', 0)
+    monkeypatch.setattr(settings, 'pipeline_max_history_articles', 0)
+    monkeypatch.setattr(settings, 'pipeline_max_history_mib', 0)
+    monkeypatch.setattr(settings, 'pipeline_max_live_articles', 1)
+    with SessionLocal() as db:
+        for stage, mode in [('report_fetch', 'historical'), ('fetch', 'historical'), ('fetch', 'live')]:
+            for i in range(30):
+                row = runs.enqueue(db, stage, f'{stage}:{mode}:{i}', {}, mode=mode)
+                row.status = 'completed'; row.heartbeat_at = now
+        db.flush()
+        from types import SimpleNamespace
+        assert daily_allowance(db, SimpleNamespace(mode='historical'), is_pdf=True, now=now)
+        assert daily_allowance(db, SimpleNamespace(mode='historical'), now=now)
+        assert not daily_allowance(db, SimpleNamespace(mode='live'), now=now)
+
+
 def test_document_worker_chain_is_replayable_without_models(monkeypatch):
     from app.jobs.pipeline_tasks import execute
     monkeypatch.setattr(settings,'pipeline_enabled',True)

@@ -762,8 +762,8 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         lexical = lexical_scores[chunk_id]
         semantic_ok = (
             settings.embedding_backend == "sentence_transformers"
-            and semantic >= settings.retrieval_min_semantic_score
-            and lexical > 0
+            and semantic >= (settings.retrieval_min_semantic_score if lexical > 0
+                             else settings.retrieval_semantic_only_min_score)
         )
         lexical_ok = lexical >= settings.retrieval_min_lexical_score
         if not (semantic_ok or lexical_ok):
@@ -784,7 +784,7 @@ def search_rag(db: Session, user: User | None, payload: RagSearchRequest) -> Rag
         normalized_rrf=min(1.0,fused_score/(2/(settings.retrieval_rrf_k+1)))
         relevance=1.0 if plan.symbols else .7 if payload.sector_tags else .3
         quality=max(0.0,min(1.0,(4-document.source_tier)/3))
-        freshness=max(0.0,min(1.0,.5+freshness_adjustment(document.published_date)))
+        freshness=max(0.0,min(1.0,freshness_adjustment(document.published_date)/.0015))
         final_score = (.55*normalized_rrf+.20*lexical+.15*relevance+.05*quality+.05*freshness
             +content_adjustment(chunk.content_type,table_intent=table_intent))
         ranked.append((final_score, fused_score, semantic, lexical, chunk, document, citation))

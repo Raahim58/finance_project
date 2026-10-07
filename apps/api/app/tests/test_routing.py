@@ -241,8 +241,8 @@ def test_portfolio_wide_rebalance_loads_risk_for_every_holding_in_pass_one():
     plan = plan_initial_evidence({'portfolio': PORTFOLIO, 'portfolio_instruments': HOLDINGS},
                                  'Are there better options than what I currently hold?', False, 32)
     assert plan.decision.primary is Route.PORTFOLIO_REBALANCE
-    quant = [c for c in plan.calls if c.name == 'quant.security']
-    assert len(quant) == 9 and not plan.budget.missing_required
+    quant = [c for c in plan.calls if c.name == 'quant.securities']
+    assert len(quant) == 1 and len(quant[0].arguments['instrument_ids']) == 9 and not plan.budget.missing_required
     # per-holding digests/prices are not fetched: portfolio.summary already carries prices
     assert 'research.company_digest' not in names(plan) and 'market.latest' not in names(plan)
 
@@ -261,6 +261,79 @@ def test_non_alternative_rebalance_does_not_screen_the_universe():
     plan = plan_initial_evidence({'portfolio': PORTFOLIO, 'portfolio_instruments': HOLDINGS},
                                  'Should I rebalance my portfolio?', False, 32)
     assert 'market.universe' not in names(plan)
+
+
+@pytest.mark.parametrize('count', [5, 9])
+@pytest.mark.parametrize('question', ['Are there better options than what I currently hold?',
+                                    'Find alternatives outside my current holdings.',
+                                    'Can you find stronger companies than the ones I own?',
+                                    'Where should I redeploy my capital?'])
+def test_alternatives_fit_actual_remaining_allowance(count, question):
+    plan = plan_initial_evidence({'portfolio': PORTFOLIO, 'portfolio_instruments': HOLDINGS[:count]},
+                                 question, False, 11, use_digests=True,
+                                 completed_tools=('portfolio.summary',))
+    assert 'portfolio.summary' not in names(plan)
+    assert {'market.universe', 'quant.securities', 'ips.compliance', 'quant.portfolio'} <= set(names(plan))
+    assert not plan.budget.missing_required and len(plan.calls) <= 7
+
+
+def test_batch_quant_retains_missing_security_and_its_own_provenance(monkeypatch):
+    from fastapi import HTTPException
+    from app.tools import quant_tools
+    from app.tools.registry import expand_model_data
+    def calculate(_db, identifier):
+        if identifier == 'absent':
+            raise HTTPException(status_code=422, detail='Missing price history')
+        return {'instrument_id': identifier, 'symbol': 'FIX', 'metrics': {'volatility': .2}}
+    monkeypatch.setattr(quant_tools, 'security_quant', calculate)
+    result = quant_tools._securities(None, None, quant_tools.SecuritiesInput(instrument_ids=['present', 'absent', 'present']))
+    data = expand_model_data(result['data'])
+    assert [row['status'] for row in data['securities']] == ['ok', 'missing']
+    assert result['sources'][0]['instrument_id'] == 'present'
+
+
+def test_actual_executor_keeps_screener_and_batch_coverage_under_default_limit(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from app.ai import tool_loop
+    from app.tools.registry import tool_result
+    monkeypatch.setattr(tool_loop.settings, 'assistant_max_tool_iterations', 12)
+    monkeypatch.setattr(tool_loop, '_save_checkpoint', lambda *_: None)
+    monkeypatch.setattr('app.ai.routing.persistence.record_routing', lambda *_: None)
+    calls = []
+    async def invoke(_owner, call):
+        calls.append(call)
+        data = {'holdings': HOLDINGS} if call.name == 'portfolio.summary' else {}
+        return tool_loop.ToolExecution(call, tool_result('ok', data), 1)
+    monkeypatch.setattr(tool_loop, '_execute_tool', invoke)
+    cp = {'compact_evidence_enabled': True, 'resolved_identity': {'portfolio': PORTFOLIO},
+          'evidence': {}, 'next_evidence': 1, 'tool_trace': [], 'reserved_tool_calls': 0,
+          'reserved_tool_call_ids': [], 'completed_tool_call_ids': [],
+          'turns': [tool_loop.ProviderTurn('system', [tool_loop.ContentBlock('text', text='Fixture')]).to_dict()]}
+    asyncio.run(tool_loop._prepare_evidence('fixture', 'fixture',
+        SimpleNamespace(question='Find alternatives outside my current holdings.', company_only=False), cp))
+    assert [call.name for call in calls].count('portfolio.summary') == 1
+    assert {'market.universe', 'quant.securities'} <= {call.name for call in calls}
+    assert not cp['evidence_packet']['first_pass_unvisited_instruments']
+    assert all('quant.securities' in cp['evidence_packet']['first_pass_coverage'][holding['instrument_id']] for holding in HOLDINGS)
+    assert cp['reserved_tool_calls'] <= 8
+
+
+def test_dividend_comparison_loads_payouts_without_security_quant():
+    plan = plan_initial_evidence({'mentioned_instrument_candidates': [LUCK, FFC]},
+        'Compare FFC and LUCK dividend payout records', True, 12, use_digests=True)
+    assert plan.decision.primary is Route.FUNDAMENTALS_SNAPSHOT
+    assert 'quant.security' not in names(plan)
+    assert all(call.arguments['sections'] == ['dividends'] for call in plan.calls if call.name == 'research.company_digest')
+
+
+def test_percentage_followup_uses_discussed_companies_and_dividend_reads():
+    plan = plan_initial_evidence({'mentioned_instrument_candidates': [LUCK, FFC]},
+        'wdym by 250%? what is the percentage against?', True, 12, use_digests=True)
+    assert plan.decision.primary is Route.FUNDAMENTALS_SNAPSHOT
+    assert all(call.arguments['sections'] == ['dividends'] for call in plan.calls if call.name == 'research.company_digest')
+    from app.domain.evidence_query import dividend_query
+    assert not dividend_query('What does 20% return against my benchmark mean?')
 
 
 def test_model_typed_portfolio_id_is_replaced_by_the_selected_one():

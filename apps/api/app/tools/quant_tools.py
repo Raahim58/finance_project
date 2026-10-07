@@ -1,6 +1,7 @@
 import json
 
 from pydantic import BaseModel, Field, field_validator
+from fastapi import HTTPException
 
 from app.reasoning.allocation import AllocationProposal
 from app.services.allocation_verification import verify_allocation
@@ -22,6 +23,27 @@ def _quant(db, user, payload: PortfolioInput):
 
 class SecurityInput(BaseModel):
     instrument_id: str
+
+
+class SecuritiesInput(BaseModel):
+    instrument_ids: list[str] = Field(min_length=1, max_length=10)
+
+
+def _securities(db, user, payload: SecuritiesInput):
+    rows, sources = [], []
+    for identifier in dict.fromkeys(payload.instrument_ids):
+        try:
+            envelope = _security(db, user, SecurityInput(instrument_id=identifier))
+            from app.tools.registry import expand_model_data
+            rows.append({'status': 'ok', **expand_model_data(envelope['data'])})
+            sources.extend(envelope['sources'])
+        except HTTPException as exc:
+            if exc.status_code not in (404, 422):
+                raise
+            rows.append({'instrument_id': identifier, 'status': 'missing', 'reason': exc.detail})
+    return tool_result('ok' if any(row['status'] == 'ok' for row in rows) else 'missing',
+                       {'securities': rows, 'missing_instruments': [row['instrument_id'] for row in rows if row['status'] == 'missing']},
+                       sources=sources, returned=len(rows), remaining=0)
 
 
 def _security(db, _user, payload: SecurityInput):
@@ -83,6 +105,9 @@ def _verify_allocation(db, user, payload: AllocationVerificationInput):
 
 
 def register_quant_tools(registry: ToolRegistry) -> None:
+    registry.register(ToolDefinition('quant.securities', '1.0',
+        'Batch return/risk metrics for up to ten securities from stored sourced-adjusted prices. Missing history is explicit per security.',
+        SecuritiesInput, 'market:read', True, False, 20, _securities))
     registry.register(
         ToolDefinition(
             "quant.portfolio",
