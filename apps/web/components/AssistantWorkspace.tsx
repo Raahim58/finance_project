@@ -35,6 +35,7 @@ import {
   type Conversation,
   type History,
   type MessageContext,
+  sumTokenUsage,
   type RunEvent,
 } from "@/lib/assistant-workspace";
 
@@ -482,6 +483,7 @@ export function AssistantWorkspaceProvider({
     }
   };
   const history = selected ? histories[selected] : null,
+    conversationTokens = sumTokenUsage(history?.items ?? []),
     live = Object.values(runs).filter((r) => r.conversationId === selected),
     running = live.find((r) => active(r.status)),
     draft = drafts[selected ?? "new"] ?? "";
@@ -616,6 +618,13 @@ export function AssistantWorkspaceProvider({
             {history?.items.map((message) => (
               <ChatMessageView key={message.id} message={message} />
             ))}
+            {conversationTokens.answers ? (
+              <p className="assistant-tokens assistant-tokens-total" data-testid="conversation-tokens">
+                Conversation so far: Input {conversationTokens.input.toLocaleString("en-US")} · Output{" "}
+                {conversationTokens.output.toLocaleString("en-US")} · {conversationTokens.calls} model calls
+                {conversationTokens.unreported ? ` · ${conversationTokens.unreported} answer(s) not fully reported` : ""}
+              </p>
+            ) : null}
             {live
               .filter(
                 (r) =>

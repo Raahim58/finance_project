@@ -157,3 +157,32 @@ export async function observeRun(
     reader.releaseLock();
   }
 }
+
+export type TokenUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens?: number;
+  total_tokens?: number;
+  model_calls?: number;
+  reported_by_provider?: boolean;
+};
+/** Usage stored with a completed assistant answer (includes summary calls); null when absent. */
+export function tokenUsageOf(message: ChatMessage): TokenUsage | null {
+  const usage = message.evidence?.synthesis?.token_usage as TokenUsage | undefined;
+  return message.role === "assistant" && usage && typeof usage.input_tokens === "number" ? usage : null;
+}
+/** Sum of provider-reported usage over the loaded messages. */
+export function sumTokenUsage(messages: ChatMessage[]) {
+  const total = { input: 0, output: 0, cached: 0, calls: 0, answers: 0, unreported: 0 };
+  for (const message of messages) {
+    const usage = tokenUsageOf(message);
+    if (!usage) continue;
+    total.answers += 1;
+    total.calls += usage.model_calls ?? 0;
+    if (usage.reported_by_provider === false) total.unreported += 1;
+    total.input += usage.input_tokens;
+    total.output += usage.output_tokens;
+    total.cached += usage.cache_read_tokens ?? 0;
+  }
+  return total;
+}
