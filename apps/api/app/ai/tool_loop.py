@@ -1060,6 +1060,13 @@ async def _prepare_evidence(identifier, user_id, payload, checkpoint):
         item['instrument_id']: [call.arguments.get('sections', [call.name])[0]
             for call in calls if (call.arguments or {}).get('instrument_id') == item['instrument_id']]
         for item in scoped_instruments.values()}
+    prefetched = ['portfolio.summary'] if checkpoint.get('portfolio_scope_prepared') else []
+    checkpoint['evidence_packet']['already_retrieved'] = {
+        'note': 'Backend already retrieved these reads for this question and they are in this packet. '
+                'Do not request them again; call a tool only for evidence not listed here.',
+        'reads': prefetched + [call.name + (':' + ','.join(call.arguments['sections'])
+                if (call.arguments or {}).get('sections') and call.name == 'research.company_sections' else '')
+                for call in calls]}
     checkpoint['evidence_packet']['first_pass_unvisited_instruments'] = [
         item for item in scoped_instruments.values() if item['instrument_id'] not in visited]
     checkpoint['initial_evidence_prepared'] = True

@@ -22,7 +22,13 @@ log = logging.getLogger(__name__)
 
 FOLLOW_UP_RESERVE = 4          # calls kept for model-directed follow-ups/verification
 SECONDARY_PRIORITY = 1000      # secondary-route blocks are trimmed before primary ones
-PLANNER_VERSION = 'route-planner.v1'
+PLANNER_VERSION = 'route-planner.v2'
+
+# Optional blocks the question itself asks for are promoted to required, so budget
+# pressure cannot trim them ahead of per-holding detail (seen live: the model had to
+# fetch market data / performance itself because pass 1 dropped or lacked them).
+RISK_WORDS = re.compile(r'\brisks?\b|\bvolatil|\bbeta\b|\bsharpe\b|\bdrawdown\b|\bdownside\b', re.I)
+PERFORMANCE_WORDS = re.compile(r'\bgoals?\b|\bperformance\b|\breturns?\b|\bdrawdown\b|\bcagr\b|\bmeet\b', re.I)
 
 
 @dataclass
@@ -45,9 +51,22 @@ class RoutedPlan:
         }
 
 
-def digest_sections(question: str) -> list[str]:
+ROUTE_DIGEST_SECTIONS = {
+    # Only the sections the route's question needs: each digest section costs ~1.2k tokens
+    # per issuer, and the unfiltered default (7 sections x 2 issuers) was ~60% of every call.
+    Route.PORTFOLIO_IMPACT: ['material_developments', 'sector_macro', 'risks'],
+    Route.PORTFOLIO_REVIEW: ['financial_performance', 'risks'],
+    Route.PORTFOLIO_REBALANCE: ['financial_performance', 'earnings_drivers', 'risks'],
+    Route.MULTI_STOCK_COMPARE: ['financial_performance', 'earnings_drivers', 'risks'],
+    Route.SINGLE_STOCK_QUICK_TAKE: ['financial_performance', 'material_developments', 'risks'],
+}
+
+
+def digest_sections(question: str, route: Route | None = None) -> list[str]:
     if re.search(r'\bdividend', question, re.I):
         return ['dividends', 'material_developments', 'risks']
+    if route in ROUTE_DIGEST_SECTIONS:
+        return list(ROUTE_DIGEST_SECTIONS[route])
     if re.search(r'\b(risk|wrong|investments)\b', question, re.I):
         return ['financial_performance', 'risks', 'sector_macro', 'material_developments']
     return ['financial_performance', 'earnings_drivers', 'dividends',
@@ -143,9 +162,10 @@ def plan_initial_evidence(identity: dict, question: str, company_only: bool, all
 
     steps: list[PlanStep] = []
 
-    def add(block: Block, tool: str, arguments: dict, required_ok: bool = True):
+    def add(block: Block, tool: str, arguments: dict, required_ok: bool = True, promote: bool = False):
         origin = allowed[block]
-        required = required_ok and block in contract.required and origin == contract.route
+        required = required_ok and (block in contract.required and origin == contract.route
+                                    or (promote and block in contract.optional))
         priority = len(steps) + (0 if origin == contract.route else SECONDARY_PRIORITY)
         steps.append(PlanStep(block, tool, arguments, required, origin, priority))
 
@@ -157,6 +177,10 @@ def plan_initial_evidence(identity: dict, question: str, company_only: bool, all
             add(Block.IPS_COMPLIANCE, 'ips.compliance', dict(pid))
         if Block.PORTFOLIO_QUANT in allowed and not named_entities:
             add(Block.PORTFOLIO_QUANT, 'quant.portfolio', dict(pid))
+        wants_performance = bool(PERFORMANCE_WORDS.search(question))
+        if Block.PORTFOLIO_PERFORMANCE in allowed and (wants_performance or Block.PORTFOLIO_PERFORMANCE in contract.required):
+            add(Block.PORTFOLIO_PERFORMANCE, 'portfolio.performance', {**pid, 'limit': 365},
+                promote=wants_performance)
 
     sections_wanted = any(b in allowed for b in SECTIONS + (Block.COMPANY_DIGEST,))
     digest_mode = (use_digests and sections_wanted and not price_only
@@ -169,10 +193,14 @@ def plan_initial_evidence(identity: dict, question: str, company_only: bool, all
             block = Block.COMPANY_DIGEST
             allowed.setdefault(block, contract.route)
             add(block, 'research.company_digest',
-                {'instrument_id': instrument_id, 'sections': digest_sections(question)},
+                {'instrument_id': instrument_id, 'sections': digest_sections(question, decision.primary)},
                 first_ones and any(b in contract.required for b in (Block.COMPANY_FACTS, Block.COMPANY_DIGEST)))
         if Block.PRICE_SNAPSHOT in allowed:
             add(Block.PRICE_SNAPSHOT, 'market.latest', {'instrument_id': instrument_id}, first_ones)
+        if Block.SECURITY_QUANT in allowed and not price_only and (
+                Block.SECURITY_QUANT in contract.required or RISK_WORDS.search(question)):
+            add(Block.SECURITY_QUANT, 'quant.security', {'instrument_id': instrument_id}, first_ones,
+                promote=bool(RISK_WORDS.search(question)))
         if digest_mode or price_only:
             continue
         for block in SECTIONS:
@@ -190,10 +218,15 @@ def plan_initial_evidence(identity: dict, question: str, company_only: bool, all
             args['portfolio_id'] = portfolio['portfolio_id']
         add(Block.EVIDENCE_SEARCH, 'research.search', args)
 
+    market_asked = 'market_terms' in decision.flags
+    if Block.MARKET_SNAPSHOT in allowed and not price_only and (
+            Block.MARKET_SNAPSHOT in contract.required or market_asked):
+        add(Block.MARKET_SNAPSHOT, 'market.overview',
+            {'sections': ['snapshot', 'gainers', 'losers', 'sectors'], 'limit': 5}, promote=market_asked)
     if Block.MARKET_BRIEF in allowed and not price_only and (
-            Block.MARKET_BRIEF in contract.required or 'market_terms' in decision.flags):
+            Block.MARKET_BRIEF in contract.required or market_asked):
         add(Block.MARKET_BRIEF, 'research.morning_brief',
-            {'symbols': [e['symbol'] for e in entities]} if entities else {})
+            {'symbols': [e['symbol'] for e in entities]} if entities else {}, promote=market_asked)
 
     cap = min(contract.max_calls, max(0, allowance - FOLLOW_UP_RESERVE))
     kept, budget = enforce_budget(steps, cap)

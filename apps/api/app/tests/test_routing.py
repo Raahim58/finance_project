@@ -46,7 +46,7 @@ def names(plan):
 
 def test_market_brief_fetches_only_market_brief_even_with_selected_portfolio():
     plan = plan_initial_evidence({'portfolio': PORTFOLIO}, "What's happening in the market today?", False, 12)
-    assert names(plan) == ['research.morning_brief']
+    assert names(plan) == ['market.overview', 'research.morning_brief']   # SQL numbers + commentary
 
 
 def test_definition_fetches_nothing():
@@ -159,3 +159,74 @@ def test_executor_only_fetches_portfolio_when_the_route_allows_it(monkeypatch, q
     if not executes_portfolio:
         assert not {'portfolio.summary', 'ips.compliance', 'quant.portfolio'} & set(executed)
         assert not checkpoint['evidence_packet'].get('portfolio_instruments')
+
+
+def test_market_worded_question_keeps_the_market_brief_under_budget_pressure():
+    held = [{'instrument_id': str(i), 'symbol': f'S{i}'} for i in range(5)]
+    plan = plan_initial_evidence({'portfolio': PORTFOLIO, 'portfolio_instruments': held},
+                                 "What’s happening in the market, and how does it affect me?", False, 11, use_digests=True)
+    assert plan.decision.primary is Route.PORTFOLIO_IMPACT
+    assert 'research.morning_brief' in names(plan)
+    assert not plan.budget.missing_required
+
+
+def test_goals_question_gets_performance_in_pass_one():
+    plan = plan_initial_evidence({'portfolio': PORTFOLIO}, 'Can my portfolio meet my goals?', False, 12)
+    assert plan.decision.primary is Route.PORTFOLIO_REVIEW
+    perf = next(s for s in plan.steps if s.tool == 'portfolio.performance')
+    assert perf.required and perf.arguments == {'portfolio_id': 'mine', 'limit': 365}
+    plain = plan_initial_evidence({'portfolio': PORTFOLIO}, 'What do you think of my portfolio?', False, 12)
+    assert 'portfolio.performance' not in names(plain) or not next(
+        s for s in plain.steps if s.tool == 'portfolio.performance').required
+
+
+def test_buy_decision_gets_per_security_risk_in_pass_one():
+    plan = plan_initial_evidence({'portfolio': PORTFOLIO, 'mentioned_instrument_candidates': [LUCK, FFC]},
+                                 'Should I buy more LUCK or FFC?', False, 11)
+    assert plan.decision.primary is Route.PORTFOLIO_REBALANCE
+    assert names(plan).count('quant.security') == 2 and not plan.budget.missing_required
+
+
+def test_market_questions_use_sql_snapshot_for_numbers_and_never_commentary_alone():
+    for question in ("What's happening in the market today?", 'Why did the market fall?'):
+        plan = plan_initial_evidence({}, question, False, 12)
+        assert names(plan)[0] == 'market.overview', question
+
+
+def test_market_plus_portfolio_question_has_snapshot_brief_and_portfolio_under_budget():
+    held = [{'instrument_id': str(i), 'symbol': f'S{i}'} for i in range(5)]
+    plan = plan_initial_evidence({'portfolio': PORTFOLIO, 'portfolio_instruments': held},
+                                 "What’s happening in the market, and how does it affect me?", False, 11, use_digests=True)
+    assert {'market.overview', 'research.morning_brief', 'ips.compliance'} <= set(names(plan))
+    assert not plan.budget.missing_required
+
+
+def test_performance_default_is_a_bounded_summary_with_correct_statistics():
+    import json
+    from datetime import date, timedelta
+    from app.tools.portfolio_tools import summarize_performance
+    twr = [0, 10, 20, 10, 5, 30]    # peak 1.20 -> trough 1.05 = -12.5%
+    rows = []
+    for i in range(365):
+        value = twr[i % len(twr)] if i < 6 else 30 + i / 100
+        rows.append({'value_date': str(date(2025, 1, 1) + timedelta(days=i)), 'total_value': str(1000 + i),
+                     'external_cash_flow': '100' if i == 0 else '0', 'value_change': '1', 'day_change': '1',
+                     'day_change_percent': '0.1', 'cumulative_twr_percent': str(value)})
+    summary = summarize_performance(rows)
+    assert summary['point_count'] == 365 and summary['max_drawdown_percent'] == '-12.5000'
+    assert summary['max_drawdown_trough_date'] == '2025-01-05' and summary['net_external_cash_flow'] == '100'
+    assert len(summary['sampled_points']) <= 25
+    assert summary['sampled_points'][0] == rows[0] and summary['sampled_points'][-1] == rows[-1]
+    assert len(json.dumps(summary)) < len(json.dumps(rows)) / 8   # was ~13.5k tokens for a year
+    assert summarize_performance([])['point_count'] == 0
+
+
+def test_digest_sections_follow_the_route_not_a_seven_section_default():
+    held = [{'instrument_id': 'a', 'symbol': 'A'}, {'instrument_id': 'b', 'symbol': 'B'}]
+    for question, limit in (('What do you think of my portfolio?', 2), ('Should I buy more A or B?', 3),
+                            ("What’s happening in the market, and how does it affect me?", 3)):
+        plan = plan_initial_evidence({'portfolio': PORTFOLIO, 'portfolio_instruments': held}, question, False, 20, use_digests=True)
+        digests = [s for s in plan.steps if s.tool == 'research.company_digest']
+        assert digests and all(len(s.arguments['sections']) <= limit for s in digests), question
+    full = plan_initial_evidence({'explicit_instrument': LUCK}, 'How are LUCK margins and debt?', True, 12, use_digests=True)
+    assert len(next(s for s in full.steps if s.tool == 'research.company_digest').arguments['sections']) == 7

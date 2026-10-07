@@ -63,20 +63,6 @@ jobs:
             exit 1
           fi
 
-          echo "== Refusing deployment while ingestion is running =="
-          running_ingestion="$({
-            docker compose -f compose.oracle.yml \
-              --profile ingestion \
-              --profile scheduling \
-              --profile pipeline \
-              ps --status running --services
-          } | grep -E '^(worker-|pipeline-|.*-scheduler$)' || true)"
-          if [[ -n "$running_ingestion" ]]; then
-            echo "Stop these ingestion services before deploying:" >&2
-            printf '%s\n' "$running_ingestion" >&2
-            exit 1
-          fi
-
           echo "== Fetching the triggering commit =="
           git fetch origin "$deploy_sha"
           git cat-file -e "${deploy_sha}^{commit}"
@@ -87,28 +73,10 @@ jobs:
             exit 1
           fi
 
-          echo "== Building API and web =="
-          docker compose -f compose.oracle.yml build api web
-
-          echo "== Running database migrations =="
-          # This script arrives on bash's stdin. Never let Compose consume the
-          # remaining restart/readiness commands as container input.
-          docker compose -f compose.oracle.yml run --rm -T --interactive=false api \
-            alembic upgrade head </dev/null
-
-          echo "== Redeploying API and web =="
-          docker compose -f compose.oracle.yml --profile research up -d api web research-worker
-
-          echo "== Waiting for application readiness =="
-          curl \
-            --fail \
-            --retry 20 \
-            --retry-all-errors \
-            --retry-delay 2 \
-            http://127.0.0.1:3000/api/ready
-
-          echo
-          echo "== Deployed services =="
-          docker compose -f compose.oracle.yml --profile research ps api web research-worker
+          echo "== Deploying (ingestion is paused and restored automatically) =="
+          # ops/oracle-deploy builds first, drains and stops only the running
+          # ingestion services, migrates, redeploys api/web/research-worker, then
+          # restarts exactly what was running. It never purges Redis queues.
+          ./ops/oracle-deploy
           printf 'DEPLOY SUCCESSFUL: %s\n' "$deploy_sha"
           EOF

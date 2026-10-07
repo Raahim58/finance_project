@@ -75,7 +75,7 @@ def test_classifier_label_changes_the_plan_but_not_tool_choice_rules():
     decision, result = run('{"route": "market_driver_explainer", "confidence": 0.9}')
     plan = plan_initial_evidence({}, VAGUE.question, False, 12, decision=apply_tie_break(decision, result))
     assert plan.decision.primary is Route.MARKET_DRIVER_EXPLAINER
-    assert [c.name for c in plan.calls] == ['research.morning_brief']
+    assert [c.name for c in plan.calls] == ['market.overview', 'research.morning_brief']
 
 
 def test_loop_tiebreak_is_one_recorded_call_and_idempotent(monkeypatch):
