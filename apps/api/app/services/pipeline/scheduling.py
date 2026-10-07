@@ -36,7 +36,7 @@ def price_bucket(db,now):
 def scheduled_bucket(schedule,now,db):
     local=now.astimezone(KARACHI)
     if schedule=='prices': return price_bucket(db,now)[0]
-    hours=NEWS_HOURS if schedule=='news' else (18,) if schedule=='announcements' else (2,) if schedule=='maintenance' else ()
+    hours=NEWS_HOURS if schedule=='news' else (18,) if schedule=='announcements' else (2,) if schedule=='maintenance' else (9,) if schedule=='briefing' else ()
     if not hours: raise ValueError('unknown_source_schedule')
     buckets=[datetime.combine(local.date(),time(hour),tzinfo=KARACHI) for hour in hours]
     due=[b for b in buckets if b<=local]

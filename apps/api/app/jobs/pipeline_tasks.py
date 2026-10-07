@@ -12,7 +12,7 @@ from app.models.evidence import DiscoveryCandidate
 from app.models.workstation import EventSource, Instrument
 from app.services.pipeline import runs
 
-QUEUES={'discover':'pipeline_discovery','fetch':'pipeline_fetch','parse':'pipeline_parse',
+QUEUES={'briefing':'pipeline_heavy','discover':'pipeline_discovery','fetch':'pipeline_fetch','parse':'pipeline_parse',
     'index':'pipeline_heavy','sections':'pipeline_parse','link':'pipeline_parse','extract':'pipeline_enrich',
     'events':'pipeline_enrich','intelligence':'pipeline_intelligence','enrich':'pipeline_model',
     'secondary_tables':'pipeline_numeric','prices':'pipeline_numeric','reports':'pipeline_discovery','report_fetch':'pipeline_fetch',
@@ -27,6 +27,9 @@ def successor(db,run,stage,payload):
 
 def perform(db,run):
     p=run.input;stage=run.stage
+    if stage=='briefing':
+        from app.services.pipeline.briefing import capture
+        return capture(db),[]
     if stage=='discover':
         from app.ingestion.evidence_catalog import build_pass1_registry
         from app.services.evidence_operations import discover_stage

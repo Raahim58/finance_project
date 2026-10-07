@@ -33,6 +33,7 @@ class SourceSpec:
 
 
 SOURCE_SPECS = (
+    SourceSpec("briefing_news", "Original article discovery feed", "https://stock-market-analysis-7l5.pages.dev", "discovery", ("reporting",), ("pakistan_macro","markets"), "briefing_news", 14400, 548, True, "https://stock-market-analysis-7l5.pages.dev/news.json", daily_discovery_budget=100, daily_fetch_budget=30, daily_selected_budget=30),
     SourceSpec("tavily", "Tavily discovery pilot", "https://api.tavily.com", "discovery", ("discovery",), ("markets",), "tavily", 86400, 548, False, "https://api.tavily.com/search", daily_discovery_budget=30, daily_fetch_budget=30, daily_selected_budget=30),
     SourceSpec("world_fertilizer", "World Fertilizer", "https://www.worldfertilizer.com", "specialist", ("reporting", "context"), ("fertilizer",), "rss", 1800, 90, settings.evidence_pass4_breadth_enabled, "https://www.worldfertilizer.com/rss/worldfertilizer.xml", "commodities", None, "pass4_breadth", 100, 20, 10),
     SourceSpec("world_cement", "World Cement", "https://www.worldcement.com", "specialist", ("reporting", "context"), ("cement",), "rss", 1800, 90, settings.evidence_pass4_breadth_enabled, "https://www.worldcement.com/rss/worldcement.xml", "commodities", None, "pass4_breadth", 100, 20, 10),
@@ -131,6 +132,10 @@ def build_pass1_registry() -> EvidenceSourceRegistry:
     registry.register(PsxAnnouncementSource())
     for spec in SOURCE_SPECS:
         if spec.key == "psx_announcements":
+            continue
+        if spec.key == "briefing_news":
+            from app.providers.evidence.briefing_site import BriefingNewsSource
+            registry.register(BriefingNewsSource())
             continue
         if spec.key == "sec_edgar_current":
             ciks = tuple(

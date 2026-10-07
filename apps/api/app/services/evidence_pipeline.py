@@ -244,6 +244,8 @@ def persist_candidate(db: Session, config: EvidenceSourceConfig, candidate: Cand
     row = db.scalar(select(DiscoveryCandidate).where(or_(*filters)))
     if row is not None:
         row.last_seen_at = candidate.discovered_at
+        if row.source_config_id!=config.id:
+            return row,False  # A discovery feed must not rewrite another publisher's metadata.
         if settings.pipeline_enabled and row.status==CandidateStatus.SELECTED.value:
             old=json.loads(row.metadata_json or '{}')
             changed=(row.headline!=candidate.headline[:500] or

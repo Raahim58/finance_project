@@ -172,7 +172,7 @@ def _company_tool_allowed(name: str, arguments=None) -> bool:
     return True
 
 
-CORE_TOOLS={'market.latest','research.company_sections','research.search','research.events',
+CORE_TOOLS={'research.morning_brief','market.latest','research.company_sections','research.search','research.events',
     'documents.search','portfolio.summary','ips.compliance','quant.portfolio'}
 
 def _catalog(company_only=False, selected=()) -> list[ProviderTool]:

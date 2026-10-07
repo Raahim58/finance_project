@@ -319,6 +319,8 @@ def _company_digest(db,user,payload):
     if instrument is None:
         return tool_result('missing',error={'code':'instrument_not_found'})
     saved = read_digest(db,user,instrument,active=False)
+    from app.services.pipeline.briefing import read as read_extra_analysis
+    extra=read_extra_analysis(db,symbols=[instrument.symbol],sectors=[instrument.sector] if instrument.sector else None,limit=2)
     snapshot = saved['snapshot']
     if not snapshot and saved.get('prepared_intelligence'):
         import copy
@@ -340,7 +342,10 @@ def _company_digest(db,user,payload):
                 ref=source.get('fact_id') or source.get('statement_id')
                 section['source_refs'].append(ref)
                 sources.append({'id':ref,**source})
-        return tool_result('ok',{'prepared_intelligence':prepared,'brief_is_current':False,'status':'source_grounded'},sources=sources,returned=len(prepared))
+        for row in extra:
+            sources.append({k:row[k] for k in ('id','source_name','source_url','title','published_date')})
+        analysis=[{'text':row['text'],'classification':'interpretation','source_ref':row['id'],'published_date':row['published_date']} for row in extra]
+        return tool_result('ok',{'prepared_intelligence':prepared,'extra_analysis':analysis,'brief_is_current':False,'status':'source_grounded'},sources=sources,returned=len(prepared))
     if not snapshot:
         return tool_result('missing',{'status':saved['status'],'detail':'No saved company digest yet. Use company_sections/search for evidence; page opening can queue preparation.'},returned=0)
     # Map snapshot-local refs to unique execution evidence IDs before packet fusion.
@@ -364,7 +369,25 @@ def _company_digest(db,user,payload):
     return tool_result('ok',data,sources=[{'id':prefix+ref,**source} for ref,source in snapshot['sources'].items()],returned=1)
 
 
+class MorningBriefInput(BaseModel):
+    symbols: list[str] | None = Field(default=None,max_length=8)
+    sectors: list[str] | None = Field(default=None,max_length=8)
+    limit: int = Field(default=8,ge=1,le=12)
+
+
+def _morning_brief(db,_user,payload):
+    from app.services.pipeline.briefing import read
+    rows=read(db,symbols=payload.symbols,sectors=payload.sectors,limit=payload.limit)
+    sources=[{k:r[k] for k in ('id','source_name','source_url','title','published_date')} for r in rows]
+    data=[{k:v for k,v in row.items() if k not in ('source_name','source_url','title')}|{'source_ref':row['id']} for row in rows]
+    return tool_result('ok' if rows else 'missing',{'extra_analysis':data,
+        'qualification':'Analyst commentary, not verified financial or macro observations. Original news articles are retrieved independently.'},sources=sources,returned=len(rows))
+
+
 def register_research_tools(registry: ToolRegistry) -> None:
+    registry.register(ToolDefinition('research.morning_brief','1.0',
+        'Dated extra sector/company interpretation from the public morning research feed. Optional issuer/sector filters. Numerical claims require separate original-source or SQL verification.',
+        MorningBriefInput,'research:read',True,False,10,_morning_brief))
     registry.register(ToolDefinition('research.company_digest','1.0',
         'Saved compact company snapshot and cited AI thesis; dates, periods, reporting bases and missing data retained. Use company_sections/search for omitted older or detailed evidence. No portfolio or IPS.',
         CompanyDigestInput,'research:read',True,False,12,_company_digest))

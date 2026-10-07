@@ -27,6 +27,7 @@ def schedule_sources(db,now):
             if key in target.cursor: payload[key]=target.cursor[key]
         if target.adapter_key=='prices': stage='prices'
         elif target.adapter_key=='maintenance': stage='maintenance'
+        elif target.adapter_key=='briefing': stage='briefing'
         elif target.adapter_key=='reports':
             instrument=db.get(Instrument,target.instrument_id)
             if not instrument: continue

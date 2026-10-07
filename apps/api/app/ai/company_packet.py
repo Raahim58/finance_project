@@ -56,6 +56,8 @@ def initial_calls(identity, question, company_only, allowance, *, use_digests=Fa
             search_args['portfolio_id'] = portfolio['portfolio_id']
         add('research.search', search_args)
     # Do not let a large comparison starve news: it gets one shared bounded lane.
+    if not price_only and re.search(r'\b(market|news|sector|morning)\b',question,re.I):
+        add('research.morning_brief',{'symbols':[e['symbol'] for e in entities]} if entities else {})
     capacity = max(0, allowance - 4)
     if len(calls) > capacity and calls and calls[-1].name == 'research.search' and capacity:
         calls = calls[:capacity-1] + [calls[-1]]
