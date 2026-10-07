@@ -75,10 +75,12 @@ def refresh(db,instrument_id):
             db.add(row);db.flush()
             for typ,identifier,version in set(dependencies[key]):
                 db.add(IntelligenceDependency(section_id=row.id,dependency_type=typ,dependency_id=identifier,dependency_version=version))
+            pinned_artifacts=set()
             for src in sources[key]:
                 doc=db.get(Document,src.get('document_id')) if src.get('document_id') else None
-                if doc and doc.artifact_id and not db.get(ArtifactPin,(doc.artifact_id,'intelligence',row.id)):
+                if doc and doc.artifact_id and doc.artifact_id not in pinned_artifacts and not db.get(ArtifactPin,(doc.artifact_id,'intelligence',row.id)):
                     db.add(ArtifactPin(artifact_id=doc.artifact_id,consumer_type='intelligence',consumer_id=row.id))
+                    pinned_artifacts.add(doc.artifact_id)
         else: row.is_selected=True
         versions.append(row.id)
     db.flush();return versions

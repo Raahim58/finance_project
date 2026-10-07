@@ -44,9 +44,9 @@ def perform(db,run):
         result=discover_stage(db,source,limit=min(50,int(p.get("news_limit",50))),priority_class=run.mode if run.mode!='replay' else 'live',
             cursor_override=p.get('cursor') if p.get('archive') or p.get('source_key')=='psx_announcements' else None)
         children=[('fetch','candidate:'+c,{'candidate_id':c,'revision':json.loads(db.get(DiscoveryCandidate,c).metadata_json or '{}').get('pipeline_revision',0)}) for c in result.candidate_ids]
-        if p.get('archive')=='mettis' and not result.next_cursor.get('complete') and not p.get('canary_batch'):
+        if p.get('archive')=='mettis' and not (result.next_cursor or {}).get('complete') and not p.get('canary_batch'):
             page=int(p.get('page',0))
-            if page<99 and (run.mode=='historical' or result.new or result.next_cursor.get('initial_listing')):
+            if page<99 and (run.mode=='historical' or result.new or (result.next_cursor or {}).get('initial_listing')):
                 cursor=dict(result.next_cursor);cursor.pop('initial_listing',None)
                 children.append(('discover',run.subject_key,dict(p,cursor=cursor,page=page+1)))
         if p.get('source_key')=='psx_announcements' and not p.get('canary_batch') and result.discovered==50 and int(p.get('page',0))<19:
