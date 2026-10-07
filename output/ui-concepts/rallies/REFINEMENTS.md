@@ -1,0 +1,8 @@
+## Refinement 1
+
+Edit this UI mockup with one precise text correction. Preserve all layout, styling, typography, charts, dimensions, metric values, source links and other copy. In the Company digest > Interpretation column, replace the two bullet paragraphs with exactly: 'The 7.82× multiple uses FY25 EPS; it is not a TTM valuation.' and 'Iraq expansion brings execution and regional demand risks; outcomes remain uncertain.' Remove the unsupported sentence about higher volumes and continued growth. No other changes; particularly preserve price 410.56, EPS 52.53, P/E 7.82×, debt/equity 0.49×, gross margin 27.30%, and the illustrative-chart footer.
+
+## Refinement 2
+
+Make precise text-only corrections to this two-screen UI design board. Preserve the complete layout, colors, tables, numbers, charts and portfolio activity labels. In the Markets macro strip, replace 'Policy rate' with '3-month KIBOR'; retain 11.66% and 13 Aug 2026 exactly. In Market digest under Pakistan policy, replace the empty paragraph with 'Recent Pakistan policy updates not yet verified.' Under Sector developments replace the 'Evidence needed' placeholder and paragraph with a short real stored news item: 'Cement decarbonization funding' then 'World Cement · 22 Sep 2026' then 'CURA raised US$10M for cement electrification technology.' Do not invent other headlines or metrics. Add a small clear footer across the bottom of the full board reading 'Design study · portfolio activity and charts illustrative · stored market figures dated 2 Oct 2026'. Maintain all existing market values, notably KSE-100 168,155.49, -481.36 points, KSE100PR 50,669.56, volume 491.54M, and all 'Demo' and 'Illustrative' labels.
+

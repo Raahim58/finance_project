@@ -45,7 +45,8 @@ def perform(db,run):
             if not key: raise DeferredStage('tavily_credential_missing')
             source=TavilyDiscoverySource(api_key=decrypt_secret(key.secret_encrypted),query=p['query'],domains=p['domains'])
         result=discover_stage(db,source,limit=min(50,int(p.get("news_limit",50))),priority_class=run.mode if run.mode!='replay' else 'live',
-            cursor_override=p.get('cursor') if p.get('archive') or p.get('source_key')=='psx_announcements' else None)
+            cursor_override=p.get('cursor') if p.get('archive') or p.get('source_key')=='psx_announcements' else None,
+            commit=False)
         children=[('fetch','candidate:'+c,{'candidate_id':c,'revision':json.loads(db.get(DiscoveryCandidate,c).metadata_json or '{}').get('pipeline_revision',0)}) for c in result.candidate_ids]
         if p.get('archive')=='mettis' and not (result.next_cursor or {}).get('complete') and not p.get('canary_batch'):
             page=int(p.get('page',0))

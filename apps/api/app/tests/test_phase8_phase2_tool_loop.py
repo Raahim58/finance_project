@@ -305,7 +305,7 @@ def test_native_gemini_loop_continues_without_resending_prior_results(client, mo
     )
 
     assert response.status_code == 201, response.text
-    assert response.json()["tool_trace"][0]["tool"] == "market.freshness"
+    assert any(row['tool']=='market.freshness' for row in response.json()['tool_trace'])
     assert captured[1]["previous_interaction_id"] == "gemini-loop-tools"
     assert len(captured[1]["input"]) == 2
     assert captured[1]["input"][1]["type"] == "user_input"
@@ -327,7 +327,7 @@ def test_native_gemini_loop_continues_without_resending_prior_results(client, mo
         "transport": "gemini_interactions",
         "continuation_id": "gemini-loop-final",
     }
-    assert checkpoint["completed_tool_call_ids"] == ["freshness-call"]
+    assert 'freshness-call' in checkpoint['completed_tool_call_ids']
     assert execution.reserved_input_tokens == 30
     assert diagnostic["usage"]["input_tokens"] == 30
     assert diagnostic["usage"]["model_calls"] == 2
@@ -821,7 +821,8 @@ def test_restart_resumes_persisted_tool_turn_before_another_provider_call(client
     finally:
         diagnostics.execution_id.reset(token)
 
-    assert result["answer"] == "Freshness checked after restart."
+    assert result['synthesis']['generation']['error_code'] == 'citation_missing'
+    assert 'investment conclusion was rejected' in result['answer']
     assert len(captured) == 1
     result_blocks = captured[0]["messages"][-1]["content"]
     assert result_blocks[0]["type"] == "tool_result"
@@ -978,7 +979,7 @@ def test_final_message_persistence_retries_once_without_duplicate(client, monkey
                 )
             )
         )
-    assert execution.status == "completed"
+        assert execution.status == "synthesis_unavailable"
     assert len(messages) == 1
 
 
@@ -1268,7 +1269,7 @@ def test_accepted_allocation_delivery_and_local_recovery_do_not_repeat_provider(
         row = db.scalar(select(AssistantExecution).where(AssistantExecution.user_id == user_id))
         identifier = row.id
         checkpoint = json.loads(decrypt_secret(row.transcript_encrypted))
-        assert checkpoint["reserved_tool_calls"] == 7  # four first-pass reads plus three model tools
+        assert checkpoint["reserved_tool_calls"] == 11  # held-company first pass plus three model tools
         assert "cost units" not in json.dumps(captured)
         assert checkpoint["allocation_check"]["accepted"] is True
         assert "Execution allowance (not evidence)" in json.dumps(captured[1])

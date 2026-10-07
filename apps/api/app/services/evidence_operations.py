@@ -230,10 +230,13 @@ def discover_stage(
     priority_class: str = "live",
     cursor_override: dict[str, Any] | None = None,
     request_id: str | None = None,
+    commit: bool = True,
 ) -> DiscoveryStageResult:
+    """Persist discoveries; pipeline callers commit them with the successor outbox."""
     _, config, state = ensure_source_config(db, evidence_source.key)
     if not source_is_allowlisted(evidence_source.key):
-        db.commit()
+        if commit: db.commit()
+        else: db.flush()
         return DiscoveryStageResult((), 0, 0)
     now = datetime.now(UTC)
     state.last_attempted_at = now
@@ -248,7 +251,8 @@ def discover_stage(
                 "next_budget_at": state.next_poll_at.isoformat(),
             }
         )
-        db.commit()
+        if commit: db.commit()
+        else: db.flush()
         return DiscoveryStageResult((), 0, 0)
     try:
         batch = evidence_source.discover_since(cursor, allowed)
@@ -284,7 +288,8 @@ def discover_stage(
                 request.status = "processing" if request.discovered_count else "complete"
                 if not request.discovered_count:
                     request.completed_at = now
-        db.commit()
+        if commit: db.commit()
+        else: db.flush()
         return DiscoveryStageResult(tuple(identifiers), len(batch.candidates), new_count, dict(batch.next_cursor))
     except Exception as exc:
         state.consecutive_failures += 1
@@ -305,7 +310,10 @@ def discover_stage(
                 request.error_class = type(exc).__name__
                 request.error_message = str(exc)[:2000]
                 request.completed_at = now
-        db.commit()
+        # An exception in a pipeline discovery must roll back candidate/cursor
+        # writes with its missing successors. The stage ledger records failure;
+        # legacy direct callers retain their independent source-health commit.
+        if commit: db.commit()
         raise
 
 

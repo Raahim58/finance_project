@@ -8,8 +8,9 @@ from app.models.document import Document, DocumentEvidenceTag
 from app.models.workstation import FinancialFact, StandardizedFinancialFact, CorporateAction
 from app.reasoning.projection import estimate_tokens
 from app.ai.company_packet import financial_changes
+from app.services.financial_evidence_eligibility import public_primary_financials, verified_secondary_financials, secondary_financial_gap
 
-VERSION = 'company-snapshot.v4'
+VERSION = 'company-snapshot.v5'
 TARGET_TOKENS = 5000
 
 
@@ -41,9 +42,8 @@ def select_periods(facts):
 
 def financial_rows(db, instrument):
     today = date.today()
-    usable_docs=select(Document.id).where(Document.status.not_in(('revoked','superseded','failed')))
     filings = list(db.scalars(select(FinancialFact).where(
-        or_(FinancialFact.document_id.is_(None),FinancialFact.document_id.in_(usable_docs)),
+        public_primary_financials(),
         FinancialFact.instrument_id == instrument.id, FinancialFact.period_end <= today,
         or_(FinancialFact.confidence.is_(None), FinancialFact.confidence > 0),
         or_(FinancialFact.filing_date.is_(None), FinancialFact.filing_date <= today))
@@ -62,7 +62,7 @@ def financial_rows(db, instrument):
             'document_id':f.document_id, 'page_number':f.page_number, 'source_name':f.source_label,
             'version':f.version})
     for f in db.scalars(select(StandardizedFinancialFact).where(
-        StandardizedFinancialFact.instrument_id == instrument.id, StandardizedFinancialFact.quality_status == 'observed',
+        StandardizedFinancialFact.instrument_id == instrument.id, verified_secondary_financials(),
         StandardizedFinancialFact.period_end <= today).order_by(StandardizedFinancialFact.id)):
         rows.append({'id':f.id, 'metric':f.metric, 'value':str(f.value), 'unit':f.unit,
             'currency':f.currency, 'period_type':f.period_type, 'period_start':None,
@@ -78,6 +78,7 @@ def dependency_hash(db, instrument):
     # Stable source versions: no clock bucket, so merely reopening never marks a brief dirty.
     versions = {
         'facts': select_periods(financial_rows(db, instrument)),
+        'secondary_gap':secondary_financial_gap(db,instrument.id),
         'prices': [tuple(r) for r in db.execute(select(MarketObservation.id, MarketObservation.effective_at,
             MarketObservation.values_json, MarketObservation.artifact_id).where(MarketObservation.instrument_id == instrument.id,
             MarketObservation.is_selected.is_(True)).order_by(MarketObservation.effective_at.desc(),MarketObservation.id).limit(1))],
@@ -96,10 +97,13 @@ def dependency_hash(db, instrument):
         (DocumentEvidenceTag.kind == 'sector') & (DocumentEvidenceTag.value == canonical_sector(instrument.sector or '')),
         (DocumentEvidenceTag.kind == 'topic') & DocumentEvidenceTag.value.in_(('rates','inflation','fx','geopolitics'))))
     docs = [tuple(row) for row in db.execute(select(Document.id, Document.content_hash, Document.parsed_at,
-            Document.published_date, Document.title, Document.source_url).where(
-            Document.visibility == 'public', Document.portfolio_id.is_(None), Document.data_status == 'observed',
+            Document.published_date, Document.title, Document.source_url, Document.status,
+            Document.data_status,Document.document_type,Document.source_name,Document.source_tier).where(
+            Document.visibility == 'public', Document.owner_user_id.is_(None),
+            Document.portfolio_id.is_(None), Document.data_status == 'observed',
+            Document.status.not_in(('revoked','superseded','failed')),
             or_(Document.symbol == instrument.symbol, Document.sector == instrument.sector, Document.id.in_(tags)))
-        .order_by(Document.published_date.desc(), Document.id).limit(100))]
+        .order_by(Document.published_date.desc(), Document.id))]
     actions = [tuple(row) for row in db.execute(select(CorporateAction.id, CorporateAction.action_type,
         CorporateAction.effective_date, CorporateAction.details_json, CorporateAction.artifact_id).where(CorporateAction.instrument_id == instrument.id))]
     events = [tuple(row) for row in db.execute(select(Event.id, Event.title, Event.occurred_at,
@@ -219,6 +223,8 @@ def build_snapshot(db, user, instrument):
         if value['state'] in ('missing','incomplete','not_evaluated','stale'):
             snapshot['missing_data'].append({'section':name,'state':value['state'],'errors':value['errors']})
     if not facts: snapshot['missing_data'].append({'section':'financials','state':'missing'})
+    secondary_gap=secondary_financial_gap(db,instrument.id)
+    if secondary_gap: snapshot['missing_data'].append({'section':'financials','state':'unverified_secondary',**secondary_gap})
     if not changes: snapshot['missing_data'].append({'section':'changes','state':'no_compatible_pair'})
     if market.get('status') != 'ok': snapshot['missing_data'].append({'section':'market','state':market.get('status')})
     if not events: snapshot['missing_data'].append({'section':'news','state':news.get('status')})

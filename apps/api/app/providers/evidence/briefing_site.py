@@ -1,5 +1,6 @@
 """User-approved discovery feed; citations belong to fetched original publishers."""
 import json
+from hashlib import sha256
 from datetime import UTC,datetime
 from urllib.parse import urlsplit
 from app.ingestion.evidence import Candidate,DiscoveryBatch
@@ -37,6 +38,15 @@ class BriefingNewsSource(HttpEvidenceSource):
                     metadata={'summary':str(entry.get('summary') or ''),'discovery_url':self.discovery_url,
                         'curated_sectors':entry.get('sectors_affected') or [],'curation_impact_unverified':entry.get('psx_impact_score'),
                         'publication_date_basis':'original_article_required'}))
-                if len(candidates)>=min(50,limit):
-                    return DiscoveryBatch(tuple(candidates),{'checked_at':now.isoformat(),'candidate_limit_reached':True})
-        return DiscoveryBatch(tuple(candidates),{'checked_at':now.isoformat(),'candidate_limit_reached':False})
+        # A repeated, bounded poll must advance beyond already observed top
+        # stories. Keep an original-URL identity rather than a positional offset
+        # so feed insertions and score reordering do not skip the next story.
+        hashes=[sha256(candidate.canonical_url.encode()).hexdigest() for candidate in candidates]
+        next_hash=(cursor or {}).get('next_url_hash')
+        start=hashes.index(next_hash) if next_hash in hashes else 0
+        count=min(50,max(0,limit),len(candidates))
+        selected=[candidates[(start+index)%len(candidates)] for index in range(count)]
+        next_index=(start+count)%len(candidates) if candidates else 0
+        return DiscoveryBatch(tuple(selected),{'checked_at':now.isoformat(),
+            'next_url_hash':hashes[next_index] if hashes else None,
+            'candidate_limit_reached':len(candidates)>count})

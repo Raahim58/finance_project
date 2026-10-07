@@ -19,6 +19,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.services.company_risk import company_risk
+from app.services.financial_evidence_eligibility import public_primary_financials, verified_secondary_financials, secondary_financial_gap
 from app.models.document import Document, DocumentChunk
 from app.models.market import MarketPrice, SectorDailyStats
 from app.models.portfolio import Portfolio, PortfolioHolding, PortfolioTransaction
@@ -391,7 +392,7 @@ class ContextBuilder:
                         FinancialFact.source_label,
                         FinancialFact.document_id,
                         FinancialFact.page_number,
-                    ).where(FinancialFact.instrument_id == instrument.id)
+                    ).where(FinancialFact.instrument_id == instrument.id,public_primary_financials())
                 )
             ]
             standardized = [
@@ -413,7 +414,12 @@ class ContextBuilder:
                     ).where(StandardizedFinancialFact.instrument_id == instrument.id)
                 )
             ]
-            return _hash(base, instrument.name, instrument.sector, filing, standardized)
+            fact_documents=select(FinancialFact.document_id).where(FinancialFact.instrument_id==instrument.id,
+                public_primary_financials())
+            documents=[tuple(row) for row in db.execute(select(Document.id,Document.content_hash,
+                Document.title,Document.source_name,Document.source_url,Document.document_type,
+                Document.source_tier,Document.status,Document.data_status).where(Document.id.in_(fact_documents)))]
+            return _hash(base, instrument.name, instrument.sector, filing, standardized,documents)
         if name == ContextSectionName.MARKET_RISK:
             price = latest_price(db, instrument.symbol)
             snapshot = db.scalar(
@@ -722,7 +728,7 @@ class ContextBuilder:
         filing = list(
             db.scalars(
                 select(FinancialFact)
-                .where(FinancialFact.instrument_id == instrument.id, FinancialFact.period_end <= date.today(),
+                .where(FinancialFact.instrument_id == instrument.id, public_primary_financials(), FinancialFact.period_end <= date.today(),
                     or_(FinancialFact.confidence.is_(None), FinancialFact.confidence > 0),
                     or_(FinancialFact.filing_date.is_(None), FinancialFact.filing_date <= date.today()))
                 .order_by(FinancialFact.period_end.desc(), FinancialFact.version.desc())
@@ -734,7 +740,7 @@ class ContextBuilder:
                 select(StandardizedFinancialFact)
                 .where(
                     StandardizedFinancialFact.instrument_id == instrument.id,
-                    StandardizedFinancialFact.quality_status == "observed",
+                    verified_secondary_financials(),
                     StandardizedFinancialFact.period_end <= date.today(),
                 )
                 .order_by(StandardizedFinancialFact.period_end.desc())
@@ -811,6 +817,7 @@ class ContextBuilder:
                 "type": instrument.instrument_type,
             },
             "fundamentals": facts,
+            "financial_evidence_gaps": [gap] if (gap:=secondary_financial_gap(db,instrument.id)) else [],
         }
         if facts:
             as_of = max(

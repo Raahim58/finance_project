@@ -1,9 +1,11 @@
 import hashlib
 import json
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
+from app.core.config import settings
 
 from app.schemas.rag import RagSearchRequest
 from app.models.workstation import Instrument
@@ -310,6 +312,8 @@ def _instruments(db, _user, payload: InstrumentSearchInput):
 
 class CompanyDigestInput(BaseModel):
     instrument_id: str
+    sections: list[Literal['financial_performance','earnings_drivers','expansion','dividends',
+        'material_developments','sector_macro','risks','unresolved_questions']] | None = Field(default=None,min_length=1,max_length=8)
 
 
 def _company_digest(db,user,payload):
@@ -322,15 +326,22 @@ def _company_digest(db,user,payload):
     from app.services.pipeline.briefing import read as read_extra_analysis
     extra=read_extra_analysis(db,symbols=[instrument.symbol],sectors=[instrument.sector] if instrument.sector else None,limit=2)
     snapshot = saved['snapshot']
-    if not snapshot and saved.get('prepared_intelligence'):
+    snapshot_current=bool(snapshot and snapshot.get('input_hash')==saved['input_hash'])
+    if saved.get('prepared_intelligence') and (settings.pipeline_enabled or not snapshot_current):
         import copy
-        prepared=copy.deepcopy(saved['prepared_intelligence'])
+        all_prepared=saved['prepared_intelligence']
+        available=[section['section'] for section in all_prepared if section.get('state')=='source_grounded'
+            and section.get('content',{}).get('evidence')]
+        selected=set(payload.sections) if payload.sections else {section['section'] for section in all_prepared}
+        prepared=copy.deepcopy([section for section in all_prepared if section['section'] in selected])
         sources=[]
         for section in prepared:
             section['source_refs']=[]
             for row in section.get('content',{}).get('evidence',[]):
                 identifier=row.get('id') or row.get('statement_id')
                 if identifier: row['evidence_refs']=[identifier]
+                if section.get('section')=='financial_performance' and row.get('source_name'):
+                    row['source_quote']=row['source_name']
                 for field in ('id','statement_id','document_id','source_name','source_url','page_number','version'):
                     row.pop(field,None)
             if section.get('section')=='financial_performance':
@@ -345,9 +356,21 @@ def _company_digest(db,user,payload):
         for row in extra:
             sources.append({k:row[k] for k in ('id','source_name','source_url','title','published_date')})
         analysis=[{'text':row['text'],'classification':'interpretation','source_ref':row['id'],'published_date':row['published_date']} for row in extra]
-        return tool_result('ok',{'prepared_intelligence':prepared,'extra_analysis':analysis,'brief_is_current':False,'status':'source_grounded'},sources=sources,returned=len(prepared))
-    if not snapshot:
-        return tool_result('missing',{'status':saved['status'],'detail':'No saved company digest yet. Use company_sections/search for evidence; page opening can queue preparation.'},returned=0)
+        usable=any(section.get('state')=='source_grounded' and
+            (section.get('content',{}).get('reporting_bases') or section.get('content',{}).get('evidence'))
+            for section in prepared)
+        return tool_result('ok' if usable else 'missing',{'prepared_intelligence':prepared,'extra_analysis':analysis,
+            'brief_is_current':False,'status':'source_grounded' if usable else 'missing',
+            'available_sections':available,'omitted_available_sections':[section for section in available if section not in selected],
+            'unavailable_sections':[{'section':section['section'],'state':section['state'],'gaps':section.get('gaps',[])}
+                for section in all_prepared if section['section'] not in available],
+            'detail_tools':['research.company_sections','research.search','market.latest'],
+            'missing_data':[{'section':section['section'],'state':section['state'],'gaps':section.get('gaps',[])}
+                for section in prepared if section.get('state')=='stale']},sources=sources,returned=len(prepared))
+    if not snapshot or not snapshot_current:
+        return tool_result('missing',{'status':'stale' if snapshot else saved['status'],
+            'detail':'Saved company evidence is missing or its dependencies changed. Read company_sections/market.latest/search for current evidence.',
+            'detail_tools':['research.company_sections','market.latest','research.search']},returned=0)
     # Map snapshot-local refs to unique execution evidence IDs before packet fusion.
     prefix = 'digest-'+saved['input_hash'][:12]+'-'
     def refs(value):

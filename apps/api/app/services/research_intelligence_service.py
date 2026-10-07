@@ -28,6 +28,7 @@ from app.services.research_evidence_service import report_coverage, company_wind
 from app.services.portfolio_service import get_portfolio_summary, get_portfolio_or_404
 from app.services.rag_service import active_embedding_model
 from app.core.config import settings
+from app.services.financial_evidence_eligibility import public_primary_financials, verified_secondary_financials
 
 
 def resolve_company(db, symbol):
@@ -388,6 +389,7 @@ def exact_facts(db, instrument, limit=12):
             select(FinancialFact)
             .where(
                 FinancialFact.instrument_id == instrument.id,
+                public_primary_financials(),
                 FinancialFact.period_end <= today,
                 or_(FinancialFact.confidence.is_(None), FinancialFact.confidence > 0),
                 or_(FinancialFact.filing_date.is_(None), FinancialFact.filing_date <= today),
@@ -419,7 +421,7 @@ def exact_facts(db, instrument, limit=12):
             select(StandardizedFinancialFact)
             .where(
                 StandardizedFinancialFact.instrument_id == instrument.id,
-                StandardizedFinancialFact.quality_status == "observed",
+                verified_secondary_financials(),
                 StandardizedFinancialFact.period_end <= today,
             )
             .order_by(StandardizedFinancialFact.period_end.desc(), StandardizedFinancialFact.id)

@@ -161,20 +161,10 @@ async def execute(identifier):
     global _slots
     if _slots is None:
         _slots = asyncio.Semaphore(2)
-    try:
-        await asyncio.wait_for(_slots.acquire(), timeout=settings.assistant_queue_timeout_seconds)
-    except TimeoutError:
-        from app.services import assistant_events as events
-        with SessionLocal.begin() as db:
-            row = db.get(AssistantExecution, identifier)
-            if row.status != "queued":
-                return
-            row.status = "timeout"
-            row.error_code = "execution_queue_timeout"
-            row.completed_at = now()
-            events.save_terminal_partial(db, row)
-        events.append(identifier, "terminal", {"status": "timeout", "error_code": "execution_queue_timeout", "response": None})
-        return
+    # Accepted work is durable. Local capacity waiting is not a provider timeout
+    # and must not terminalize requests before they reach a model. Cancellation
+    # and restart reconciliation retain their existing ownership checks.
+    await _slots.acquire()
     try:
         await _execute_claimed(identifier)
     finally:
@@ -217,7 +207,7 @@ async def _execute_claimed(identifier):
             stage_id = diagnostics.begin_stage("orchestration")
             stage_started = time.perf_counter()
             try:
-                async with asyncio.timeout(None if local_finalization else deadline - elapsed + settings.assistant_queue_timeout_seconds * 7):
+                async with asyncio.timeout(None if local_finalization else deadline - elapsed):
                     result = await run_assistant(
                         db, user, payload, row.conversation_id, accepted=True
                     )
@@ -323,6 +313,7 @@ def reconcile(db):
     cutoff = now() - timedelta(seconds=30)
     rows = db.scalars(
         select(AssistantExecution).where(AssistantExecution.status.in_(["queued", "running"]))
+        .order_by(AssistantExecution.created_at, AssistantExecution.id)
     )
     ready = []
     for row in rows:

@@ -690,7 +690,13 @@ def test_production_bridge_queues_existing_company_fact_workers_and_tracks_cover
         assert refresh.status == "rebuilt"
         assert refresh.rebuild_count == 1
         assert notifications == [context.context_id]
-        assert db.scalar(select(ContextDeficiencyRecord)).status == "resolved"
+        # Completing capture does not certify the secondary fiscal period,
+        # units or reporting basis. The verified financial gap remains open.
+        assert db.scalar(select(ContextDeficiencyRecord)).status == "refreshing"
+        rebuilt = ContextBuilder().build(db, user, request)
+        financial = rebuilt.sections[ContextSectionName.COMPANY_FACTS]
+        assert financial.data['fundamentals'] == []
+        assert financial.data['financial_evidence_gaps'][0]['code'] == 'unverified_secondary_financials'
         notification = db.scalar(select(ContextRefreshNotification))
         assert notification.context_id == context.context_id
         assert notification.status == "delivered"

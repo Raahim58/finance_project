@@ -469,7 +469,7 @@ async def _provider_turn(
         execution = budget_db.get(AssistantExecution, identifier)
         accounting = json.loads(execution.accounting_json)
         elapsed = (datetime.now(UTC) - execution.started_at.replace(tzinfo=UTC)).total_seconds() if execution.started_at else 0
-        remaining_deadline = settings.assistant_execution_deadline_seconds - elapsed + accounting.get("queue_ms", 0) / 1000
+    remaining_deadline = settings.assistant_execution_deadline_seconds - elapsed
     if remaining_deadline <= 0:
         raise AssistantTerminalError("execution_deadline_exhausted")
     calls = accounting.get("calls", 0)
@@ -493,7 +493,12 @@ async def _provider_turn(
         estimated, count_metadata = await preflight_count(provider, api_key, payload,
             input_limit=policy["input"], remaining_input=remaining_input)
         count_metadata["payload_component_measurement"] = component_measurement
-        transmitted_bytes = len(json.dumps(payload, default=str, separators=(",", ":")).encode())
+        import hashlib
+        import httpx
+        # Match httpx's actual json= encoding, including non-ASCII source text.
+        wire_body = httpx.Request('POST', 'https://provider.invalid', json=payload).content
+        transmitted_bytes = len(wire_body)
+        count_metadata['wire_payload_sha256'] = hashlib.sha256(wire_body).hexdigest()
         if estimated > policy["input"]:
             diagnostics.record_preflight_rejection({**count_metadata, "counted_input_tokens": estimated,
                 "per_call_limit": policy["input"], "remaining_cumulative_input": remaining_input,
@@ -823,6 +828,28 @@ def resolve_citations(text_value: str, checkpoint: dict[str, Any]):
     )
 
 
+def citation_gate(outcome, checkpoint):
+    """Presence/identity gate only; resolving a reference is not entailment."""
+    if outcome.get('unknown_references'):
+        return 'citation_reference_unknown'
+    if not outcome.get('resolved_count'):
+        return 'citation_missing'
+    return None
+
+
+def citation_failure_answer(checkpoint):
+    # Never decorate rejected prose with citations after generation. Its exact
+    # original remains in the encrypted checkpoint for diagnosis/review.
+    sources = '\n'.join(
+        f"- {item['source'].get('title') or item['source'].get('source_name') or 'Stored evidence'} [[{ref}]]"
+        for ref, item in checkpoint.get('evidence', {}).items())
+    return ('The model did not produce an answer with valid evidence references. '
+            'Its investment conclusion was rejected. '
+            'A supported assessment is unavailable.'
+            + ('\n\nAvailable evidence:\n' + sources if sources else
+               ' No usable cited evidence was returned.'))
+
+
 def _render_allocation(checkpoint: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     allocation = expand_model_data(checkpoint.get("allocation_check")) or {"status": "not_requested"}
     status = (
@@ -909,14 +936,36 @@ async def _prepare_evidence(identifier, user_id, payload, checkpoint):
     if not checkpoint.get('compact_evidence_enabled') or checkpoint.get('initial_evidence_prepared'):
         return
     started = time.perf_counter()
-    from app.ai.company_packet import initial_calls, new_packet
+    from app.ai.company_packet import initial_calls, new_packet, price_only_question
     identity = checkpoint.get('resolved_identity', {})
     checkpoint.setdefault('evidence_packet', new_packet(identity))
+    # Resolve held issuers from the ownership-checked SQL summary before planning
+    # company and sector evidence. Never infer holdings from conversational prose.
+    if (identity.get('portfolio') and not payload.company_only
+            and not price_only_question(payload.question)
+            and not checkpoint.get('portfolio_scope_prepared')
+            and not checkpoint.get('initial_evidence_plan')):
+        call=ContentBlock('tool_call',id='initial-portfolio-scope',name='portfolio.summary',
+            arguments={'portfolio_id':identity['portfolio']['portfolio_id']})
+        if call.id not in checkpoint['reserved_tool_call_ids']:
+            _reserve_calls(checkpoint,[call])
+            checkpoint['reserved_tool_call_ids'].append(call.id)
+            _save_checkpoint(identifier,checkpoint)
+        execution=await _execute_tool(user_id,call)
+        data=expand_model_data(execution.envelope.get('data')) or {}
+        identity['portfolio_instruments']=[
+            {'instrument_id':row['instrument_id'],'symbol':row['symbol']}
+            for row in data.get('holdings',[]) if row.get('instrument_id') and row.get('symbol')]
+        _result_blocks(checkpoint,execution)
+        checkpoint['completed_tool_call_ids'].append(call.id)
+        checkpoint['portfolio_scope_prepared']=True
+        _save_checkpoint(identifier,checkpoint)
     if 'initial_evidence_plan' not in checkpoint:
         checkpoint['initial_evidence_plan'] = [call.to_dict() for call in initial_calls(
             identity, payload.question, payload.company_only,
             settings.assistant_max_tool_iterations - checkpoint['reserved_tool_calls'],
-            use_digests=checkpoint.get("company_digest_enabled", settings.assistant_company_digest_enabled))]
+            use_digests=checkpoint.get("company_digest_enabled", settings.assistant_company_digest_enabled))
+            if not (checkpoint.get('portfolio_scope_prepared') and call.name=='portfolio.summary')]
     calls = [ContentBlock.from_dict(call) for call in checkpoint['initial_evidence_plan']]
     unreserved = [call for call in calls if call.id not in checkpoint['reserved_tool_call_ids']]
     _reserve_calls(checkpoint, unreserved)
@@ -946,7 +995,7 @@ async def _prepare_evidence(identifier, user_id, payload, checkpoint):
                 name='research.company_sections',arguments={'instrument_id':call.arguments['instrument_id'],
                     'sections':[name],'limit':16 if name=='company_facts' else 5,
                     'sector_comparison_limit':5 if name=='sector' else 0}))
-    remaining=max(0,settings.assistant_max_tool_iterations-checkpoint['reserved_tool_calls']-2)
+    remaining=max(0,settings.assistant_max_tool_iterations-checkpoint['reserved_tool_calls']-4)
     fallback=fallback[:remaining]
     if fallback:
         unreserved=[call for call in fallback if call.id not in checkpoint['reserved_tool_call_ids']]
@@ -958,13 +1007,15 @@ async def _prepare_evidence(identifier, user_id, payload, checkpoint):
             checkpoint['completed_tool_call_ids'].append(execution.call.id)
             _save_checkpoint(identifier,checkpoint)
         calls.extend(fallback)
-    visited = {call.arguments.get('instrument_id') for call in calls}
+    visited = {(call.arguments or {}).get('instrument_id') for call in calls}
+    scoped_instruments={item['instrument_id']:item for item in [
+        *identity.get('mentioned_instrument_candidates', []),*identity.get('portfolio_instruments', [])]}
     checkpoint['evidence_packet']['first_pass_coverage'] = {
         item['instrument_id']: [call.arguments.get('sections', [call.name])[0]
-            for call in calls if call.arguments.get('instrument_id') == item['instrument_id']]
-        for item in identity.get('mentioned_instrument_candidates', [])}
+            for call in calls if (call.arguments or {}).get('instrument_id') == item['instrument_id']]
+        for item in scoped_instruments.values()}
     checkpoint['evidence_packet']['first_pass_unvisited_instruments'] = [
-        item for item in identity.get('mentioned_instrument_candidates', []) if item['instrument_id'] not in visited]
+        item for item in scoped_instruments.values() if item['instrument_id'] not in visited]
     checkpoint['initial_evidence_prepared'] = True
     _update_allowance(checkpoint)
     checkpoint['initial_evidence_elapsed_ms'] = round((time.perf_counter() - started) * 1000, 3)
@@ -1174,12 +1225,26 @@ async def run_tool_loop(
             raw_text = "The provider returned no final answer text."
         answer = unwrap_final_text(raw_text)
         answer, citations, citation_outcome = resolve_citations(answer, checkpoint)
+        if generation_status == 'success':
+            terminal_code = citation_gate(citation_outcome, checkpoint)
+            if terminal_code:
+                generation_status = 'failed'
+                answer, citations, _ = resolve_citations(citation_failure_answer(checkpoint), checkpoint)
         citations.extend(checkpoint["web_citations"])
         try:
             allocation_text, allocation_outcome = _render_allocation(checkpoint)
         except Exception as exc:
             raise AssistantTerminalError("response_rendering_failed") from exc
         answer += allocation_text
+        from app.services.assistant_memory import summary_provider_usage
+        summary_usage=summary_provider_usage(identifier)
+        execution_usage={**checkpoint['usage']}
+        for field in ('input_tokens','output_tokens','cache_read_tokens','reasoning_tokens',
+                      'transmitted_input_bytes','model_calls'):
+            execution_usage[field]=execution_usage.get(field,0)+summary_usage.get(field,0)
+        execution_usage['reported_input_for_all_calls']=(execution_usage.get('reported_input_for_all_calls',False)
+            and summary_usage['reported_input_for_all_calls'])
+        execution_usage['summary_usage']=summary_usage
         synthesis = {
             "mode": "llm_tool_loop" if generation_status == "success" else "synthesis_unavailable",
             "provider": provider.name,
@@ -1196,10 +1261,10 @@ async def run_tool_loop(
             "allocation_check": allocation_outcome,
             "evidence_packet": _packet_receipt(checkpoint),
             "token_usage": {
-                **checkpoint["usage"],
-                "total_tokens": checkpoint["usage"]["input_tokens"]
-                + checkpoint["usage"]["output_tokens"],
-                "reported_by_provider": checkpoint["usage"][
+                **execution_usage,
+                "total_tokens": execution_usage["input_tokens"]
+                + execution_usage["output_tokens"],
+                "reported_by_provider": execution_usage[
                     "reported_input_for_all_calls"
                 ],
             },
