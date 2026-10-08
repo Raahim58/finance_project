@@ -7,7 +7,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AssistantWorkspaceProvider, AskAssistant } from "./AssistantWorkspace";
+import { AssistantWorkspaceProvider, AskAssistant, useAssistantWorkspace } from "./AssistantWorkspace";
+import { useEffect } from "react";
 import { AssistantControls } from "./AssistantControls";
 import type { RunEvent } from "@/lib/assistant-workspace";
 const mocks = vi.hoisted(() => ({
@@ -123,6 +124,15 @@ async function send() {
   await waitFor(() => expect(mocks.observe).toHaveBeenCalledTimes(1));
 }
 describe("persistent Assistant", () => {
+  it("keeps an explicit company portfolio scope separate from the global default", async () => {
+    mocks.path = "/companies/FFC";
+    mocks.portfolios.mockResolvedValue([{id:"p1",name:"Growth",is_default:true},{id:"p2",name:"Income",is_default:false}]);
+    function Scope(){const setScope=useAssistantWorkspace()?.setCompanyPortfolioScope;useEffect(()=>{setScope?.("p2")},[setScope]);return <AssistantControls/>}
+    render(<AssistantWorkspaceProvider><Scope/></AssistantWorkspaceProvider>);
+    fireEvent.click(screen.getByLabelText("Open Assistant sidebar"));
+    await screen.findByText(/Next message · FFC · Income/);
+    expect(mocks.submit).not.toHaveBeenCalled();
+  });
   it("opens a previous chat over the market brief and closes without generating", async () => {
     mocks.path = "/market";
     render(<AssistantWorkspaceProvider><div>Market brief</div><AssistantControls /></AssistantWorkspaceProvider>);

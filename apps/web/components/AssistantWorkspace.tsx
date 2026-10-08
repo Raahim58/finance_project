@@ -47,7 +47,7 @@ type LiveRun = ChatRun & {
   warning?: string;
 };
 type WorkspaceAction = {
-  open: (question?: string) => void; close: () => void; opened: boolean;
+  open: (question?: string) => void; setCompanyPortfolioScope: (id: string | null) => void; close: () => void; opened: boolean;
   chats: Conversation[]; selected: string | null; selectChat: (id: string) => void;
   newChat: () => Promise<string | null>; moreChats: () => void; hasMoreChats: boolean;
 };
@@ -95,6 +95,10 @@ export function AssistantWorkspaceProvider({
 }) {
   const pathname = usePathname();
   const [scopeRevision, setScopeRevision] = useState(0);
+  const [companyPortfolioScope, setCompanyPortfolioScopeState] = useState<{path:string;id:string|null}|null>(null);
+  const setCompanyPortfolioScope = useCallback((id:string|null) => {
+    setCompanyPortfolioScopeState(old => old?.path===pathname&&old.id===id?old:{path:pathname,id});
+  },[pathname]);
   useEffect(() => {
     const changed = () => setScopeRevision(value => value + 1);
     window.addEventListener("psx-portfolio-change", changed);
@@ -346,9 +350,11 @@ export function AssistantWorkspaceProvider({
       try {
         const portfolios = await getPortfolios();
         const portfolioId = pathname.match(/^\/portfolios\/([^/]+)/)?.[1];
-        const portfolio = portfolioId
-          ? portfolios.find((p) => p.id === portfolioId)
-          : portfolios.find((p) => p.is_default && !p.archived_at);
+        const explicitCompanyScope = pathname.startsWith("/companies/") && companyPortfolioScope?.path===pathname;
+        const requestedPortfolioId = portfolioId ?? (explicitCompanyScope ? companyPortfolioScope?.id : undefined);
+        const portfolio = requestedPortfolioId
+          ? portfolios.find((p) => p.id === requestedPortfolioId && !p.archived_at)
+          : explicitCompanyScope ? undefined : portfolios.find((p) => p.is_default && !p.archived_at);
         const symbol = pathname.match(/^\/companies\/([^/]+)/)?.[1];
         const company = symbol
           ? (await searchInstruments(decodeURIComponent(symbol))).find(
@@ -366,7 +372,7 @@ export function AssistantWorkspaceProvider({
             symbol: company?.symbol,
             company_name: company?.name,
           });
-          setContextReady(!portfolioId || !!portfolio);
+          setContextReady(!requestedPortfolioId || !!portfolio);
           if (symbol && !company) setContextReady(false);
         }
       } catch {
@@ -376,7 +382,7 @@ export function AssistantWorkspaceProvider({
     return () => {
       valid = false;
     };
-  }, [pathname, account, opened, scopeRevision]);
+  }, [pathname, account, opened, scopeRevision, companyPortfolioScope]);
   useEffect(() => {
     if (selected)
       void loadHistory(selected)
@@ -497,8 +503,8 @@ export function AssistantWorkspaceProvider({
     live = Object.values(runs).filter((r) => r.conversationId === selected),
     running = live.find((r) => active(r.status)),
     draft = drafts[selected ?? "new"] ?? "";
-  const marketWorkspace = pathname === "/market" || pathname === "/markets";
-  const action: WorkspaceAction = { open, close: () => setOpened(false), opened, chats, selected,
+  const marketWorkspace = pathname === "/market" || pathname === "/markets" || pathname.startsWith("/companies/");
+  const action: WorkspaceAction = { open, setCompanyPortfolioScope, close: () => setOpened(false), opened, chats, selected,
     selectChat: id => { setSelected(id); setOpened(true); setShowChats(false); nearBottom.current = true; },
     newChat, moreChats: () => { if (chatCursor) void refreshChats(chatCursor); }, hasMoreChats: !!chatCursor };
   return (

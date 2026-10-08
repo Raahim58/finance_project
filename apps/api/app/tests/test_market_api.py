@@ -172,5 +172,18 @@ def test_canonical_share_metadata_survives_company_api_serialization():
     assert result.volume==837001 and result.market_cap==Decimal(601470400000)
 
 
+def test_company_display_preserves_a_prior_capitalization_snapshot_date(client, monkeypatch):
+    _seed_market_data()
+    reported={"market_cap":"100000","ordinary_shares":"1000","free_float_shares":"300",
+        "free_float_market_cap":"30000","trade_date":"2026-06-29",
+        "source_url":"https://dps.psx.com.pk/download/indhist/2026-06-29.xls"}
+    monkeypatch.setattr("app.services.dps_capitalization.capitalization", lambda *_args: reported)
+    result=client.get("/market/company/MEBL").json()["latest_price"]
+    assert result["trade_date"]=="2026-06-30"
+    assert result["capitalization_date"]=="2026-06-29"
+    assert Decimal(result["market_cap"])==Decimal(100000)
+    assert Decimal(result["shares_outstanding"])==Decimal(1000)
+
+
 def test_index_history_returns_404_without_stored_closes(client):
     assert client.get("/market/index/KSE-100/history").status_code == 404

@@ -39,6 +39,9 @@ def report_coverage(db, symbol):
         {
             "document_id": r.id,
             "title": r.title,
+            "source_url": r.source_url,
+            "source_name": r.source_name,
+            "document_type": r.document_type,
             "published_date": r.published_date,
             "artifact_id": r.artifact_id,
             "content_hash": r.content_hash,

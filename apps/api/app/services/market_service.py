@@ -341,6 +341,16 @@ def get_company_detail(db: Session, symbol: str) -> CompanyDetailResponse:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
 
     latest_observation = latest_price(db, company.symbol)
+    if latest_observation and not latest_observation.capitalization:
+        # Share/capitalization workbooks are daily observations. Display the
+        # latest stored snapshot with its own date, without repricing it using
+        # the current intraday quote or changing analytical price inputs.
+        from dataclasses import replace
+        from app.services.dps_capitalization import capitalization
+        reported = capitalization(db, latest_observation.instrument_id, latest_observation.trade_date)
+        if reported:
+            latest_observation = replace(latest_observation,
+                market_cap=Decimal(reported['market_cap']), capitalization=reported)
     return CompanyDetailResponse(
         company=serialize_company(company),
         latest_price=serialize_price(latest_observation) if latest_observation else None,

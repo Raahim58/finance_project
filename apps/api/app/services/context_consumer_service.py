@@ -285,6 +285,10 @@ def company_research_response(consumed: ConsumedContext) -> dict[str, object]:
     fundamentals = [
         {
             "taxonomy_key": row.get("metric"),
+            "id": row.get("id"),
+            "period_start": row.get("period_start"),
+            "accounting_basis": row.get("accounting_basis"),
+            "source_label": row.get("source"),
             "period_type": row.get("period_type"),
             "period_end": row.get("period_end"),
             "filing_date": row.get("filing_date"),
@@ -292,7 +296,7 @@ def company_research_response(consumed: ConsumedContext) -> dict[str, object]:
             "unit": row.get("unit"),
             "currency": row.get("currency"),
             "document_id": row.get("document_id"),
-            "page_number": None,
+            "page_number": row.get("page_number"),
             "classification": row.get("classification") or "filing_extracted",
             "source_url": row.get("source_url"),
             "provenance": {
@@ -422,10 +426,15 @@ def company_research_response(consumed: ConsumedContext) -> dict[str, object]:
 
 
 def read_company_research(db, user, instrument_id, *, portfolio_id=None,
-                          research_purpose=None, question=None, active=False):
+                          research_purpose=None, question=None, active=False, display_only=False):
     """Compatibility page projection; no receipts, jobs, ingestion or writes."""
     instrument = db.get(Instrument, instrument_id)
     if instrument is None: raise HTTPException(404, "Instrument not found")
     request = company_context_request(instrument.symbol, portfolio_id=portfolio_id,
         research_purpose=research_purpose, question=question)
+    if display_only:
+        # Page rendering needs stored statement facts and optional holding exposure.
+        # Risk, macro, sector, events and RAG remain on their explicit analysis paths.
+        request.sections = (ContextSectionName.COMPANY_FACTS,) + (
+            (ContextSectionName.PORTFOLIO, ContextSectionName.IPS) if portfolio_id else ())
     return ConsumedContext(build_intelligence_context(db, user, request), None, None)

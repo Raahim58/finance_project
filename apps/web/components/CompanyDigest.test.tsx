@@ -36,3 +36,11 @@ it("stops polling after unmount",async()=>{
  await act(async()=>vi.advanceTimersByTime(6000));
  expect(getCompanyDigest).toHaveBeenCalledTimes(1);
 });
+it("shows a compact cited brief while preserving prepared evidence and missing states",async()=>{
+ vi.mocked(getCompanyDigest).mockResolvedValue({...ready,prepared_intelligence:[{section:"financials",version:1,as_of:"2026-10-05",content:{evidence:[{id:"f1",metric:"cash",value:"10",unit:"PKR",period_end:"2026-06-30"}]},sources:[],gaps:["Current liabilities missing"]}]});
+ render(<CompanyDigestPanel symbol="FFC" compact/>);
+ await screen.findByText("Expansion is conditional.");
+ expect(screen.getByRole("link",{name:"Audited report"})).toHaveAttribute("href","https://example.test/report");
+ expect(screen.getByText("View prepared source evidence")).toBeInTheDocument();
+ expect(screen.getByText("Current liabilities missing")).toBeInTheDocument();
+});

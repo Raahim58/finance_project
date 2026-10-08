@@ -121,6 +121,7 @@ def overview(
     research_purpose: ResearchPurpose | None = None,
     question: str | None = Query(default=None, min_length=1, max_length=2000),
     active: bool = True,
+    display_only: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -132,6 +133,7 @@ def overview(
         research_purpose=research_purpose,
         question=question,
         active=active,
+        display_only=display_only,
     )
     return company_research_response(consumed)
 
