@@ -5,6 +5,7 @@ import { AssistantWorkspaceProvider, useAssistantWorkspace } from "@/components/
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Icon, IconName } from "@/components/Icon";
+import { getPortfolios } from "@/lib/api";
 import { PortfolioContextPicker } from "@/components/PortfolioContextPicker";
 
 type NavEntry = [string, string, IconName];
@@ -30,11 +31,11 @@ function isActive(pathname: string, href: string) {
     || (href === "/markets" && (pathname.startsWith("/market") || pathname.startsWith("/companies")));
 }
 
-function NavItem({ item, pathname }: { item: NavEntry; pathname: string }) {
+function NavItem({ item, pathname, selectedPortfolioId }: { item: NavEntry; pathname: string; selectedPortfolioId?:string }) {
   const [label, href, icon] = item;
   const active = isActive(pathname, href);
   return (
-    <Link href={href as never} aria-current={active ? "page" : undefined} title={label} className="nav-item">
+    <Link href={(label==="Portfolios"&&selectedPortfolioId?`/portfolios/${selectedPortfolioId}/overview`:href) as never} aria-current={active ? "page" : undefined} title={label} className="nav-item">
       <span className="rail-icon"><Icon name={icon} size={20} /></span>
       <span className="sidebar-label">{label}</span>
     </Link>
@@ -106,27 +107,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const publicRoute = pathname === "/" || pathname === "/login" || pathname === "/signup" || pathname === "/onboarding";
   const [menuOpen, setMenuOpen] = useState(false);
+  const [selectedPortfolioId,setSelectedPortfolioId]=useState<string|undefined>();
+  useEffect(()=>{let active=true;const refresh=()=>void getPortfolios().then(rows=>{if(active)setSelectedPortfolioId(rows.find(row=>row.is_default&&!row.archived_at)?.id)}).catch(()=>{if(active)setSelectedPortfolioId(undefined)});refresh();window.addEventListener("psx-portfolio-change",refresh);window.addEventListener("psx-auth-change",refresh);return()=>{active=false;window.removeEventListener("psx-portfolio-change",refresh);window.removeEventListener("psx-auth-change",refresh)}},[]);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => { setMenuOpen(false); }, [pathname]);
   const closeMenu = () => { setMenuOpen(false); menuTriggerRef.current?.focus(); };
   if (publicRoute) return <>{children}</>;
 
   return (
-    <AssistantWorkspaceProvider><div className="app-shell workstation-shell" data-workspace={pathname === "/market" || pathname === "/markets" ? "markets" : "default"}>
+    <AssistantWorkspaceProvider><div className="app-shell workstation-shell" data-workspace={pathname === "/market" || pathname === "/markets" ? "markets" : pathname.startsWith("/portfolios") ? "portfolio" : "default"}>
       <aside className="app-sidebar" aria-label="Primary navigation">
         <Link href="/dashboard" className="workstation-brand" aria-label="RAAHIM home">R</Link>
         <nav className="rail-navigation" aria-label="Workspace navigation">
           {groups.filter(group => group.label !== "System").map(group => (
             <div key={group.label}>
-              {group.items.filter(([label]) => !["Recommendations", "Activity"].includes(label)).map(item => <NavItem key={item[1]} item={item} pathname={pathname} />)}
+              {group.items.filter(([label]) => !["Recommendations", "Activity"].includes(label)).map(item => <NavItem key={item[1]} item={item} pathname={pathname} selectedPortfolioId={selectedPortfolioId} />)}
             </div>
           ))}
           <ChatNavigation />
           <details className="rail-more"><summary className="nav-item"><span className="rail-icon"><Icon name="more" size={20} /></span><span className="sidebar-label">More</span></summary><nav aria-label="More workspace pages" className="rail-more-menu">
-            {groups.flatMap(group => group.items).filter(([label]) => ["Recommendations", "Activity"].includes(label)).map(item => <NavItem key={item[1]} item={item} pathname={pathname} />)}
+            {groups.flatMap(group => group.items).filter(([label]) => ["Recommendations", "Activity"].includes(label)).map(item => <NavItem key={item[1]} item={item} pathname={pathname} selectedPortfolioId={selectedPortfolioId} />)}
           </nav></details>
         </nav>
-        <div className="rail-bottom"><NavItem item={["Settings", "/settings", "settings"]} pathname={pathname} /></div>
+
       </aside>
       <div className="app-main">
         <header className="app-topbar">
@@ -138,8 +141,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div className="flex items-center gap-1">
             <PortfolioContextPicker />
-            <Link className="icon-btn" title="Search evidence" aria-label="Search evidence" href={"/research" as never}><Icon name="search" /></Link>
-            <Link className="icon-btn" title="Open monitoring" aria-label="Open monitoring" href={"/monitoring" as never}><Icon name="bell" /></Link>
             <Link className="icon-btn" aria-label="Account settings" href={"/settings" as never}><Icon name="settings" /></Link>
           </div>
         </header>

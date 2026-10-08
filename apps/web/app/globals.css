@@ -478,3 +478,17 @@ body:has(select[aria-label="Activity type"]) .data-table td:nth-child(n+4):not(:
 .assistant-evidence-context a { font-size:11px; color:#3862a2; }.assistant-evidence-context article { padding:9px 0; }.assistant-context-link { display:block; padding:14px 0; }
 @media(max-width:1150px) { .assistant-full-page { grid-template-columns:210px minmax(0,1fr); }.assistant-evidence-context { display:none; }.assistant-full-page .assistant-messages { padding:23px; } }
 @media(max-width:720px) { .assistant-full-page { left:0; grid-template-columns:1fr; }.assistant-conversation-list { max-height:145px; border-right:0; border-bottom:1px solid var(--line); padding:12px 16px; }.assistant-conversation-list > div { margin-bottom:8px; }.assistant-conversation-list nav { flex-direction:row; overflow:auto; }.assistant-conversation-list nav button { min-width:170px; }.assistant-conversation-column { min-height:0; }.assistant-full-page .assistant-composer { margin:0 12px 12px; }.assistant-scope-bar { padding:10px 14px; gap:8px; }.assistant-scope-bar select { max-width:170px; }.assistant-full-page .assistant-header { padding:8px 14px; } }
+/* Keep the workspace controls once; mobile retains a reachable launcher. */
+@media(min-width:1201px){.assistant-toolbar-launcher{display:none}}
+@media(min-width:721px){.workstation-shell[data-workspace="portfolio"] .app-topbar{display:none}.workstation-shell[data-workspace="portfolio"] ~ .assistant-market-overlay{top:0}}
+.market-ask-button{min-height:32px;padding:5px 7px;font-size:14px;font-weight:500;cursor:pointer}
+.market-history-toggle{min-height:32px;min-width:32px;margin-left:auto}
+.workstation-shell .app-sidebar .nav-item{font-size:12px}
+.rail-icon{width:31px;height:31px}
+/* Global scope is a small fixed control group, not a full-width header. */
+.workstation-shell .app-topbar,.workstation-shell[data-workspace="portfolio"] .app-topbar{display:flex;position:fixed;top:0;right:0;left:auto;width:340px;height:46px;padding:0 16px;background:#fff;border:0;z-index:90;justify-content:flex-end}
+.workstation-shell .app-topbar>div:first-child{display:none}
+.workstation-shell .app-topbar .portfolio-context{min-width:0;max-width:275px}
+.workstation-shell .app-topbar .portfolio-context select{max-width:270px;font-size:13px;text-overflow:ellipsis}
+.assistant-market-overlay{top:46px!important}.assistant-full-page{top:0}.assistant-evidence-context{padding-top:72px}
+@media(max-width:720px){.workstation-shell .app-topbar{width:calc(100% - 44px);max-width:340px}.workstation-shell .app-topbar>div:first-child{display:contents}.workstation-shell .app-topbar>div:first-child>span{display:none}.workstation-shell .mobile-menu-btn{position:fixed;top:7px;left:8px;z-index:95}.workstation-shell .app-main>main{padding-top:46px}.assistant-full-page{top:46px}.assistant-market-overlay{top:46px!important}}

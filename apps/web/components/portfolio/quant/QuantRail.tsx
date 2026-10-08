@@ -31,8 +31,8 @@ export function QuantRail(props: Props) {
     ? [constraints.long_only ? "Long only" : null, maxWeight != null ? `max ${pctFraction(maxWeight, 0)} per instrument` : null].filter(Boolean).join(", ") || "Unconstrained"
     : "—";
   const Row = ({ label, value, note }: { label: string; value: string; note?: string }) => <div className={s.row}><dt>{label}</dt><dd>{value}{note ? <small>{note}</small> : null}</dd></div>;
-  return <aside className={s.rail} aria-label="Quant assumptions and comparison">
-    <div className={s.askControls}><AssistantControls /></div>
+  return <aside data-portfolio-panel="context" className={s.rail} aria-label="Quant assumptions and comparison">
+
     <section className={s.railSection}>
       <h2 className={s.railTitle}>Model assumptions</h2>
       <dl className={s.rows}>

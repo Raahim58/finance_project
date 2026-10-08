@@ -31,6 +31,7 @@ export function MarketsPage() {
   const data = useMarketsData();
   const [view, setView] = useState<MarketView>("index");
   const [query, setQuery] = useState("");
+  const [searchOpen,setSearchOpen]=useState(false);
   const snapshot = data.market.data?.snapshot;
   const fresh = data.freshness.data;
   const session = data.market.data;
@@ -42,9 +43,10 @@ export function MarketsPage() {
   return <div className={styles.page}>
     <MarketCatalog view={view} select={setView} market={session ?? null} freshness={fresh} companies={data.companies.data ?? []} chart={<IndexPanel data={data} />} />
     <div className={styles.main}>
-      <div className={styles.viewHeader}><select className={styles.viewSelect} aria-label="Market view" value={view} onChange={event => setView(event.target.value as MarketView)}><option value="index">Market digest</option><option value="stocks">All stocks</option><option value="sectors">Sectors</option><option value="events">Events</option></select>
-        <SearchBox companies={data.companies.data ?? []} query={query} setQuery={setQuery} />
-        <button className={styles.refresh} aria-label="Refresh market view" onClick={() => { clearApiCache(); data.reload(); }}><Icon name="clock" size={14} /></button></div>
+      <div className={styles.viewHeader}><span className={styles.viewName}>{view==="index"?"Market digest":view==="stocks"?"All stocks":view==="sectors"?"Sectors":"Events"}</span>
+        <button className={styles.searchToggle} aria-label="Search stocks and sectors" aria-expanded={searchOpen} onClick={()=>setSearchOpen(!searchOpen)}><Icon name="search" size={18}/></button>
+        {searchOpen?<SearchBox companies={data.companies.data??[]} query={query} setQuery={setQuery}/>:null}
+        <button className={styles.refresh} aria-label="Refresh market view" onClick={()=>{clearApiCache();data.reload();}}>Refresh</button></div>
       <p className={styles.dateline}>
         <span>{(session?.trade_date ?? fresh?.latest_trade_date ?? latest?.date) ? new Date(`${session?.trade_date ?? fresh?.latest_trade_date ?? latest?.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : "Date unavailable"}</span>
         <span>{fresh ? `Market ${fresh.exchange_session_status === "unknown" ? "session unknown" : fresh.exchange_session_status}` : "Session unavailable"}</span>
@@ -102,7 +104,7 @@ const Stat = ({ label, value }: { label: string; value: string }) => <div><dt>{l
 
 function SearchBox({ companies, query, setQuery }: { companies: Company[]; query: string; setQuery: (value: string) => void }) {
   const needle = query.trim().toLowerCase();
-  const matches = needle ? companies.filter(company => company.symbol.toLowerCase().includes(needle) || company.name.toLowerCase().includes(needle)).slice(0, 8) : [];
+  const matches = needle ? companies.filter(company => company.symbol.toLowerCase().includes(needle) || company.name.toLowerCase().includes(needle) || company.sector.toLowerCase().includes(needle)).slice(0, 8) : [];
   return <div className={styles.search}><Icon name="search" size={15} /><input aria-label="Search stocks" placeholder="Search stocks, sectors…" value={query} onChange={event => setQuery(event.target.value)} />
     {needle ? <div className={styles.results}>{matches.length ? matches.map(company => <Link key={company.symbol} href={`/companies/${company.symbol}` as never}><CompanyLogo symbol={company.symbol} website={company.official_website} size={22} /><b>{company.symbol}</b><span>{company.name}</span></Link>) : <p>No active company matches “{query}”.</p>}</div> : null}</div>;
 }

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AssistantControls } from "@/components/AssistantControls";
 import { Icon } from "@/components/Icon";
 import { Portfolio, clearApiCache, getIndexHistory, getMarketFreshness, getMarketOverview, getPortfolios, selectDefaultPortfolio, type MarketFreshness, type MarketOverview } from "@/lib/api";
 import { formatPercent, numeric } from "@/lib/overview";
@@ -48,7 +49,7 @@ export function PortfolioWorkspace({portfolioId,active,children}:{portfolioId:st
   const latest=indexLatest(pulse.history,pulse.overview?.snapshot);
   const date=latest?.date??pulse.freshness?.latest_trade_date;
   const session=pulse.freshness?.exchange_session_status;
-  return <div className={`${styles.page}${compact?` ${styles.compact}`:""}`}>
+  return <div data-portfolio-tab={active} className={`${styles.page}${compact?` ${styles.compact}`:""}`}>
     {!compact?<p className={styles.dateline}>
       <span>{date?new Date(`${date}T00:00:00`).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"}):"Date unavailable"}</span>
       <span>{session?`Market ${session==="unknown"?"session unknown":session}`:"Session unavailable"}</span>
@@ -69,6 +70,7 @@ export function PortfolioWorkspace({portfolioId,active,children}:{portfolioId:st
     <nav aria-label="Portfolio sections" className={styles.tabs}>
       {tabs.map(([id,label,slug])=><Link key={id} href={`/portfolios/${portfolioId}/${slug??id}` as never} aria-current={active===id?"page":undefined}>{label}</Link>)}
     </nav>
+    {compact?<div className={styles.askToolbar}><AssistantControls/></div>:null}
     {children}
   </div>;
 }

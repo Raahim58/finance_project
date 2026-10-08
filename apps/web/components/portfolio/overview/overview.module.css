@@ -74,3 +74,14 @@
 .bar { position: absolute; height: 10px; top: 2px; }
 @media(max-width: 1100px) { .layout { grid-template-columns: 220px minmax(0, 1fr); }.rail { grid-column: 2; margin-top: 0; padding: 24px; }.facts { grid-row: span 2; } }
 @media(max-width: 720px) { .layout { grid-template-columns: 1fr; }.facts { grid-row: auto; border-right: 0; border-bottom: 1px solid #eceef1; }.facts .weightRow, .facts h3 { display: none; }.capital { grid-template-columns: 1fr 1fr; padding: 14px 0; margin-top: 14px; }.main { padding: 20px 14px; }.rail { grid-column: 1; padding: 20px 14px; }.heading { font-size: 26px; }.notice { padding: 9px; }.contributionRow { grid-template-columns: 42px minmax(60px, 1fr) 95px; gap: 7px; } }
+.heading { font-size:34px!important; font-weight:600; letter-spacing:-.04em; margin-bottom:20px; }
+.facts,.main,.rail { font-family:var(--font-ui); }
+.main { padding:25px 26px; }.facts {padding:25px 20px;}.rail {padding:0 24px 24px;}
+.ask { height:56px; margin:0 -24px 24px; padding:0 24px; align-items:center; border-bottom:1px solid var(--line); }
+@media(min-width:1101px){.ask{margin-top:-56px}}
+.facts>p:first-child,.capital dt {font-size:14px}.facts .level {font-size:27px;font-weight:600}.weightRow{font-size:14px;gap:10px;padding:10px 0}.capital dd{font-size:15px}.capital small{font-size:12px}
+.notice{font-size:13px;font-weight:400;padding:10px 12px}.notice b{font-weight:500}.notice.bad{background:#fff8f5;border-color:#f0ded8;color:#976342}
+.ranges button{font-size:13px}.ranges button[aria-pressed=true]{background:#f0f1f3;color:var(--ink)}
+.table{font-size:13px;min-width:650px}.table th{font-size:12px}.table td{height:42px}.table .name{max-width:135px}.tableHead h3,.rail h3{font-size:20px;font-weight:600}
+.lead{font-size:23px;font-weight:600;line-height:1.35}.leadText{font-size:14px;line-height:1.65}.mover{grid-template-columns:24px 45px minmax(0,1fr) auto;gap:8px;font-size:12px}.mover .name{display:none}.mover>span:last-child{font-size:11px}
+@media(max-width:720px){.heading{font-size:29px!important}.ask{margin-top:0}.rail{padding:20px 18px}.mover{grid-template-columns:24px 45px 1fr auto}.table{min-width:620px}}

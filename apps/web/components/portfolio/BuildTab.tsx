@@ -208,7 +208,7 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
   const missingTarget = objective === "target_volatility_maximum_return" ? !targetVolatility || Number(targetVolatility) <= 0 : objective === "target_beta" ? !targetBeta || !Number.isFinite(Number(targetBeta)) : false;
   const proposalStatus = !comparison ? "Not evaluated" : fitProposed?.notEvaluated || comparison.proposed_compliance.status === "BREACH" ? `${(fitProposed?.evaluated ?? 0) - (fitProposed?.passed ?? 0)} breach · ${fitProposed?.notEvaluated ?? 0} check unavailable` : comparison.proposed_compliance.status === "PASS" ? "Evaluated checks passed" : "Not evaluated";
   return <div className={styles.root}>
-    <main className={styles.main}>
+    <main data-portfolio-panel="content" className={styles.main}>
       <h1 className={styles.title}>{savedAllocation && !dirty ? `Saved proposal · ${formatDate(savedAllocation.created_at)}` : "Portfolio construction"}</h1>
       <div className={styles.toolbar}>
         <label className={styles.control}>Objective<select id="build-objective" className={styles.field} value={objective} onChange={event => setObjective(event.target.value)}>{objectiveOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
@@ -241,7 +241,7 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
       {comparison ? <details id="build-checks" className={styles.details}><summary>View failed and unavailable checks</summary>{comparison.proposed_compliance.checks.map((check,index) => <div key={index}>{String(check.name ?? check.rule ?? check.constraint ?? "IPS check")} · {humanize(String(check.status ?? "not_evaluated"))}{typeof check.reason === "string" ? ` · ${check.reason}` : ""}</div>)}<ComparisonTable metrics={comparison.metrics}/></details> : null}
       {diagnostics ? <details className={styles.details}><summary>Optimizer diagnostics</summary><pre>{JSON.stringify(diagnostics,null,2)}</pre></details> : null}
     </main>
-    <aside className={styles.rail}>
+    <aside data-portfolio-panel="context" className={styles.rail}>
       <h2 className={styles.h2}>Proposal review</h2><p className={`${styles.notice} ${comparison?.proposed_compliance.status === "BREACH" ? styles.noticeBad : ""}`}>{proposalStatus}</p>
       {insights ? <div className={styles.insight}>{insights.lines.map(line => <p key={line}>{line}</p>)}</div> : <p className={styles.sub}>Compare the allocation to evaluate modeled changes and IPS checks.</p>}
       <section className={styles.insight}><h3>Stored constraints</h3>{confirmed ? <dl className={styles.constraints}>{mandate.map(([label,value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl> : <p className={styles.sub}>—</p>}<Link className={styles.link} href={`/portfolios/${portfolioId}/ips` as never}>Review IPS →</Link>{comparison ? <a className={styles.checkLink} href="#build-checks" onClick={() => {const details = document.getElementById("build-checks") as HTMLDetailsElement | null; if(details) details.open=true;}}>View failed checks</a> : null}</section>

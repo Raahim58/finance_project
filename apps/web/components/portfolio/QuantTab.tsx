@@ -105,7 +105,7 @@ export function QuantTab({ portfolioId, data, setMessage, loading }: { portfolio
 
   return <div className={s.layout}>
     <QuantPortfolioRail summary={data.summary} portfolioId={portfolioId} loading={loading} />
-    <div className={s.main}>
+    <div data-portfolio-panel="content" className={s.main}>
       <div className={s.subtabs} role="tablist" aria-label="Quant analyses">
         {quantTabs.map(item => <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)}>{item.label}</button>)}
       </div>

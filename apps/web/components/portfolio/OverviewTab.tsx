@@ -53,7 +53,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
       <h3>Holdings by weight</h3>{rows.map(row => <Link key={row.symbol} href={`/companies/${row.symbol}` as never} className={styles.weightRow}><CompanyLogo symbol={row.symbol} website={extras.websites[row.symbol]} /><span>{row.symbol}</span><span>{row.weight == null ? "—" : `${row.weight.toFixed(2)}%`}</span></Link>)}
       <p className={styles.source}>{summary.portfolio.source_mode} · {summary.data_source ?? "Source unavailable"}</p>
     </aside>
-    <div className={styles.main}>
+    <div data-portfolio-panel="content" className={styles.main}>
       <h2 className={styles.heading}>Portfolio overview</h2>
       <div className={`${styles.notice} ${status === "BREACH" ? styles.bad : status === "PASS" && !notices.length ? styles.ok : ""}`} role="status">
         <span><b>Mandate:</b> {status === "PASS" ? "Within IPS limits" : status === "BREACH" ? `IPS breach${compliance?.violations.length ? ` (${compliance.violations.length})` : ""}` : status === "NOT_EVALUATED" ? "Not evaluated (IPS data missing)" : "Compliance unavailable"}</span>
@@ -85,16 +85,16 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
       </section>
     </div>
 
-    <aside className={styles.rail} aria-label="Portfolio brief">
+    <aside data-portfolio-panel="context" className={styles.rail} aria-label="Portfolio brief">
       <section>
-        <div className={styles.ask}><AssistantControls /></div><h3>Portfolio brief</h3>
+        <h3>Portfolio brief</h3>
         {brief ? <><p className={styles.lead}>{brief.title}</p><p className={styles.leadText}>{brief.text}</p></> : <p className={styles.empty}>Day change is unavailable, so no brief can be generated.</p>}
-        <p className={styles.time}>{benchmark?.percent != null ? `${benchmark.name} as of ${formatDate(benchmark.date)}` : extras.index.failed ? "Benchmark comparison unavailable" : "Generated from stored valuations"}</p>
+        <p className={styles.time}>{benchmark?.percent != null ? `${benchmark.name} as of ${formatDate(benchmark.date)}` : extras.index.failed ? "Benchmark comparison unavailable" : "As of {formatDate(summary.data_freshness_date)}"}</p>
       </section>
       <section><h3>Top contributors</h3><Movers rows={contributors} websites={extras.websites} empty="No holdings with a positive stored day change." /></section>
       <section><h3>Top detractors</h3><Movers rows={detractors} websites={extras.websites} empty="No holdings with a negative stored day change." /></section>
       <section>
-        <h3>Key risks</h3>
+        <h3>Monitoring alerts</h3>
         {extras.alerts.failed ? <p className={styles.empty}>Alerts could not be loaded.</p> : extras.alerts.value == null ? <p className={styles.empty}>Loading…</p> : extras.alerts.value.length ? extras.alerts.value.slice(0, 3).map((alert, index) => <article className={styles.item} key={String(alert.id ?? index)}>
           <h4>{humanize(String(alert.alert_type ?? "alert"))} <span className={styles.muted}>· {String(alert.severity ?? "")}</span></h4><p>{String(alert.message ?? "")}</p>{alert.created_at ? <small>{timeAgo(String(alert.created_at))}</small> : null}
         </article>) : <p className={styles.empty}>No active monitoring alerts for this portfolio.</p>}

@@ -32,7 +32,7 @@ export function MarketRail({ market, events, loading }: { market: MarketOverview
     {leader ? <section className={styles.railSection}><h3>Sector in focus</h3><p>{leader.sector}</p><strong className={Number(leader.average_change_percent) < 0 ? styles.negative : styles.positive}>{formatPercent(leader.average_change_percent)} <small>average quoted move</small></strong><p className={styles.source}>A simple average of observed stocks in the sector.</p></section> : null}
     <section className={styles.railSection}><div className={styles.railHead}><h3>Research evidence</h3><Link href="/research">View all <span aria-hidden="true">↗</span></Link></div>
       {evidence.map(event => <article className={styles.evidenceItem} key={event.event_key}>
-        <span>{humanize(event.event_type)} · {formatDate(event.occurred_at)}</span><h4>{event.title}</h4>
+        <span>{humanize(event.event_type)} · {formatDate(event.occurred_at)}</span><h4>{event.evidence[0]?.title || event.title}</h4>{event.evidence[0]?.title && event.evidence[0].title!==event.title ? <blockquote className={styles.excerpt}>{event.title}</blockquote>:null}
         <div>{event.evidence[0]?.source_url ? <a href={event.evidence[0].source_url} target="_blank" rel="noreferrer">{event.evidence[0].source_name || event.evidence[0].title} <span aria-hidden="true">↗</span></a> : <span>Source link unavailable</span>}
           <button onClick={() => ask(`Explain this event using cited evidence: ${event.title}`)} aria-label={`Ask about ${event.title}`}><Icon name="assistant" size={14} /> Ask</button></div>
       </article>)}{!evidence.length ? <p className={styles.source}>{loading ? "Loading evidence…" : "No selected event evidence is available."}</p> : null}

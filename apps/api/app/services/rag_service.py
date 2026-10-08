@@ -480,13 +480,15 @@ def list_documents(
     symbol: str | None = None,
     document_type: str | None = None,
     limit: int = 50,
+    order: str = "added",
 ) -> list[DocumentResponse]:
     query = select(Document).where(or_(Document.visibility == "public", Document.owner_user_id == user.id))
     if symbol:
         query = query.where(func.upper(Document.symbol) == symbol.upper())
     if document_type:
         query = query.where(Document.document_type == canonical_document_type(document_type))
-    rows = db.scalars(query.order_by(Document.created_at.desc()).limit(limit)).all()
+    ordering = [Document.published_date.desc().nullslast(), Document.created_at.desc(), Document.id] if order == "published" else [Document.created_at.desc(), Document.id]
+    rows = db.scalars(query.order_by(*ordering).limit(limit)).all()
     return [serialize_document(row) for row in rows]
 
 

@@ -17,10 +17,11 @@ def documents(
     symbol: str | None = None,
     document_type: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
+    order: str = Query(default="added", pattern="^(added|published)$"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[DocumentResponse]:
-    return list_documents(db, current_user, symbol=symbol, document_type=document_type, limit=limit)
+    return list_documents(db, current_user, symbol=symbol, document_type=document_type, limit=limit, order=order)
 
 
 @router.post("/ingest-text", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)

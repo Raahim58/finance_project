@@ -16,9 +16,9 @@ export function AssistantControls() {
   }, [historyOpen]);
   if (!workspace) return null;
   return <div className="market-ask-controls" ref={box}>
-    <button className="market-ask-button" onClick={() => workspace.open()}><span aria-hidden="true">✦</span> Ask</button>
+    <button className="market-ask-button" aria-label={workspace.opened ? "Close Assistant sidebar" : "Open Assistant sidebar"} aria-expanded={workspace.opened} onClick={() => workspace.opened ? workspace.close() : workspace.open()}><span aria-hidden="true">✦</span> Ask</button>
     <button className="market-history-toggle" aria-label="Previous chats" aria-haspopup="true" aria-expanded={historyOpen} onClick={() => setHistoryOpen(!historyOpen)}><Icon name="chevron" size={14} /></button>
-    <button className="market-sidebar-toggle" aria-label={workspace.opened ? "Close Assistant sidebar" : "Open Assistant sidebar"} aria-expanded={workspace.opened} onClick={() => workspace.opened ? workspace.close() : workspace.open()}><Icon name={workspace.opened ? "close" : "sidebar"} size={18} /></button>
+
     {historyOpen ? <div className="market-chat-menu" role="region" aria-label="Previous conversations">
       <button onClick={() => { void workspace.newChat(); workspace.open(); setHistoryOpen(false); }}>＋ New chat</button>
       {workspace.chats.map(chat => <button key={chat.id} aria-current={workspace.selected === chat.id ? "true" : undefined} onClick={() => { workspace.selectChat(chat.id); setHistoryOpen(false); }}>{chat.title}<small>{chat.active_run ? "Generating" : ""}</small></button>)}

@@ -522,7 +522,7 @@ export function AssistantWorkspaceProvider({
       {children}
       {!fullPage?<button
         ref={trigger}
-        className={`assistant-launcher${marketWorkspace ? " assistant-market-launcher" : ""}`}
+        className={`assistant-launcher${marketWorkspace ? " assistant-market-launcher" : ""}${marketWorkspace&&!pathname.startsWith("/companies/") ? " assistant-toolbar-launcher" : ""}`}
         type="button"
         aria-label="Open Assistant"
         aria-expanded={opened}
@@ -547,7 +547,7 @@ export function AssistantWorkspaceProvider({
             {!chats.length?<p>No saved chats yet.</p>:null}{chatCursor?<button type="button" onClick={()=>void refreshChats(chatCursor)}>More chats</button>:null}
           </aside>:null}
           <div className="assistant-conversation-column">
-          {fullPage?<div className="assistant-scope-bar"><PortfolioContextPicker/><label>Company <select aria-label="Assistant company context" value={assistantCompany?.id??""} onChange={event=>setAssistantCompany(companyChoices.find(row=>row.id===event.target.value)??null)}><option value="">All companies</option>{companyChoices.map(row=><option key={row.id} value={row.id}>{row.symbol} · {row.name}</option>)}</select></label></div>:null}
+          {fullPage?<div className="assistant-scope-bar"><label>Company <select aria-label="Assistant company context" value={assistantCompany?.id??""} onChange={event=>setAssistantCompany(companyChoices.find(row=>row.id===event.target.value)??null)}><option value="">All companies</option>{companyChoices.map(row=><option key={row.id} value={row.id}>{row.symbol} · {row.name}</option>)}</select></label></div>:null}
           <header className="assistant-header">
             <div>
               <strong>Ask</strong>

@@ -20,7 +20,7 @@ export function MarketCatalog({ view, select, market, freshness, companies, char
   const watched = (market?.prices ?? market?.top_volume ?? []).slice().sort((a,b) => b.volume - a.volume).slice(0, 6);
   const percent = numeric(snapshot?.index_change_percent);
   return <aside className={styles.catalog} aria-label="Market navigation">
-    <div className={styles.catalogTabs}><button aria-current="page" onClick={() => select("index")}>Markets</button><Link href="/portfolios">Portfolios</Link><button disabled title="Watchlists are not available yet">Watchlist</button></div>
+
     {chart}
     <h2 className={styles.catalogSubheading}>Market views</h2>
     <nav className={styles.catalogViews} aria-label="Market views">{views.map(([key, label, icon]) =>
