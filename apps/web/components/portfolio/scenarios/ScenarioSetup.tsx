@@ -27,7 +27,7 @@ export function ScenarioSetup({ templates, templatesError, regime, symbols, sect
   const canRun = !running && (selection.kind !== "template" || Boolean(template)) && (selection.kind !== "replay" || Boolean(replay.start && replay.end));
 
   return <form className={styles.setup} onSubmit={submit}>
-    <h2 className={styles.h2}>Scenario setup</h2>
+    <h2 className={styles.h2}>Setup</h2>
     <p className={styles.sub}>Apply a deterministic shock to stored holdings and prices to see the estimated impact.</p>
     <div className={styles.types} role="list" aria-label="Scenario type">
       {ordered.map(row => <button type="button" role="listitem" className={styles.type} aria-current={selection.kind === "template" && selection.id === row.id} key={row.id} onClick={() => onSelect({ kind: "template", id: row.id })}>
@@ -76,7 +76,7 @@ export function ScenarioSetup({ templates, templatesError, regime, symbols, sect
         <p className={styles.hint}>Replays today&apos;s holdings over a past interval using stored prices. It is a counterfactual and is not saved to scenario history.</p>
       </> : null}
       <p className={styles.unavailable}>This engine applies one-step shocks. Duration and second-order effects (liquidity, tax, fees, feedback) are not modeled.</p>
-      <button className={styles.runButton} disabled={!canRun}>{running ? "Running…" : selection.kind === "replay" ? "Run replay" : "Run scenario"}</button>
+      <button className={styles.runButton} disabled={!canRun}>{running ? "Running…" : selection.kind === "replay" ? "Run replay" : "Run"}</button>
     </div>
   </form>;
 }

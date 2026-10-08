@@ -15,8 +15,8 @@ export function QuantPortfolioRail({ summary, portfolioId, loading }: { summary:
   const change = numeric(summary?.day_change_percent);
   const holdings = [...(summary?.holdings ?? [])].sort((a, b) => (numeric(b.market_value) ?? -Infinity) - (numeric(a.market_value) ?? -Infinity));
   return <aside className={s.portfolioRail} aria-label="Selected portfolio">
-    <p className={s.eyebrow}>Selected portfolio</p>
-    <h2>{summary?.portfolio.name ?? (loading ? "Loading portfolio…" : "Portfolio unavailable")}</h2>
+    {!summary ? <p className={s.eyebrow}>{loading ? "Loading portfolio…" : "Portfolio unavailable"}</p> : null}
+    <p className={s.eyebrow}>Portfolio value</p>
     <strong className={s.portfolioValue}>{total == null ? "—" : `${summary?.portfolio.base_currency ?? "PKR"} ${formatNumber(total, 0)}`}</strong>
     <p className={change == null ? s.eyebrow : change < 0 ? s.negative : change > 0 ? s.positive : s.eyebrow}>{formatPercent(change)} · {formatDate(summary?.data_freshness_date)}</p>
     <span className={s.eyebrow}>{summary?.valuation_complete ? "Latest stored valuation" : "Valuation incomplete"}</span>

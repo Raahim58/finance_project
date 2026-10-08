@@ -32,7 +32,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
   const invested = total != null && cash != null ? total - cash : null;
   const share = (part: number | null) => part != null && total ? `${(part / total * 100).toFixed(1)}% of value` : "";
   const benchmark = indexLatest((extras.index.value ?? []).filter(point => point.trade_date === summary.data_freshness_date), null);
-  const brief = briefHeadline(summary.portfolio.name, dayPercent, dayChange, benchmark && { name: benchmark.name, percent: benchmark.percent });
+  const brief = briefHeadline("Portfolio", dayPercent, dayChange, benchmark && { name: benchmark.name, percent: benchmark.percent });
   const { contributors, detractors } = movers(rows);
   const shown = rows.filter(row => `${row.symbol} ${row.name} ${row.sector}`.toLowerCase().includes(query.trim().toLowerCase()));
   const twrPoints = data.performance.flatMap(point => { const close = numeric(point.cumulative_twr_percent); return close == null ? [] : [{ date: point.value_date, close }]; });
@@ -54,7 +54,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
       <p className={styles.source}>{summary.portfolio.source_mode} · {summary.data_source ?? "Source unavailable"}</p>
     </aside>
     <div data-portfolio-panel="content" className={styles.main}>
-      <h2 className={styles.heading}>Portfolio overview</h2>
+      <h2 className={styles.heading}>Overview</h2>
       <div className={`${styles.notice} ${status === "BREACH" ? styles.bad : status === "PASS" && !notices.length ? styles.ok : ""}`} role="status">
         <span><b>Mandate:</b> {status === "PASS" ? "Within IPS limits" : status === "BREACH" ? `IPS breach${compliance?.violations.length ? ` (${compliance.violations.length})` : ""}` : status === "NOT_EVALUATED" ? "Not evaluated (IPS data missing)" : "Compliance unavailable"}</span>
         <span><b>Prices:</b> {summary.data_freshness_date ? `as of ${formatDate(summary.data_freshness_date)}` : "date unavailable"} · {summary.data_source ?? "source unavailable"}</span>
@@ -87,7 +87,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
 
     <aside data-portfolio-panel="context" className={styles.rail} aria-label="Portfolio brief">
       <section>
-        <h3>Portfolio brief</h3>
+        <h3>Brief</h3>
         {brief ? <><p className={styles.lead}>{brief.title}</p><p className={styles.leadText}>{brief.text}</p></> : <p className={styles.empty}>Day change is unavailable, so no brief can be generated.</p>}
         <p className={styles.time}>{benchmark?.percent != null ? `${benchmark.name} as of ${formatDate(benchmark.date)}` : extras.index.failed ? "Benchmark comparison unavailable" : `As of ${formatDate(summary.data_freshness_date)}`}</p>
       </section>
@@ -103,7 +103,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
         </article>)}
       </section>
       <section>
-        <h3>Portfolio activity</h3>
+        <h3>Activity</h3>
         {extras.transactions.failed ? <p className={styles.empty}>Transactions could not be loaded.</p> : extras.transactions.value == null ? <p className={styles.empty}>Loading…</p> : extras.transactions.value.length ? [...extras.transactions.value].sort((a, b) => b.transaction_date.localeCompare(a.transaction_date)).slice(0, 3).map(tx => {
           const line = activityLine(tx);
           return <article className={styles.item} key={tx.id}><h4>{line.title}</h4><p>{line.text}</p><small>{formatDate(tx.transaction_date)}</small></article>;

@@ -13,8 +13,8 @@ export function ScenarioHistory({ runs, extras, activeId, onSelect, onNew }: {
 }) {
   const [all, setAll] = useState(false);
   const shown = all ? runs : runs.slice(0, VISIBLE);
-  return <aside className={styles.history} aria-label="Scenario history">
-    <div className={styles.historyHead}><h2 className={styles.h2}>Scenario history</h2><button className={styles.secondary} onClick={onNew}>+ New scenario</button></div>
+  return <aside className={styles.history} aria-label="History">
+    <div className={styles.historyHead}><h2 className={styles.h2}>History</h2><button className={styles.secondary} onClick={onNew}>+ New</button></div>
     {runs.length ? <div className={styles.historyList}>{shown.map(run => {
       const extra = extras.get(run.id), when = formatRunTime(extra?.created_at), label = typeLabel(extra?.scenario_type);
       return <button className={styles.run} key={run.id} aria-current={activeId === run.id} onClick={() => onSelect(run)}>
@@ -26,7 +26,7 @@ export function ScenarioHistory({ runs, extras, activeId, onSelect, onNew }: {
           <span><b>{extra?.volatility_change != null ? formatPp(extra.volatility_change) : "—"}</b>Volatility</span>
         </span>
       </button>;
-    })}</div> : <div className={styles.empty} style={{ marginTop: 14, minHeight: 140 }}><span>No scenario runs yet for this portfolio.</span></div>}
+    })}</div> : <div className={styles.empty} style={{ marginTop: 14, minHeight: 140 }}><span>No runs yet.</span></div>}
     {runs.length > VISIBLE ? <button className={styles.viewAll} onClick={() => setAll(value => !value)}>{all ? "Show fewer" : `View all scenarios (${runs.length}) →`}</button> : null}
   </aside>;
 }

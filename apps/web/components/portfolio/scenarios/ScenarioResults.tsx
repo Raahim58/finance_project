@@ -24,10 +24,10 @@ export function RunResult({ result, extra, extrasNote, templates, names, website
   const chips = shockChips(extra?.shocks);
   const unmapped = holdings.filter(row => row.unmapped).map(row => row.symbol);
   const vol = extra?.volatility_change;
-  return <section className={styles.results} aria-label="Scenario results">
+  return <section className={styles.results} aria-label="Results">
     <div className={styles.resultHead}>
-      <div><h2 className={styles.h2}>Scenario results</h2><div className={styles.runTitle}>{result.name}</div></div>
-      <div className={styles.meta}><span className={styles.badge}>Deterministic scenario</span><span>{when ? `Run on ${when}` : `Data as of ${result.data_cutoff}`}</span></div>
+      <div><h2 className={styles.h2}>Results</h2><div className={styles.runTitle}>{result.name}</div></div>
+      <div className={styles.meta}><span className={styles.badge}>Deterministic</span><span>{when ? `Run on ${when}` : `Data as of ${result.data_cutoff}`}</span></div>
     </div>
     {template?.description ? <p className={styles.desc}>{template.description}</p> : null}
     {chips.length ? <div className={styles.chips} style={{ marginTop: 10 }}>{chips.map(chip => <span className={styles.chip} key={chip}>{chip}</span>)}</div> : null}
@@ -87,7 +87,7 @@ export function ReplayResult({ replay, websites }: { replay: HistoricalReplay; w
   const points = values.map((value, index) => `${values.length > 1 ? index / (values.length - 1) * 300 : 0},${high === low ? 50 : 50 - (value - low) / (high - low) * 46}`).join(" ");
   return <section className={styles.results} aria-label="Historical replay results">
     <div className={styles.resultHead}>
-      <div><h2 className={styles.h2}>Scenario results</h2><div className={styles.runTitle}>Historical replay · {replay.start_date} to {replay.end_date}</div></div>
+      <div><h2 className={styles.h2}>Results</h2><div className={styles.runTitle}>Historical replay · {replay.start_date} to {replay.end_date}</div></div>
       <div className={styles.meta}><span className={styles.badge}>{replay.counterfactual ? "Counterfactual replay" : "Ledger replay"}</span><span>Not saved to history</span></div>
     </div>
     <p className={styles.desc}>{replay.assumption}.</p>
@@ -96,7 +96,7 @@ export function ReplayResult({ replay, websites }: { replay: HistoricalReplay; w
       <div className={styles.stat}><span className={styles.statLabel}>Maximum drawdown</span><b className={`${styles.statValue} ${styles[tone(replay.max_drawdown)]}`}>{formatSigned(replay.max_drawdown)}</b><span className={styles.statNote}>{replay.recovery_days != null ? `Recovered in ${replay.recovery_days} days` : "Not recovered within the window"}</span></div>
       <div className={styles.stat}><span className={styles.statLabel}>Value</span><b className={styles.statValue} style={{ fontSize: 22 }}>{formatPkr(replay.end_value, false)}</b><span className={styles.statNote}>From {formatPkr(replay.start_value, false)}</span></div>
     </div>
-    {values.length > 1 ? <svg className={styles.replayPath} viewBox="0 0 300 54" preserveAspectRatio="none" role="img" aria-label="Replayed portfolio value path"><polyline points={points} fill="none" stroke="#176044" strokeWidth="1.5" vectorEffect="non-scaling-stroke" /></svg> : <p className={styles.unavailable}>Too few aligned price dates to draw a value path.</p>}
+    {values.length > 1 ? <svg className={styles.replayPath} viewBox="0 0 300 54" preserveAspectRatio="none" role="img" aria-label="Replayed portfolio value path"><polyline points={points} fill="none" stroke="#00875a" strokeWidth="1.5" vectorEffect="non-scaling-stroke" /></svg> : <p className={styles.unavailable}>Too few aligned price dates to draw a value path.</p>}
     <div className={styles.section}><h3>Impact by holding</h3><div className={styles.tableWrap}><table className={styles.table}>
       <thead><tr><th>Symbol</th><th>Sector</th><th className={styles.num}>Start value</th><th className={styles.num}>End value</th><th className={styles.num}>Return</th><th className={styles.num}>P&amp;L</th></tr></thead>
       <tbody>{rows.map(row => <tr key={row.symbol}>
@@ -111,5 +111,5 @@ export function ReplayResult({ replay, websites }: { replay: HistoricalReplay; w
 }
 
 export function EmptyResult({ text }: { text: string }) {
-  return <section className={styles.results}><h2 className={styles.h2}>Scenario results</h2><div className={styles.empty} style={{ marginTop: 16 }}><strong>No scenario selected</strong><span>{text}</span></div></section>;
+  return <section className={styles.results}><h2 className={styles.h2}>Results</h2><div className={styles.empty} style={{ marginTop: 16 }}><strong>No scenario selected</strong><span>{text}</span></div></section>;
 }
