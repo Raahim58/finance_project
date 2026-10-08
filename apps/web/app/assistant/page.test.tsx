@@ -11,8 +11,8 @@ vi.mock("@/components/AssistantWorkspace", () => ({
   useAssistantWorkspace: () => ({ open }),
 }));
 afterEach(cleanup);
-it("opens and prefills the persistent drawer, then redirects without submitting", async () => {
+it("prefills the persistent workspace without redirecting or submitting", async () => {
   render(<AssistantPage />);
   await waitFor(() => expect(open).toHaveBeenCalledWith("Explain OGDC"));
-  expect(replace).toHaveBeenCalledWith("/dashboard");
+  expect(replace).not.toHaveBeenCalled();
 });

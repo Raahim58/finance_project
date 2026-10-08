@@ -1,21 +1,6 @@
 "use client";
 import { Suspense, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useAssistantWorkspace } from "@/components/AssistantWorkspace";
-function AssistantRedirect() {
-  const router = useRouter(),
-    params = useSearchParams(),
-    workspace = useAssistantWorkspace();
-  useEffect(() => {
-    workspace?.open(params.get("question") ?? undefined);
-    router.replace("/dashboard");
-  }, [router, params, workspace]);
-  return <p className="p-6 text-sm text-muted">Opening Assistant…</p>;
-}
-export default function AssistantPage() {
-  return (
-    <Suspense>
-      <AssistantRedirect />
-    </Suspense>
-  );
-}
+function Prefill(){const params=useSearchParams(),open=useAssistantWorkspace()?.open;const question=params.get("question");useEffect(()=>{if(question)open?.(question)},[open,question]);return <h1 className="sr-only">Assistant workspace</h1>}
+export default function AssistantPage(){return <Suspense><Prefill/></Suspense>}

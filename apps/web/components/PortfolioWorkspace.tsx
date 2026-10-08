@@ -13,6 +13,7 @@ const tabs:Array<[string,string,string?]>=[["overview","Overview"],["settings","
 
 export function PortfolioWorkspace({portfolioId,active,children}:{portfolioId:string;active:string;children:React.ReactNode}){
   const router=useRouter();
+  const compact=["overview","quant","research","activity","settings","build"].includes(active);
   const [portfolios,setPortfolios]=useState<Portfolio[]>([]);
   const [portfoliosLoaded,setPortfoliosLoaded]=useState(false);
   const [open,setOpen]=useState(false);
@@ -21,7 +22,7 @@ export function PortfolioWorkspace({portfolioId,active,children}:{portfolioId:st
   const [pulse,setPulse]=useState<{overview:MarketOverview|null;freshness:MarketFreshness|null;history:Awaited<ReturnType<typeof getIndexHistory>>}>({overview:null,freshness:null,history:[]});
   const menuRef=useRef<HTMLDivElement>(null);
   useEffect(()=>{let live=true;void getPortfolios().then(rows=>{if(live){setPortfolios(rows);setPortfoliosLoaded(true)}}).catch(()=>{if(live){setPortfolios([]);setPortfoliosLoaded(true)}});return()=>{live=false}},[]);
-  useEffect(()=>{let live=true;void Promise.all([getMarketOverview().catch(()=>null),getMarketFreshness().catch(()=>null),getIndexHistory("KSE-100",5).catch(()=>[])]).then(([overview,freshness,history])=>{if(live)setPulse({overview,freshness,history})});return()=>{live=false}},[]);
+  useEffect(()=>{if(compact)return;let live=true;void Promise.all([getMarketOverview().catch(()=>null),getMarketFreshness().catch(()=>null),getIndexHistory("KSE-100",5).catch(()=>[])]).then(([overview,freshness,history])=>{if(live)setPulse({overview,freshness,history})});return()=>{live=false}},[compact]);
   useEffect(()=>{
     if(!open)return;
     const close=(event:MouseEvent|KeyboardEvent)=>{if(event instanceof KeyboardEvent){if(event.key==="Escape")setOpen(false);return}if(menuRef.current&&!menuRef.current.contains(event.target as Node))setOpen(false)};
@@ -30,8 +31,8 @@ export function PortfolioWorkspace({portfolioId,active,children}:{portfolioId:st
   },[open]);
   const available=useMemo(()=>portfolios.filter(p=>!p.archived_at),[portfolios]);
   const selected=portfolios.find(p=>p.id===portfolioId);
-  const invalidScope=portfoliosLoaded&&portfolios.length>0&&!selected;
-  const fallback=available.find(p=>p.is_default)??available[0];
+  const invalidScope=portfoliosLoaded&&!selected;
+  const fallback=available.find(p=>p.is_default);
   useEffect(()=>{if(invalidScope&&fallback)router.replace(`/portfolios/${fallback.id}/${active==="stress"?"scenarios":active==="settings"?"ips":active}` as never)},[invalidScope,fallback,active,router]);
   if(invalidScope){
     return <div className={styles.page}><div className="notice notice-warn" role="alert"><Icon name="warning"/><span>{fallback?`This portfolio no longer exists or is not visible to your account. Switching to ${fallback.name}.`:"This portfolio no longer exists or is not visible to your account, and no other portfolio is available."}</span></div></div>;
@@ -40,19 +41,19 @@ export function PortfolioWorkspace({portfolioId,active,children}:{portfolioId:st
   async function choose(id:string){
     setOpen(false);if(id===portfolioId)return;
     setSwitching(true);setSwitchError("");
-    try{await selectDefaultPortfolio(id);clearApiCache();router.push(path(id) as never)}
+    try{await selectDefaultPortfolio(id);clearApiCache();window.dispatchEvent(new Event("psx-portfolio-change"));router.push(path(id) as never)}
     catch(error){setSwitchError(error instanceof Error?error.message:"Portfolio could not be selected")}
     finally{setSwitching(false)}
   }
   const latest=indexLatest(pulse.history,pulse.overview?.snapshot);
   const date=latest?.date??pulse.freshness?.latest_trade_date;
   const session=pulse.freshness?.exchange_session_status;
-  return <div className={styles.page}>
-    <p className={styles.dateline}>
+  return <div className={`${styles.page}${compact?` ${styles.compact}`:""}`}>
+    {!compact?<p className={styles.dateline}>
       <span>{date?new Date(`${date}T00:00:00`).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"}):"Date unavailable"}</span>
       <span>{session?`Market ${session==="unknown"?"session unknown":session}`:"Session unavailable"}</span>
       {latest&&numeric(latest.percent)!=null?<span>{latest.name} <b className={Number(latest.percent)>0?styles.positive:Number(latest.percent)<0?styles.negative:""}>{formatPercent(latest.percent)}</b></span>:null}
-    </p>
+    </p>:null}
     <div className={styles.titleRow} ref={menuRef}>
       <button type="button" className={styles.titleButton} aria-haspopup="listbox" aria-expanded={open} onClick={()=>setOpen(value=>!value)} disabled={!portfoliosLoaded||switching}>
         <h1>{selected?.name??(portfoliosLoaded?"Portfolio":"Loading…")}</h1><span aria-hidden="true" className={`${styles.caret} ${open?styles.caretOpen:""}`}><Icon name="chevron" size={22}/></span>
@@ -63,7 +64,7 @@ export function PortfolioWorkspace({portfolioId,active,children}:{portfolioId:st
         <Link href={"/portfolios/manage" as never} onClick={()=>setOpen(false)}>Manage portfolios…</Link>
       </div>:null}
     </div>
-    {selected?.goal_summary?<p className={styles.goal}>{selected.goal_summary}</p>:null}
+    {!compact&&selected?.goal_summary?<p className={styles.goal}>{selected.goal_summary}</p>:null}
     {switchError?<div className="notice notice-error mb-3" role="alert"><Icon name="warning"/><span>{switchError}</span></div>:null}
     <nav aria-label="Portfolio sections" className={styles.tabs}>
       {tabs.map(([id,label,slug])=><Link key={id} href={`/portfolios/${portfolioId}/${slug??id}` as never} aria-current={active===id?"page":undefined}>{label}</Link>)}

@@ -8,6 +8,10 @@ import {
   useRef,
   useState,
 } from "react";
+import Link from "next/link";
+import { formatDate } from "@/lib/overview";
+import { PortfolioContextPicker } from "./PortfolioContextPicker";
+import { AssistantEvidenceContext } from "./AssistantEvidenceContext";
 import { usePathname } from "next/navigation";
 import { AssistantProviderSwitch } from "@/components/AssistantProviderSwitch";
 import {
@@ -47,7 +51,7 @@ type LiveRun = ChatRun & {
   warning?: string;
 };
 type WorkspaceAction = {
-  open: (question?: string) => void; setCompanyPortfolioScope: (id: string | null) => void; close: () => void; opened: boolean;
+  open: (question?: string) => void; setCompanyPortfolioScope: (id: string | null) => void; setPortfolioScope: (id: string | null) => void; close: () => void; opened: boolean;
   chats: Conversation[]; selected: string | null; selectChat: (id: string) => void;
   newChat: () => Promise<string | null>; moreChats: () => void; hasMoreChats: boolean;
 };
@@ -94,6 +98,10 @@ export function AssistantWorkspaceProvider({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const fullPage = pathname === "/assistant";
+  const [assistantCompany,setAssistantCompany] = useState<{id:string;symbol:string;name:string}|null>(null);
+  const [companyChoices,setCompanyChoices] = useState<Array<{id:string;symbol:string;name:string}>>([]);
+  useEffect(()=>{if(!fullPage)return;let active=true;void searchInstruments().then(rows=>{if(active)setCompanyChoices(rows)}).catch(()=>{if(active)setCompanyChoices([])});return()=>{active=false};},[fullPage]);
   const [scopeRevision, setScopeRevision] = useState(0);
   const [companyPortfolioScope, setCompanyPortfolioScopeState] = useState<{path:string;id:string|null}|null>(null);
   const setCompanyPortfolioScope = useCallback((id:string|null) => {
@@ -335,6 +343,7 @@ export function AssistantWorkspaceProvider({
     setError(null);
     setProvider(null);
     setProviderSaving(false);
+    setAssistantCompany(null);
     if (account)
       void refreshChats()
         .then((rows) => {
@@ -350,13 +359,13 @@ export function AssistantWorkspaceProvider({
       try {
         const portfolios = await getPortfolios();
         const portfolioId = pathname.match(/^\/portfolios\/([^/]+)/)?.[1];
-        const explicitCompanyScope = pathname.startsWith("/companies/") && companyPortfolioScope?.path===pathname;
+        const explicitCompanyScope = companyPortfolioScope?.path===pathname;
         const requestedPortfolioId = portfolioId ?? (explicitCompanyScope ? companyPortfolioScope?.id : undefined);
         const portfolio = requestedPortfolioId
           ? portfolios.find((p) => p.id === requestedPortfolioId && !p.archived_at)
           : explicitCompanyScope ? undefined : portfolios.find((p) => p.is_default && !p.archived_at);
         const symbol = pathname.match(/^\/companies\/([^/]+)/)?.[1];
-        const company = symbol
+        const company = fullPage && assistantCompany ? assistantCompany : symbol
           ? (await searchInstruments(decodeURIComponent(symbol))).find(
               (c) =>
                 c.symbol.toUpperCase() ===
@@ -365,7 +374,7 @@ export function AssistantWorkspaceProvider({
           : null;
         if (valid) {
           setContext({
-            page: portfolioId ? "portfolio" : symbol ? "company" : "workspace",
+            page: portfolioId ? "portfolio" : company ? "company" : "workspace",
             portfolio_id: portfolio?.id,
             portfolio_name: portfolio?.name,
             instrument_id: company?.id,
@@ -382,7 +391,7 @@ export function AssistantWorkspaceProvider({
     return () => {
       valid = false;
     };
-  }, [pathname, account, opened, scopeRevision, companyPortfolioScope]);
+  }, [pathname, account, opened, scopeRevision, companyPortfolioScope, assistantCompany, fullPage]);
   useEffect(() => {
     if (selected)
       void loadHistory(selected)
@@ -401,7 +410,7 @@ export function AssistantWorkspaceProvider({
         .catch((e) => setError(e.message));
   }, [selected, loadHistory, observe]);
   useEffect(() => {
-    if (!opened) return;
+    if (!opened || fullPage) return;
     const previous = document.activeElement as HTMLElement | null;
     composer.current?.focus();
     const key = (event: KeyboardEvent) => {
@@ -430,7 +439,7 @@ export function AssistantWorkspaceProvider({
       document.removeEventListener("keydown", key);
       previous?.focus();
     };
-  }, [opened]);
+  }, [opened, fullPage]);
   useEffect(() => {
     if (!opened) return;
     if (nearBottom.current) {
@@ -503,14 +512,14 @@ export function AssistantWorkspaceProvider({
     live = Object.values(runs).filter((r) => r.conversationId === selected),
     running = live.find((r) => active(r.status)),
     draft = drafts[selected ?? "new"] ?? "";
-  const marketWorkspace = pathname === "/market" || pathname === "/markets" || pathname.startsWith("/companies/");
-  const action: WorkspaceAction = { open, setCompanyPortfolioScope, close: () => setOpened(false), opened, chats, selected,
+  const marketWorkspace = pathname === "/market" || pathname === "/markets" || pathname.startsWith("/companies/") || ["/portfolios","/research","/monitoring","/recommendations","/activity"].includes(pathname) || /^\/portfolios\/[^/]+\/(overview|ips|quant|build|research|activity)$/.test(pathname);
+  const action: WorkspaceAction = { open, setCompanyPortfolioScope, setPortfolioScope:setCompanyPortfolioScope, close: () => setOpened(false), opened, chats, selected,
     selectChat: id => { setSelected(id); setOpened(true); setShowChats(false); nearBottom.current = true; },
     newChat, moreChats: () => { if (chatCursor) void refreshChats(chatCursor); }, hasMoreChats: !!chatCursor };
   return (
     <Workspace.Provider value={action}>
       {children}
-      <button
+      {!fullPage?<button
         ref={trigger}
         className={`assistant-launcher${marketWorkspace ? " assistant-market-launcher" : ""}`}
         type="button"
@@ -522,22 +531,29 @@ export function AssistantWorkspaceProvider({
         {Object.values(runs).some((r) => active(r.status)) ? (
           <span className="assistant-running-dot" />
         ) : null}
-      </button>
-      {opened ? (
+      </button>:null}
+      {opened || fullPage ? (
         <section
           ref={dialog}
-          role="dialog"
-          aria-modal="true"
+          role={fullPage?"region":"dialog"}
+          aria-modal={fullPage?undefined:true}
           aria-label="Assistant"
-          className={`assistant-drawer${expanded ? " assistant-expanded" : ""}${marketWorkspace ? " assistant-market-overlay" : ""}`}
+          className={`assistant-drawer${expanded ? " assistant-expanded" : ""}${marketWorkspace ? " assistant-market-overlay" : ""}${fullPage ? " assistant-full-page" : ""}`}
         >
+          {fullPage?<aside className="assistant-conversation-list" aria-label="Conversations">
+            <div><h1>Chats</h1><button type="button" onClick={()=>void newChat()}>＋ New chat</button></div>
+            <nav aria-label="Saved chat threads">{chats.map(chat=><button key={chat.id} aria-current={selected===chat.id?"true":undefined} onClick={()=>{setSelected(chat.id);nearBottom.current=true;}}><strong>{chat.title}</strong><span>{chat.latest_activity?formatDate(chat.latest_activity):"—"}{chat.active_run?" · Generating":""}</span></button>)}</nav>
+            {!chats.length?<p>No saved chats yet.</p>:null}{chatCursor?<button type="button" onClick={()=>void refreshChats(chatCursor)}>More chats</button>:null}
+          </aside>:null}
+          <div className="assistant-conversation-column">
+          {fullPage?<div className="assistant-scope-bar"><PortfolioContextPicker/><label>Company <select aria-label="Assistant company context" value={assistantCompany?.id??""} onChange={event=>setAssistantCompany(companyChoices.find(row=>row.id===event.target.value)??null)}><option value="">All companies</option>{companyChoices.map(row=><option key={row.id} value={row.id}>{row.symbol} · {row.name}</option>)}</select></label></div>:null}
           <header className="assistant-header">
             <div>
               <strong>Ask</strong>
               <p>Research with your financial context</p>
             </div>
             <div className="flex gap-2">
-              <button
+              {!fullPage?<><button
                 className="icon-btn assistant-history-button"
                 aria-expanded={showChats}
                 aria-label="Saved chats"
@@ -563,11 +579,11 @@ export function AssistantWorkspaceProvider({
                 }}
               >
                 ×
-              </button>
+              </button></>:<Link href="/dashboard">Back to workspace ↗</Link>}
             </div>
           </header>
           <AssistantProviderSwitch key={account} onProviderChange={setProvider} onSavingChange={setProviderSaving} />
-          {showChats ? (
+          {showChats && !fullPage ? (
             <nav
               className="assistant-chat-list assistant-chat-dropdown"
               aria-label="Saved conversations"
@@ -792,6 +808,8 @@ export function AssistantWorkspaceProvider({
               )}
             </div>
           </form>
+          </div>
+          {fullPage?<AssistantEvidenceContext context={context} sources={history?.items.slice().reverse().find(message=>message.role==="assistant")?.evidence?.sources??[]}/>:null}
         </section>
       ) : null}
     </Workspace.Provider>

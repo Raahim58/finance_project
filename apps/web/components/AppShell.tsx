@@ -42,8 +42,8 @@ function NavItem({ item, pathname }: { item: NavEntry; pathname: string }) {
 }
 
 function ChatNavigation() {
-  const workspace = useAssistantWorkspace();
-  return <button className="nav-item" onClick={() => workspace?.open()}><span className="rail-icon"><Icon name="assistant" size={20} /></span><span className="sidebar-label">Chat</span></button>;
+  const pathname=usePathname();
+  return <Link href="/assistant" className="nav-item" aria-current={pathname==="/assistant"?"page":undefined}><span className="rail-icon"><Icon name="assistant" size={20}/></span><span className="sidebar-label">Chat</span></Link>;
 }
 
 function currentScope(pathname: string) {

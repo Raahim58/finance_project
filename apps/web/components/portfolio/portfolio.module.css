@@ -24,3 +24,18 @@
 .tabs a[aria-current="page"] { color: #1b211b; font-weight: 600; }
 .tabs a[aria-current="page"]::after { content: ""; position: absolute; left: 14px; right: 14px; bottom: -1px; height: 2px; background: #1b211b; }
 @media (max-width: 860px) { .page { padding-inline: 16px; } }
+
+/* Compact navigation leaves the reference-layout pages in charge of content. */
+.compact { padding:0; background:#fff; }
+.compact .titleRow { min-height:56px; padding:0 22px; margin:0; border-bottom:1px solid var(--line); }
+.compact .titleButton { gap:10px; }
+.compact .titleButton h1 { font-family:var(--font-ui); font-size:15px!important; font-weight:500; letter-spacing:-.015em; line-height:1.4; }
+.compact .titleButton .caret svg { width:14px; height:14px; }
+.compact .menu { left:20px; top:calc(100% - 3px); background:white; border-color:var(--line); box-shadow:0 7px 23px #17252a14; }
+.compact .menu button,.compact .menu a { border-color:var(--line); }
+.compact .menu button:hover,.compact .menu a:hover,.compact .menu button[aria-selected=true] { background:#f3f4f6; }
+.compact .tabs { margin:0; gap:23px; padding:0 22px; min-height:46px; border-color:var(--line); }
+.compact .tabs a { font-size:12px; color:#858c96; padding:13px 0; }
+.compact .tabs a[aria-current=page] { color:var(--ink); }
+.compact .tabs a[aria-current=page]::after { left:0; right:0; background:var(--ink); }
+@media(max-width:720px) { .compact .titleRow { padding:0 16px; min-height:48px; }.compact .tabs { padding:0 16px; gap:19px; } }

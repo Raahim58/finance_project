@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { AssistantControls } from "@/components/AssistantControls";
 import { Icon } from "@/components/Icon";
 import { CompanyLogo } from "@/components/markets/CompanyLogo";
 import { IndexChart } from "@/components/markets/IndexChart";
@@ -21,23 +22,23 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
   const symbols = useMemo(() => summary?.holdings.map(holding => holding.symbol) ?? [], [summary]);
   const extras = useOverviewExtras(portfolioId, symbols);
   const [range, setRange] = useState<OverviewRange>("3M");
+  const [basis, setBasis] = useState<"value" | "twr">("value");
   const [query, setQuery] = useState("");
   const rows = useMemo(() => summary ? holdingRows(summary, extras.history) : [], [summary, extras.history]);
   const points = useMemo(() => valuePoints(data.performance), [data.performance]);
   if (!summary) return <p className={styles.empty}>Portfolio summary unavailable. The API did not return a database valuation.</p>;
 
   const total = numeric(summary.total_value), cash = numeric(summary.cash_balance), dayChange = numeric(summary.day_change), dayPercent = numeric(summary.day_change_percent);
-  const gain = numeric(summary.unrealized_gain_loss), gainPercent = numeric(summary.unrealized_gain_loss_percent);
   const invested = total != null && cash != null ? total - cash : null;
   const share = (part: number | null) => part != null && total ? `${(part / total * 100).toFixed(1)}% of value` : "";
-  const quant = data.quant?.portfolio as Record<string, unknown> | undefined;
-  const quantOk = quant && quant.available !== false;
-  const cagr = quantOk ? numeric(quant.realized_cagr) : null, vol = quantOk ? numeric(quant.annual_volatility) : null;
-  const benchmark = indexLatest(extras.index.value ?? [], null);
+  const benchmark = indexLatest((extras.index.value ?? []).filter(point => point.trade_date === summary.data_freshness_date), null);
   const brief = briefHeadline(summary.portfolio.name, dayPercent, dayChange, benchmark && { name: benchmark.name, percent: benchmark.percent });
   const { contributors, detractors } = movers(rows);
   const shown = rows.filter(row => `${row.symbol} ${row.name} ${row.sector}`.toLowerCase().includes(query.trim().toLowerCase()));
-  const chartPoints = rangeSlice(points, range);
+  const twrPoints = data.performance.flatMap(point => { const close = numeric(point.cumulative_twr_percent); return close == null ? [] : [{ date: point.value_date, close }]; });
+  const chartPoints = rangeSlice(basis === "value" ? points : twrPoints, range);
+  const contributions = rows.filter(row => row.dayChange != null).sort((a, b) => b.dayChange! - a.dayChange!);
+  const maxContribution = Math.max(...contributions.map(row => Math.abs(row.dayChange!)), 1);
   const compliance = data.compliance, status = compliance?.status ?? (compliance ? (compliance.compliant ? "PASS" : "BREACH") : null);
   const notices = [
     summary.valuation_complete ? null : `Valuation incomplete${summary.unpriced_symbols.length ? `: no stored price for ${summary.unpriced_symbols.join(", ")}` : ""}. Totals exclude unpriced holdings.`,
@@ -45,7 +46,15 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
   ].filter(Boolean);
 
   return <div className={styles.layout}>
+    <aside className={styles.facts} aria-label="Portfolio valuation and holdings">
+      <p className={styles.muted}>Portfolio value</p><strong className={styles.level}>{pkr(total)}</strong>
+      <p className={`${styles.change} ${tone(dayPercent)}`}>{formatPercent(dayPercent)}<small>Latest stored session · {formatDate(summary.data_freshness_date)}</small></p>
+      <dl className={styles.capital}><Stat label="Cash" value={pkr(cash)} note={share(cash)} /><Stat label="Invested" value={pkr(invested)} note={share(invested)} /></dl>
+      <h3>Holdings by weight</h3>{rows.map(row => <Link key={row.symbol} href={`/companies/${row.symbol}` as never} className={styles.weightRow}><CompanyLogo symbol={row.symbol} website={extras.websites[row.symbol]} /><span>{row.symbol}</span><span>{row.weight == null ? "—" : `${row.weight.toFixed(2)}%`}</span></Link>)}
+      <p className={styles.source}>{summary.portfolio.source_mode} · {summary.data_source ?? "Source unavailable"}</p>
+    </aside>
     <div className={styles.main}>
+      <h2 className={styles.heading}>Portfolio overview</h2>
       <div className={`${styles.notice} ${status === "BREACH" ? styles.bad : status === "PASS" && !notices.length ? styles.ok : ""}`} role="status">
         <span><b>Mandate:</b> {status === "PASS" ? "Within IPS limits" : status === "BREACH" ? `IPS breach${compliance?.violations.length ? ` (${compliance.violations.length})` : ""}` : status === "NOT_EVALUATED" ? "Not evaluated (IPS data missing)" : "Compliance unavailable"}</span>
         <span><b>Prices:</b> {summary.data_freshness_date ? `as of ${formatDate(summary.data_freshness_date)}` : "date unavailable"} · {summary.data_source ?? "source unavailable"}</span>
@@ -54,24 +63,14 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
 
       <section>
         <div className={styles.heroTop}>
-          <div>
-            <span className={styles.level}>{pkr(total)}</span>
-            <p className={`${styles.change} ${tone(dayChange)}`}>{pkr(dayChange, true)} {formatPercent(dayPercent)} <span>latest session · daily data only</span></p>
-          </div>
+          <div className={styles.ranges} role="group" aria-label="Chart basis"><button aria-pressed={basis === "value"} onClick={() => setBasis("value")}>Value</button><button aria-pressed={basis === "twr"} onClick={() => setBasis("twr")}>TWR</button></div>
           <div className={styles.ranges} role="group" aria-label="Chart range">
             {overviewRanges.map(([label]) => <button key={label} aria-pressed={range === label} onClick={() => setRange(label)}>{label}</button>)}
           </div>
         </div>
-        <div className={styles.chart}>{chartPoints.length >= 2 ? <IndexChart points={chartPoints} name="Portfolio value" /> : <p className={styles.empty}>At least two stored daily valuations are needed to draw the portfolio value{points.length ? " for this range" : ""}.</p>}</div>
-        <dl className={styles.stats}>
-          <Stat label="Cash" value={pkr(cash)} note={share(cash)} />
-          <Stat label="Invested" value={pkr(invested)} note={share(invested)} />
-          <Stat label="Day P&L" value={pkr(dayChange, true)} note={formatPercent(dayPercent)} className={tone(dayChange)} />
-          <Stat label="Total return" value={pkr(gain, true)} note={formatPercent(gainPercent)} className={tone(gain)} />
-          <Stat label="Annualized return" value={cagr == null ? "Unavailable" : formatPercent(cagr * 100)} note={cagr == null ? (data.quant ? "Insufficient history" : "Analytics not loaded") : "Realized CAGR"} className={tone(cagr)} />
-          <Stat label="Volatility" value={vol == null ? "Unavailable" : formatPercent(vol * 100, false)} note={vol == null ? (data.quant ? "Insufficient history" : "Analytics not loaded") : "Annualized"} />
-        </dl>
+        <div className={styles.chart}>{chartPoints.length >= 2 ? <IndexChart points={chartPoints} name={basis === "value" ? "Portfolio value" : "Cumulative time-weighted return (%)"} /> : <p className={styles.empty}>{basis === "value" ? "Value history" : "TWR history"} unavailable for this range. At least two stored observations are needed.</p>}</div>
       </section>
+      <section className={styles.contribution}><h3>Latest session contribution</h3>{contributions.length ? contributions.map(row => <div key={row.symbol} className={styles.contributionRow}><span>{row.symbol}</span><div className={styles.barTrack}><div className={styles.bar} style={{ width: `${Math.abs(row.dayChange!) / maxContribution * 50}%`, left: row.dayChange! < 0 ? `${50 - Math.abs(row.dayChange!) / maxContribution * 50}%` : "50%", background: row.dayChange! < 0 ? "#e53935" : "#00875a" }} /></div><span className={tone(row.dayChange)}>{pkr(row.dayChange, true)}</span></div>) : <p className={styles.empty}>Stored holding day changes are unavailable.</p>}<p className={styles.source}>Contribution to portfolio (PKR) · stored holding day change</p></section>
 
       <section className={styles.holdings}>
         <div className={styles.tableHead}>
@@ -88,7 +87,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
 
     <aside className={styles.rail} aria-label="Portfolio brief">
       <section>
-        <h3>Portfolio brief</h3>
+        <div className={styles.ask}><AssistantControls /></div><h3>Portfolio brief</h3>
         {brief ? <><p className={styles.lead}>{brief.title}</p><p className={styles.leadText}>{brief.text}</p></> : <p className={styles.empty}>Day change is unavailable, so no brief can be generated.</p>}
         <p className={styles.time}>{benchmark?.percent != null ? `${benchmark.name} as of ${formatDate(benchmark.date)}` : extras.index.failed ? "Benchmark comparison unavailable" : "Generated from stored valuations"}</p>
       </section>

@@ -1,2 +1,2 @@
-import { WorkspacePage } from "@/components/WorkspacePage";
-export default function Page() { return <WorkspacePage mode="activity" />; }
+import {PortfolioActivityPage} from "@/components/research-workspace/ActivityWorkspace";
+export default function Page(){return <PortfolioActivityPage/>}

@@ -30,6 +30,8 @@ vi.mock("next/navigation", () => ({ usePathname: () => mocks.path }));
 vi.mock("@/lib/api", () => ({
   getToken: () => mocks.token,
   getPortfolios: mocks.portfolios,
+  getPortfolioSummary: vi.fn().mockResolvedValue({holdings:[],data_freshness_date:null,data_source:null}),
+  getIpsCompliance: vi.fn().mockResolvedValue({status:"NOT_EVALUATED"}),
   searchInstruments: mocks.search,
   getPreferences: mocks.preferences,
   getLLMKeys: mocks.keys,
@@ -71,7 +73,7 @@ beforeEach(() => {
   mocks.portfolios.mockResolvedValue([
     { id: "p1", name: "Growth", is_default: true },
   ]);
-  mocks.search.mockImplementation((symbol: string) =>
+  mocks.search.mockImplementation((symbol: string = "") =>
     Promise.resolve([{ id: symbol.toLowerCase(), symbol, name: symbol }]),
   );
   mocks.list.mockResolvedValue({
@@ -124,6 +126,14 @@ async function send() {
   await waitFor(() => expect(mocks.observe).toHaveBeenCalledTimes(1));
 }
 describe("persistent Assistant", () => {
+  it("renders the full Assistant workspace with saved chats without generating", async()=>{
+    mocks.path="/assistant";
+    render(tree());
+    await screen.findByRole("region",{name:"Assistant"});
+    await screen.findByRole("navigation",{name:"Saved chat threads"});
+    expect(screen.getByRole("complementary",{name:"Context and evidence"})).toBeInTheDocument();
+    expect(mocks.submit).not.toHaveBeenCalled();
+  });
   it("keeps an explicit company portfolio scope separate from the global default", async () => {
     mocks.path = "/companies/FFC";
     mocks.portfolios.mockResolvedValue([{id:"p1",name:"Growth",is_default:true},{id:"p2",name:"Income",is_default:false}]);

@@ -5,6 +5,7 @@ import type ReactECharts from "echarts-for-react";
 import type { WorkspaceData } from "@/components/workspace/useWorkspaceData";
 import { comparePoints, delta, exportRows, kpiFor, pctFraction, quantTabs, riskFreeRate, signedNumber, toCsv, type QuantTabId } from "@/lib/portfolio-quant";
 import { CapmView, ContributionView, CorrelationView, DistributionView, FrontierView, Gate, Notes, RollingView, Unavailable } from "./quant/QuantViews";
+import { QuantPortfolioRail } from "./quant/QuantPortfolioRail";
 import { QuantRail } from "./quant/QuantRail";
 import { useQuantResources } from "./quant/useQuantResources";
 import s from "./quant/quant.module.css";
@@ -43,7 +44,7 @@ export function QuantTab({ portfolioId, data, setMessage, loading }: { portfolio
   const rows = exportRows(tab, { frontier, assumptions, capm: resources.capm.value, rolling: resources.rolling.value, distribution: resources.distribution.value, quant });
   const filename = `quant-${tab}-${portfolioId.slice(0, 8)}`;
   const png = () => {
-    const url = chartRef.current?.getEchartsInstance().getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#fcfaf5" });
+    const url = chartRef.current?.getEchartsInstance().getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#ffffff" });
     if (url) download(url, `${filename}.png`); else setMessage("No chart is available to export.");
   };
   const csv = () => {
@@ -67,7 +68,7 @@ export function QuantTab({ portfolioId, data, setMessage, loading }: { portfolio
     return "";
   };
 
-  if (loading) return <div className={s.skeleton} aria-busy="true" />;
+  if (loading && !data.summary) return <div className={s.skeleton} aria-busy="true" />;
   const quantFailed = !data.quant && resources.quant.status === "error";
   const needsQuant = tab === "correlation" || tab === "contribution";
   const view = (() => {
@@ -84,13 +85,7 @@ export function QuantTab({ portfolioId, data, setMessage, loading }: { portfolio
     }
   })();
 
-  return <div className={s.layout}>
-    <div className={s.main}>
-      <div className={s.subtabs} role="tablist" aria-label="Quant analyses">
-        {quantTabs.map(item => <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)}>{item.label}</button>)}
-      </div>
-      <div className={s.chartBox}>{view}</div>
-      {quant?.warnings.length ? <Notes items={quant.warnings} /> : null}
+  const metrics = <>
       <dl className={s.kpis} aria-label={comparing ? `${focus?.label} compared with current portfolio` : "Current portfolio statistics"}>
         {kpis.map(item => {
           const note = unavailableNote(item.label);
@@ -106,12 +101,23 @@ export function QuantTab({ portfolioId, data, setMessage, loading }: { portfolio
           </div>;
         })}
       </dl>
+    </>;
+
+  return <div className={s.layout}>
+    <QuantPortfolioRail summary={data.summary} portfolioId={portfolioId} loading={loading} />
+    <div className={s.main}>
+      <div className={s.subtabs} role="tablist" aria-label="Quant analyses">
+        {quantTabs.map(item => <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)}>{item.label}</button>)}
+      </div>
+      <header className={s.viewHeading}><h1>{quantTabs.find(item => item.id === tab)?.label}</h1><p>{tab === "frontier" ? "Risk and return for your portfolio’s risky sleeve" : tab === "capm" ? "Observed market inputs and security returns" : tab === "correlation" ? "How your holdings move together" : tab === "rolling" ? "How modeled risk changes through time" : tab === "distribution" ? "Daily returns from your stored portfolio history" : "How each holding contributes to modeled risk"}</p>{tab === "frontier" ? <span>Each point represents a modeled portfolio. The frontier shows feasible allocations with higher expected return for a given level of risk.</span> : null}</header>
+      <div className={s.chartBox}>{view}</div>
+      {quant?.warnings.length ? <Notes items={quant.warnings} /> : null}
       <p className={s.basis}>
         {comparing ? `Showing ${focus?.label} against the current portfolio. ` : ""}
         Return, volatility and Sharpe use the risky-sleeve estimator ({assumptions ? `data to ${assumptions.data_cutoff}` : "date unavailable"}); drawdown and beta come from the ledger history and exist only for the current portfolio. Historical estimates are a modeling lens, not a forecast.
       </p>
     </div>
-    <QuantRail onRetryAssumptions={resources.assumptions.status === "error" ? resources.assumptions.retry : undefined} assumptions={assumptions} frontier={frontier} points={points} checked={checked}
+    <QuantRail metrics={metrics} onRetryAssumptions={resources.assumptions.status === "error" ? resources.assumptions.retry : undefined} assumptions={assumptions} frontier={frontier} points={points} checked={checked}
       onToggle={id => setOverrides(current => ({ ...current, [id]: !checked[id] }))}
       showAssets={showAssets} onToggleAssets={() => setShowAssets(value => !value)} assetsAvailable={assetsAvailable}
       canPng={Boolean(rows)} canCsv={Boolean(rows)} onPng={png} onCsv={csv} />

@@ -33,7 +33,7 @@ export function useWorkspaceData(portfolioId:string, mode:string){
     const update=(values:Partial<WorkspaceData>)=>active&&setData(current=>({...current,...values}));
     const fail=(slice:string)=>(error:unknown)=>{if(active)setFailures(current=>[...current,`${slice}: ${error instanceof Error?error.message:"request failed"}`])};
     const tasks:Promise<unknown>[]=[];
-    const needsSummary=["overview","build","risk","stress","scenarios"].includes(mode);
+    const needsSummary=["overview","quant","build","risk","stress","scenarios"].includes(mode);
     const summaryAlreadyLoaded=!portfolioChanged&&Boolean(dataRef.current.summary);
     if(needsSummary){setLoading(!summaryAlreadyLoaded);tasks.push(getPortfolioSummary(portfolioId).then(summary=>update({summary})).catch((error:Error)=>active&&setMessage(error.message)).finally(()=>active&&setLoading(false)))}else setLoading(false);
     if(mode==="overview")tasks.push(getPortfolioExposure(portfolioId).then(exposure=>update({exposure})).catch(fail("Exposure request failed")),getPortfolioPerformance(portfolioId).then(performance=>update({performance})).catch(fail("Performance request failed")),getIpsCompliance(portfolioId).then(compliance=>update({compliance})).catch(fail("Compliance request failed")),getIpsVersions(portfolioId).then(ips=>update({ips})).catch(fail("IPS request failed")));
