@@ -9,6 +9,7 @@ import { PortfolioEventPanel } from "@/components/ResearchIntelligence";
 import { Icon } from "@/components/Icon";
 import { OverviewTab } from "@/components/portfolio/OverviewTab";
 import { BuildTab } from "@/components/portfolio/BuildTab";
+import { RiskTab } from "@/components/portfolio/RiskTab";
 import { QuantTab } from "@/components/portfolio/QuantTab";
 import { ScenariosTab } from "@/components/portfolio/ScenariosTab";
 import { PortfolioWorkspace } from "@/components/PortfolioWorkspace";
@@ -39,7 +40,7 @@ export function WorkspacePage({mode}:{mode:string}){
 }
 
 function Loading(){return <div className="grid gap-3"><div className="metric-strip grid-cols-4">{[1,2,3,4].map(i=><div className="metric" key={i}><div className="skeleton h-3 w-20"/><div className="skeleton mt-3 h-7 w-28"/></div>)}</div><div className="panel h-80 p-4"><div className="skeleton h-full w-full"/></div></div>}
-function Mode({mode,analyticsLoading,...props}:{mode:string;portfolioId:string;data:WorkspaceData;setMessage:(s:string)=>void;analyticsLoading:boolean}){if(mode==="overview")return <OverviewTab {...props}/>;if(mode==="build")return <BuildTab {...props}/>;if(mode==="quant")return <QuantTab {...props} loading={analyticsLoading}/>;if(mode==="risk")return <Risk {...props}/>;if(mode==="stress"||mode==="scenarios")return <ScenariosTab {...props}/>;if(mode==="research")return <PortfolioResearch {...props}/>;if(mode==="activity")return <Activity {...props}/>;if(mode==="settings"||mode==="ips")return <SafeIps {...props}/>;return null}
+function Mode({mode,analyticsLoading,...props}:{mode:string;portfolioId:string;data:WorkspaceData;setMessage:(s:string)=>void;analyticsLoading:boolean}){if(mode==="overview")return <OverviewTab {...props}/>;if(mode==="build")return <BuildTab {...props}/>;if(mode==="quant")return <QuantTab {...props} loading={analyticsLoading}/>;if(mode==="risk")return <RiskTab {...props}/>;if(mode==="stress"||mode==="scenarios")return <ScenariosTab {...props}/>;if(mode==="research")return <PortfolioResearch {...props}/>;if(mode==="activity")return <Activity {...props}/>;if(mode==="settings"||mode==="ips")return <SafeIps {...props}/>;return null}
 
 export function AnalyticsLoading(){return <div className="panel h-80 p-4"><div className="skeleton h-full w-full"/></div>}
 

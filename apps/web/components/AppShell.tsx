@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { Icon, IconName } from "@/components/Icon";
 import { getPortfolios } from "@/lib/api";
 import { PortfolioContextPicker } from "@/components/PortfolioContextPicker";
+import { NotificationBell } from "@/components/NotificationBell";
 
 type NavEntry = [string, string, IconName];
 
@@ -141,6 +142,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div className="flex items-center gap-1">
             <PortfolioContextPicker />
+            <NotificationBell />
             <Link className="icon-btn" aria-label="Account settings" href={"/settings" as never}><Icon name="settings" /></Link>
           </div>
         </header>

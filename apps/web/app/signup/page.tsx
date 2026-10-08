@@ -5,7 +5,7 @@ import { AuthLayout } from "@/components/AuthLayout";
 
 export default function SignupPage() {
   return (
-    <AuthLayout title="Create your workspace." description="Start with a guided investor profile, then define and govern each portfolio mandate." footer={<><span>Already have an account? </span><Link className="font-semibold text-accent" href="/login">Sign in</Link></>}>
+    <AuthLayout title="Create your account" description="Start a portfolio workspace." legal="Investment mandate is set within your portfolio." footer={<><span>Already have an account?</span><Link className="rx-link" href="/login">Sign in</Link></>}>
       <AuthForm mode="signup" />
     </AuthLayout>
   );

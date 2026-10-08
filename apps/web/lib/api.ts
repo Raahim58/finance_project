@@ -362,6 +362,21 @@ export function createLLMKey(provider: string, apiKey: string, defaultModel?: st
   });
 }
 
+export function deleteLLMKey(keyId: string) {
+  return request<void>(`/settings/llm-keys/${encodeURIComponent(keyId)}`, { method: "DELETE" });
+}
+
+export function testLLMKey(provider: string, apiKey: string, defaultModel?: string) {
+  return request<{ provider: string; valid: boolean; message: string }>("/settings/llm-keys/test", {
+    method: "POST",
+    body: JSON.stringify({ provider, api_key: apiKey, default_model: defaultModel || null })
+  });
+}
+
+export function getProfile() {
+  return request<{ id: string; email: string; full_name?: string | null; is_active: boolean }>("/settings/profile");
+}
+
 export function getPortfolios() {
   return request<Portfolio[]>("/portfolios");
 }
@@ -550,6 +565,10 @@ export function getRecommendations() {
 
 export function decideRecommendation(recommendationId: string, decision: "accepted" | "reviewed" | "dismissed" | "rejected" | "superseded" | "resolved") {
   return request<{ id: string; status: string }>(`/recommendations/${encodeURIComponent(recommendationId)}?decision=${decision}`, { method: "PATCH" });
+}
+
+export function runMonitoring(portfolioId: string) {
+  return request<Record<string, unknown>>(`/monitoring/runs/${encodeURIComponent(portfolioId)}`, { method: "POST" });
 }
 
 export function acknowledgeAlert(alertId: string, note?: string) {
