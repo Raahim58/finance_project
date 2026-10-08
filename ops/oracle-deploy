@@ -13,6 +13,10 @@
 #      DEPLOY_DRAIN_SECONDS (default 180) bounds each worker's graceful stop.
 set -euo pipefail
 
+# A second rollout must not replace a container while Compose is starting it.
+exec 9>/tmp/psx-oracle-deploy.lock
+flock -n 9 || { echo "Another Oracle deployment is running." >&2; exit 1; }
+
 compose=(docker compose -f compose.oracle.yml --profile ingestion --profile scheduling --profile pipeline --profile research)
 drain_seconds="${DEPLOY_DRAIN_SECONDS:-180}"
 ready_url="${DEPLOY_READY_URL:-http://127.0.0.1:3000/api/ready}"

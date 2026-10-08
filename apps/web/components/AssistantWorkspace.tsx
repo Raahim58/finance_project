@@ -46,7 +46,11 @@ type LiveRun = ChatRun & {
   sequence: number;
   warning?: string;
 };
-type WorkspaceAction = { open: (question?: string) => void };
+type WorkspaceAction = {
+  open: (question?: string) => void; close: () => void; opened: boolean;
+  chats: Conversation[]; selected: string | null; selectChat: (id: string) => void;
+  newChat: () => Promise<string | null>; moreChats: () => void; hasMoreChats: boolean;
+};
 const Workspace = createContext<WorkspaceAction | null>(null);
 export function useAssistantWorkspace() {
   return useContext(Workspace);
@@ -493,19 +497,22 @@ export function AssistantWorkspaceProvider({
     live = Object.values(runs).filter((r) => r.conversationId === selected),
     running = live.find((r) => active(r.status)),
     draft = drafts[selected ?? "new"] ?? "";
-  const action = useRef<WorkspaceAction>({ open });
+  const marketWorkspace = pathname === "/market" || pathname === "/markets";
+  const action: WorkspaceAction = { open, close: () => setOpened(false), opened, chats, selected,
+    selectChat: id => { setSelected(id); setOpened(true); setShowChats(false); nearBottom.current = true; },
+    newChat, moreChats: () => { if (chatCursor) void refreshChats(chatCursor); }, hasMoreChats: !!chatCursor };
   return (
-    <Workspace.Provider value={action.current}>
+    <Workspace.Provider value={action}>
       {children}
       <button
         ref={trigger}
-        className="assistant-launcher"
+        className={`assistant-launcher${marketWorkspace ? " assistant-market-launcher" : ""}`}
         type="button"
         aria-label="Open Assistant"
         aria-expanded={opened}
-        onClick={() => setOpened(true)}
+        onClick={() => setOpened(!opened)}
       >
-        Assistant
+        <span aria-hidden="true">✦</span> {marketWorkspace ? "Ask" : "Assistant"}
         {Object.values(runs).some((r) => active(r.status)) ? (
           <span className="assistant-running-dot" />
         ) : null}
@@ -516,20 +523,21 @@ export function AssistantWorkspaceProvider({
           role="dialog"
           aria-modal="true"
           aria-label="Assistant"
-          className={`assistant-drawer${expanded ? " assistant-expanded" : ""}`}
+          className={`assistant-drawer${expanded ? " assistant-expanded" : ""}${marketWorkspace ? " assistant-market-overlay" : ""}`}
         >
           <header className="assistant-header">
             <div>
-              <strong>Assistant</strong>
+              <strong>Ask</strong>
               <p>Research with your financial context</p>
             </div>
             <div className="flex gap-2">
               <button
-                className="icon-btn"
+                className="icon-btn assistant-history-button"
+                aria-expanded={showChats}
                 aria-label="Saved chats"
                 onClick={() => setShowChats(!showChats)}
               >
-                Chats
+                Previous chats ⌄
               </button>
               <button
                 className="icon-btn"
@@ -555,7 +563,7 @@ export function AssistantWorkspaceProvider({
           <AssistantProviderSwitch key={account} onProviderChange={setProvider} onSavingChange={setProviderSaving} />
           {showChats ? (
             <nav
-              className="assistant-chat-list"
+              className="assistant-chat-list assistant-chat-dropdown"
               aria-label="Saved conversations"
             >
               <button
@@ -645,7 +653,7 @@ export function AssistantWorkspaceProvider({
                   key={run.execution_id}
                   className="assistant-message assistant-answer"
                 >
-                  <strong>Assistant</strong>
+                  <strong>Ask</strong>
                   <small className="assistant-status">
                     {" "}
                     · Provisional answer

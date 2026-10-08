@@ -13,6 +13,7 @@ import { IndexChart } from "./IndexChart";
 import { SparkPath } from "./Sparkline";
 import { useMarketsData } from "./useMarketsData";
 import { MarketCatalog, type MarketView } from "./MarketCatalog";
+import { MarketDigest } from "./MarketDigest";
 import { MarketRail } from "./MarketRail";
 import styles from "./markets.module.css";
 
@@ -39,10 +40,11 @@ export function MarketsPage() {
   const changeBySymbol = useMemo(() => new Map((session?.prices ?? [...(session?.top_gainers ?? []), ...(session?.top_losers ?? []), ...(session?.top_volume ?? [])]).map(row => [row.symbol, row.change_percent])), [session]);
   const failed = [data.market, data.freshness, data.events, data.history, data.companies].some(resource => resource.status === "error");
   return <div className={styles.page}>
-    <MarketCatalog view={view} select={setView} market={session ?? null} freshness={fresh} companies={data.companies.data ?? []} />
+    <MarketCatalog view={view} select={setView} market={session ?? null} freshness={fresh} companies={data.companies.data ?? []} chart={<IndexPanel data={data} />} />
     <div className={styles.main}>
-      <div className={styles.viewHeader}><h1>{view === "index" ? "KSE-100" : view === "stocks" ? "All stocks" : "Sectors"}</h1>
-        <button className={styles.refresh} onClick={() => { clearApiCache(); data.reload(); }}><Icon name="clock" size={14} />Refresh view</button></div>
+      <div className={styles.viewHeader}><select className={styles.viewSelect} aria-label="Market view" value={view} onChange={event => setView(event.target.value as MarketView)}><option value="index">Market digest</option><option value="stocks">All stocks</option><option value="sectors">Sectors</option><option value="events">Events</option></select>
+        <SearchBox companies={data.companies.data ?? []} query={query} setQuery={setQuery} />
+        <button className={styles.refresh} aria-label="Refresh market view" onClick={() => { clearApiCache(); data.reload(); }}><Icon name="clock" size={14} /></button></div>
       <p className={styles.dateline}>
         <span>{(session?.trade_date ?? fresh?.latest_trade_date ?? latest?.date) ? new Date(`${session?.trade_date ?? fresh?.latest_trade_date ?? latest?.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : "Date unavailable"}</span>
         <span>{fresh ? `Market ${fresh.exchange_session_status === "unknown" ? "session unknown" : fresh.exchange_session_status}` : "Session unavailable"}</span>
@@ -57,11 +59,8 @@ export function MarketsPage() {
       {fresh?.market_data_mode === "mock" || fresh?.is_stale || fresh?.provider_mode_warning || fresh?.ingestion_staleness_warning ? <div className={styles.notice} role="status"><Icon name="warning" size={15} />
         <span>{fresh.market_data_mode === "mock" ? "Demo market data" : "Market data needs review"}{[fresh.provider_mode_warning, fresh.ingestion_staleness_warning, fresh.stale_warning].filter(Boolean).slice(0, 1).map(text => ` · ${text}`)}</span></div> : null}
       {failed ? <div className={styles.notice} role="status"><span>Some sections could not be loaded. Available data is shown below.</span><button onClick={() => { clearApiCache(); data.reload(); }}>Retry</button></div> : null}
-      {view === "index" ? <IndexPanel data={data} /> : view === "stocks" ? <StocksPanel companies={data.companies} query={query} setQuery={setQuery} changes={changeBySymbol} prices={prices} /> : <SectorsPanel resource={data.market} />}
-      {view === "index" ? <>
-        <MoversPanels data={data} bySymbol={bySymbol} query={query} setQuery={setQuery} />
-        <SectorSummary resource={data.market} onViewAll={() => setView("sectors")} />
-      </> : null}
+      {view === "stocks" ? <MoversPanels data={data} bySymbol={bySymbol} query={query} setQuery={setQuery} /> : null}
+      {view === "index" ? <MarketDigest market={session ?? null} events={data.events.data ?? []} companies={bySymbol} onStocks={() => setView("stocks")} /> : view === "stocks" ? <StocksPanel companies={data.companies} query={query} setQuery={setQuery} changes={changeBySymbol} prices={prices} /> : view === "sectors" ? <SectorsPanel resource={data.market} /> : <section className={styles.eventList}><h2>Recent market events</h2>{(data.events.data ?? []).map(event => <article key={event.event_key}><small>{formatDate(event.occurred_at)}</small><h3>{event.title}</h3><a href={event.evidence[0]?.source_url ?? "/research"}>{event.evidence[0]?.source_name ?? "View evidence"} ↗</a></article>)}{!data.events.data?.length ? <Note resource={data.events} empty="No selected market event evidence is available." /> : null}</section>}
       <p className={styles.source}>{fresh?.latest_used_provider ?? fresh?.latest_source ?? snapshot?.source ?? "Source unavailable"} · prices as of {formatDate(session?.trade_date ?? fresh?.latest_trade_date ?? snapshot?.snapshot_date)} · refreshes hourly</p>
     </div>
     <MarketRail market={session ?? null} events={data.events.data ?? []} loading={data.events.status === "loading"} />
@@ -81,19 +80,20 @@ function IndexPanel({ data }: { data: Data }) {
   const previous = latest.level != null && latest.change != null ? latest.level - latest.change : null;
   return <section className={styles.hero} aria-label={`${latest.name} performance`}>
     <div className={styles.heroTop}>
-      <div><span className={styles.muted}>Index level</span><strong className={styles.level}>{formatNumber(latest.level)}</strong>
+      <div><span className={styles.muted}>{latest.name}</span><strong className={styles.level}>{formatNumber(latest.level)}</strong>
         <p className={`${styles.change} ${tone(latest.percent)}`}>{signed(latest.change)} &nbsp;{formatPercent(latest.percent)} <span>{livePoint ? "observed session" : `stored close · ${formatDate(latest.date)}`}</span></p></div>
-      <div className={styles.ranges} role="group" aria-label="Chart range">{chartRanges.map(([label]) => <button key={label} aria-pressed={range === label} onClick={() => setRange(label)}>{label}</button>)}</div>
+
     </div>
-    {data.history.status === "ready" ? <IndexChart points={shown} name={latest.name} liveDate={livePoint?.date} /> : <Note resource={data.history} empty="Index history unavailable." />}
+    {data.history.status === "ready" ? <IndexChart points={shown} name={latest.name} liveDate={livePoint?.date} height={175} /> : <Note resource={data.history} empty="Index history unavailable." />}
     {livePoint ? <p className={styles.chartCaption}>Daily closes with the latest observed index level at the final point.</p> : null}
-    <dl className={styles.stats}>
+      <div className={styles.ranges} role="group" aria-label="Chart range">{chartRanges.map(([label]) => <button key={label} aria-pressed={range === label} onClick={() => setRange(label)}>{label}</button>)}</div>
+    <details className={styles.indexDetails}><summary>Session statistics</summary><dl className={styles.stats}>
       <Stat label="Previous close" value={formatNumber(previous)} />
       <Stat label="52W high (close)" value={formatNumber(extremes?.high.close)} />
       <Stat label="52W low (close)" value={formatNumber(extremes?.low.close)} />
       <Stat label="Volume" value={snapshot ? formatNumber(snapshot.total_volume, 1, true) : "—"} />
       <Stat label="Value traded" value={snapshot ? `PKR ${formatNumber(snapshot.total_value, 1, true)}` : "—"} />
-    </dl>
+    </dl></details>
     {snapshot?.totals_note ? <p className={styles.source}>{snapshot.totals_note}</p> : null}
   </section>;
 }
@@ -108,14 +108,12 @@ function SearchBox({ companies, query, setQuery }: { companies: Company[]; query
 }
 
 function MoversPanels({ data, bySymbol, query, setQuery }: { data: Data; bySymbol: Map<string, Company>; query: string; setQuery: (value: string) => void }) {
-  const [side, setSide] = useState<"top_gainers" | "top_losers">("top_gainers");
   const market = data.market.data;
-  return <section className={styles.movers} aria-label="Movers">
-    <div className={styles.moversBar}><h2>Movers</h2><SearchBox companies={data.companies.data ?? []} query={query} setQuery={setQuery} /></div>
+  return <section className={styles.movers} aria-label="Market movers">
+    <div className={styles.moversBar}><h2>Market movers</h2></div>
     <div className={styles.moverGrid}>
-      <MoverTable title={side === "top_gainers" ? "Top gainers" : "Top losers"} rows={market?.[side] ?? []} bySymbol={bySymbol} resource={data.market} trends={data.trends}
-        toggle={<div className={styles.toggle}>{([["top_gainers", "Gainers"], ["top_losers", "Losers"]] as const).map(([key, label]) => <button key={key} aria-pressed={side === key} onClick={() => setSide(key)}>{label}</button>)}</div>} />
-      <MoverTable title="Top by volume" rows={market?.top_volume ?? []} bySymbol={bySymbol} resource={data.market} trends={data.trends} />
+      <MoverTable title="Top gainers" rows={market?.top_gainers ?? []} bySymbol={bySymbol} resource={data.market} trends={data.trends} />
+      <MoverTable title="Top losers" rows={market?.top_losers ?? []} bySymbol={bySymbol} resource={data.market} trends={data.trends} />
     </div>
   </section>;
 }

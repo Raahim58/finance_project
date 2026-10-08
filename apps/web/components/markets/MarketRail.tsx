@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
 import { useAssistantWorkspace } from "@/components/AssistantWorkspace";
+import { AssistantControls } from "@/components/AssistantControls";
 import { Icon } from "@/components/Icon";
 import type { MarketOverview } from "@/lib/api";
 import type { ResearchEventView } from "@/lib/api/research";
@@ -12,7 +12,6 @@ import styles from "./markets.module.css";
 
 export function MarketRail({ market, events, loading }: { market: MarketOverview | null; events: ResearchEventView[]; loading: boolean }) {
   const assistant = useAssistantWorkspace();
-  const [question, setQuestion] = useState("");
   const percent = numeric(market?.snapshot?.index_change_percent);
   const breadth = market?.sectors.reduce((total, row) => ({ up: total.up + row.advancers, down: total.down + row.decliners, flat: total.flat + row.unchanged }), { up: 0, down: 0, flat: 0 });
   const sectors = market?.sectors.slice().sort((a, b) => Number(b.average_change_percent) - Number(a.average_change_percent));
@@ -22,7 +21,7 @@ export function MarketRail({ market, events, loading }: { market: MarketOverview
   const evidence = events.filter(event => { const key = `${event.evidence[0]?.source_name}:${event.event_type}`; if (seen.has(key)) return false; seen.add(key); return true; }).slice(0, 3);
   const ask = (text: string) => assistant?.open(text);
   return <aside className={styles.rail} aria-label="Market context and Assistant">
-    <div className={styles.railHead}><h2>Market digest</h2><span>From market data</span></div>
+    <div className={styles.railControls}><AssistantControls /></div><div className={styles.railHead}><h2>Market brief</h2><span>From market data</span></div>
     <section className={styles.digest}>
       <h3>{percent == null ? "Your market view, in context" : `KSE-100 ${percent < 0 ? "down" : percent > 0 ? "up" : "unchanged"}${percent === 0 ? "" : ` ${Math.abs(percent).toFixed(2)}%`}`}</h3>
       <p>{market ? `${market.priced_securities ?? "—"} securities across ${market.sectors.length} sectors are available in the ${market.price_basis === "intraday" ? "observed intraday snapshot" : "stored daily session"}.` : "The digest appears when a dated market snapshot is available."}</p>
@@ -37,13 +36,6 @@ export function MarketRail({ market, events, loading }: { market: MarketOverview
         <div>{event.evidence[0]?.source_url ? <a href={event.evidence[0].source_url} target="_blank" rel="noreferrer">{event.evidence[0].source_name || event.evidence[0].title} <span aria-hidden="true">↗</span></a> : <span>Source link unavailable</span>}
           <button onClick={() => ask(`Explain this event using cited evidence: ${event.title}`)} aria-label={`Ask about ${event.title}`}><Icon name="assistant" size={14} /> Ask</button></div>
       </article>)}{!evidence.length ? <p className={styles.source}>{loading ? "Loading evidence…" : "No selected event evidence is available."}</p> : null}
-    </section>
-    <section className={styles.askSection}><h3>Go deeper</h3>
-      {["Which stocks drove this session?", "How does this market relate to my portfolio?", "Which market inputs are missing?"].map(text => <button key={text} className={styles.followUp} onClick={() => ask(text)}><span aria-hidden="true">↳</span>{text}</button>)}
-      <form className={styles.askComposer} onSubmit={event => { event.preventDefault(); if (question.trim()) ask(question.trim()); }}>
-        <textarea aria-label="Ask about this market" placeholder="Ask about this market…" value={question} onChange={event => setQuestion(event.target.value)} rows={2} />
-        <div><span>Opens in Assistant</span><button aria-label="Continue in Assistant" disabled={!question.trim()}><Icon name="arrowUp" size={19} /></button></div>
-      </form>
     </section>
   </aside>;
 }

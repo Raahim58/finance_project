@@ -6,31 +6,28 @@ import { CompanyLogo } from "./CompanyLogo";
 import type { Company, MarketOverview, MarketFreshness } from "@/lib/api";
 import styles from "./markets.module.css";
 
-export type MarketView = "index" | "stocks" | "sectors";
-const views: Array<[MarketView, string, "market" | "company" | "grid"]> = [
-  ["index", "KSE-100", "market"], ["stocks", "All stocks", "company"], ["sectors", "Sectors", "grid"],
+export type MarketView = "index" | "stocks" | "sectors" | "events";
+const views: Array<[MarketView, string, "market" | "company" | "grid" | "document"]> = [
+  ["index", "Market digest", "market"], ["stocks", "All stocks", "company"], ["sectors", "Sectors", "grid"], ["events", "Events", "document"],
 ];
 
-export function MarketCatalog({ view, select, market, freshness, companies }: {
+export function MarketCatalog({ view, select, market, freshness, companies, chart }: {
   view: MarketView; select: (view: MarketView) => void; market: MarketOverview | null;
-  freshness: MarketFreshness | null; companies: Company[];
+  freshness: MarketFreshness | null; companies: Company[]; chart: React.ReactNode;
 }) {
   const snapshot = market?.snapshot;
   const bySymbol = new Map(companies.map(row => [row.symbol, row]));
-  const watched = (market?.top_volume ?? []).slice(0, 5);
+  const watched = (market?.prices ?? market?.top_volume ?? []).slice().sort((a,b) => b.volume - a.volume).slice(0, 6);
   const percent = numeric(snapshot?.index_change_percent);
   return <aside className={styles.catalog} aria-label="Market navigation">
-    <div className={styles.catalogHeading}><strong>Markets</strong><span>PSX</span></div>
-    <div className={styles.catalogQuote}>
-      <span>KSE-100</span><strong>{formatNumber(snapshot?.index_value)}</strong>
-      <p className={percent != null && percent < 0 ? styles.negative : styles.positive}>{snapshot ? formatPercent(percent) : "Observation unavailable"}</p>
-      <small>{formatDate(snapshot?.snapshot_date ?? market?.trade_date)}</small>
-    </div>
+    <div className={styles.catalogTabs}><button aria-current="page" onClick={() => select("index")}>Markets</button><Link href="/portfolios">Portfolios</Link><button disabled title="Watchlists are not available yet">Watchlist</button></div>
+    {chart}
+    <h2 className={styles.catalogSubheading}>Market views</h2>
     <nav className={styles.catalogViews} aria-label="Market views">{views.map(([key, label, icon]) =>
       <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => select(key)}><Icon name={icon} size={17} /><span>{label}</span><Icon name="chevron" size={13} /></button>)}</nav>
-    <div className={styles.catalogList}><h2>Most active</h2>{watched.map(row => <Link key={row.symbol} href={`/companies/${row.symbol}` as never}>
+    <div className={styles.catalogList}><h2>Observed quotes <small>by volume</small></h2>{watched.map(row => <Link key={row.symbol} href={`/companies/${row.symbol}` as never}>
       <CompanyLogo symbol={row.symbol} website={bySymbol.get(row.symbol)?.official_website} size={24} /><strong>{row.symbol}</strong>
-      <span className={Number(row.change_percent) < 0 ? styles.negative : styles.positive}>{formatPercent(row.change_percent)}</span>
+      <span className={styles.quotePrice}>{formatNumber(row.close)}</span><span className={Number(row.change_percent) < 0 ? styles.negative : styles.positive}>{formatPercent(row.change_percent)}</span>
     </Link>)}{!watched.length ? <p className={styles.source}>Volume rankings unavailable.</p> : null}</div>
     <div className={styles.catalogCoverage}><span>Observed coverage</span><strong>{market?.priced_securities ?? "—"} <small>securities</small></strong>
       <p>{market?.sectors.length ?? "—"} sectors · {market?.price_basis === "intraday" ? "Intraday snapshot" : "Daily prices"}</p>

@@ -1,6 +1,7 @@
-export type IconName = "grid"|"briefcase"|"market"|"search"|"assistant"|"bell"|"lightbulb"|"activity"|"settings"|"plus"|"more"|"chevron"|"arrowUp"|"arrowDown"|"expand"|"close"|"menu"|"company"|"document"|"warning"|"check"|"clock"|"drag";
+export type IconName = "grid"|"briefcase"|"market"|"search"|"assistant"|"bell"|"lightbulb"|"activity"|"settings"|"plus"|"more"|"chevron"|"arrowUp"|"arrowDown"|"expand"|"close"|"menu"|"company"|"document"|"warning"|"check"|"clock"|"drag"|"sidebar";
 
 const paths: Record<IconName, React.ReactNode> = {
+  sidebar:<><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></>,
   grid:<><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></>,
   briefcase:<><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/><rect x="3" y="7" width="18" height="13" rx="1"/><path d="M3 12h18M10 12v2h4v-2"/></>,
   market:<><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/><path d="m3 7 6-4 6 6 6-5"/></>,

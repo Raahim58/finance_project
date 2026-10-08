@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantWorkspaceProvider, AskAssistant } from "./AssistantWorkspace";
+import { AssistantControls } from "./AssistantControls";
 import type { RunEvent } from "@/lib/assistant-workspace";
 const mocks = vi.hoisted(() => ({
   path: "/companies/OGDC",
@@ -122,6 +123,20 @@ async function send() {
   await waitFor(() => expect(mocks.observe).toHaveBeenCalledTimes(1));
 }
 describe("persistent Assistant", () => {
+  it("opens a previous chat over the market brief and closes without generating", async () => {
+    mocks.path = "/market";
+    render(<AssistantWorkspaceProvider><div>Market brief</div><AssistantControls /></AssistantWorkspaceProvider>);
+    fireEvent.click(screen.getByLabelText("Previous chats"));
+    fireEvent.click(await screen.findByRole("button", { name: "Other chat" }));
+    expect(screen.getByRole("dialog", { name: "Assistant" })).toHaveClass("assistant-market-overlay");
+    await waitFor(() => expect(mocks.history).toHaveBeenCalledWith("c2", undefined));
+    expect(screen.getByText("Market brief")).toBeInTheDocument();
+    expect(mocks.submit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText("Close Assistant"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Open Assistant sidebar"));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
   it("switches saved providers without generating and snapshots the next submission", async () => {
     render(tree());
     await open();

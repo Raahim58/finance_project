@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import { formatDate, formatNumber } from "@/lib/overview";
 import type { ClosePoint } from "@/lib/markets";
 
-export function IndexChart({ points, name, liveDate }: { points: ClosePoint[]; name: string; liveDate?: string }) {
+export function IndexChart({ points, name, liveDate, height = 245 }: { height?: number; points: ClosePoint[]; name: string; liveDate?: string }) {
   const node = useRef<HTMLDivElement>(null), chart = useRef<ReactECharts>(null);
   const available = points.length >= 2;
   useEffect(() => {
@@ -20,7 +20,7 @@ export function IndexChart({ points, name, liveDate }: { points: ClosePoint[]; n
   const values = points.map(point => point.close);
   const min = Math.min(...values), max = Math.max(...values), pad = (max - min) * 0.1 || max * 0.01;
   return <div ref={node} role="img" aria-label={`${name} ${liveDate ? "daily closes and latest observed level" : "closing level"} from ${formatDate(points[0].date)} to ${formatDate(points[points.length - 1].date)}`}>
-    <ReactECharts ref={chart} notMerge style={{ height: 245, width: "100%" }} option={{
+    <ReactECharts ref={chart} notMerge style={{ height, width: "100%" }} option={{
       animation: false,
       grid: { left: 3, right: 5, top: 19, bottom: 9, containLabel: true },
       tooltip: { trigger: "axis", valueFormatter: (value: number) => formatNumber(value), backgroundColor: "#ffffff", borderColor: "#eceef1", textStyle: { color: "#141619", fontSize: 12 }, axisPointer: { type: "line", lineStyle: { color: "#b6bcc4", width: 1 } } },
