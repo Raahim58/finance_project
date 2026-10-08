@@ -14,7 +14,7 @@ REPORT_STAGES = ('reports','report_fetch','report_extract','report_index')
 REPORT_ACQUISITION_STAGES = ('reports', 'report_fetch')
 PROCESSING_PRIORITY = ('intelligence', 'events', 'classify', 'extract', 'link', 'sections',
                        'report_index', 'report_extract', 'index', 'parse')
-URGENT_STAGES = ('briefing','discover','fetch','parse','index','sections','link','extract','classify','events','intelligence','prices')
+URGENT_STAGES = ('briefing','discover','fetch','parse','index','sections','link','extract','classify','events','intelligence','prices','market_daily')
 
 def report_work_condition():
     from app.models.document import Document

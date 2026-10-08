@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ExchangeResponse(BaseModel):
@@ -83,6 +83,13 @@ class CompanyDetailResponse(BaseModel):
 
 
 class MarketOverviewResponse(BaseModel):
+    prices: list[MarketPriceResponse] = Field(default_factory=list)
+    trade_date: date | None = None
+    price_basis: Literal["daily", "intraday"] = "daily"
+    priced_securities: int = 0
+    observed_at: datetime | None = None
+    latest_quote_date: date | None = None
+    latest_quote_count: int = 0
     snapshot: MarketSnapshotResponse | None
     top_gainers: list[MarketPriceResponse]
     top_losers: list[MarketPriceResponse]
@@ -91,6 +98,11 @@ class MarketOverviewResponse(BaseModel):
 
 
 class MarketFreshnessResponse(BaseModel):
+    price_basis: Literal["daily", "intraday"] = "daily"
+    priced_securities: int = 0
+    latest_quote_date: date | None = None
+    latest_quote_count: int = 0
+    source_freshness_sla_minutes: int | None = None
     market_data_mode: str
     refresh_seconds: int
     last_successful_ingestion_at: datetime | None

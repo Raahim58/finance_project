@@ -34,7 +34,7 @@ def bootstrap(db, *, replay_limit=0, approved_sources=(), activate=False):
         scope='reports:'+instrument.symbol
         if not db.scalar(select(SourceTarget.id).where(SourceTarget.data_source_id==official.id,SourceTarget.scope_key==scope)):
             db.add(SourceTarget(data_source_id=official.id,scope_key=scope,instrument_id=instrument.id,adapter_key='reports',schedule='announcements',enabled=False));created+=1
-    for adapter,schedule in (('prices','prices'),('maintenance','maintenance')):
+    for adapter,schedule in (('prices','prices'),('market_daily','market_daily'),('maintenance','maintenance')):
         if not db.scalar(select(SourceTarget.id).where(SourceTarget.data_source_id==official.id,SourceTarget.scope_key==adapter)):
             db.add(SourceTarget(data_source_id=official.id,scope_key=adapter,adapter_key=adapter,schedule=schedule,enabled=False));created+=1
     replayed=0
@@ -46,7 +46,7 @@ def bootstrap(db, *, replay_limit=0, approved_sources=(), activate=False):
     enabled=0
     if activate:
         for target in db.scalars(select(SourceTarget)):
-            if target.adapter_key in approved_sources or target.adapter_key in ('prices','reports','maintenance'):
+            if target.adapter_key in approved_sources or target.adapter_key in ('prices','market_daily','reports','maintenance'):
                 target.enabled=True;enabled+=1
                 publisher=db.get(DataSource,target.data_source_id);publisher.enabled=True
     db.commit();return {'targets_created':created,'targets_enabled':enabled,'stored_documents_queued':replayed}

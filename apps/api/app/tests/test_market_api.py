@@ -22,7 +22,8 @@ def test_market_overview_and_rankings(client):
     assert overview.status_code == 200
     body = overview.json()
     assert body["snapshot"]["snapshot_date"] == "2026-06-30"
-    assert len(body["top_gainers"]) == 5
+    assert 0 < len(body["top_gainers"]) <= 5
+    assert all(Decimal(row["change"]) > 0 for row in body["top_gainers"])
     assert len(body["top_losers"]) == 5
     assert len(body["top_volume"]) == 5
     assert body["sectors"]

@@ -19,6 +19,7 @@ from app.services.market_service import (
     get_company_history,
     get_index_history,
     get_market_freshness,
+    get_market_overview,
     get_market_snapshot,
     get_sectors,
     get_sector_performance,
@@ -43,13 +44,7 @@ def snapshot(date_: date | None = Query(default=None, alias="date"), db: Session
 
 @router.get("/overview", response_model=MarketOverviewResponse)
 def overview(date_: date | None = Query(default=None, alias="date"), db: Session = Depends(get_db)):
-    return MarketOverviewResponse(
-        snapshot=get_market_snapshot(db, date_),
-        top_gainers=get_top_gainers(db, date_, limit=5),
-        top_losers=get_top_losers(db, date_, limit=5),
-        top_volume=get_top_volume(db, date_, limit=5),
-        sectors=get_sectors(db, date_),
-    )
+    return get_market_overview(db, date_)
 
 
 @router.get("/top-gainers", response_model=list[MarketPriceResponse])

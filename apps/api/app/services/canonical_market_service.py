@@ -327,7 +327,7 @@ def _from_observation_parts(
         source_url=artifact.source_url if artifact else None,
         artifact_id=artifact.id if artifact else None,
         artifact_sha256=artifact.sha256 if artifact else None,
-        observed_at=artifact.retrieved_at if artifact else None,
+        observed_at=observation.effective_at if observation.frequency == "intraday" else artifact.retrieved_at if artifact else None,
         adjustment_state=observation.adjustment_state,
         quality_status=values.get("quality_status","observed_intraday") if observation.frequency=="intraday" else "selected",
         frequency=observation.frequency,
@@ -460,7 +460,8 @@ def canonical_prices_for_date(db: Session, trade_date: date, *, include_intraday
     start = _exchange_day_start(trade_date)
     end = start + timedelta(days=1)
     statement = (
-        select(MarketObservation)
+        select(MarketObservation, SourceArtifact, DataSource, Instrument.symbol)
+        .join(Instrument, Instrument.id == MarketObservation.instrument_id)
         .join(SourceArtifact, SourceArtifact.id == MarketObservation.artifact_id)
         .join(DataSource, DataSource.id == SourceArtifact.data_source_id)
         .where(
@@ -478,15 +479,17 @@ def canonical_prices_for_date(db: Session, trade_date: date, *, include_intraday
             ~func.lower(SourceArtifact.source_url).like("demo://%"),
             ~func.lower(SourceArtifact.source_url).like("normalized://mock/%"),
         )
-    rows = list(db.scalars(statement))
+    rows = list(db.execute(statement))
     capitalization_by_instrument = capitalization_for_date(db, trade_date)
     output = []; seen=set()
-    for row in rows:
+    for row, artifact, source, symbol in rows:
         if row.instrument_id in seen: continue
         seen.add(row.instrument_id)
-        instrument = db.get(Instrument, row.instrument_id)
-        if instrument:
-            output.append(_from_observation(db, row, instrument.symbol, capitalization_by_instrument))
+        price = _from_observation_parts(row, artifact, source, symbol)
+        snapshot = capitalization_by_instrument.get(row.instrument_id)
+        if snapshot:
+            price = replace(price, market_cap=Decimal(snapshot['market_cap']), capitalization=snapshot)
+        output.append(price)
     return output
 
 

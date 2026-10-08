@@ -25,7 +25,7 @@ def schedule_sources(db,now):
         payload={'target_id':target.id,'bucket':bucket}
         for key in ('canary_batch','news_limit','report_limit','symbols'):
             if key in target.cursor: payload[key]=target.cursor[key]
-        if target.adapter_key=='prices': stage='prices'
+        if target.adapter_key in ('prices', 'market_daily'): stage=target.adapter_key
         elif target.adapter_key=='maintenance': stage='maintenance'
         elif target.adapter_key=='briefing': stage='briefing'
         elif target.adapter_key=='reports':

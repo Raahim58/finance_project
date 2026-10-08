@@ -21,6 +21,7 @@ from app.schemas.market import (
     ExchangeResponse,
     IndexCloseResponse,
     MarketFreshnessResponse,
+    MarketOverviewResponse,
     MarketPriceResponse,
     MarketSnapshotResponse,
     SectorDailyStatsResponse,
@@ -101,23 +102,9 @@ def serialize_sector_stats(stats: SectorDailyStats) -> SectorDailyStatsResponse:
 
 
 def get_latest_market_date(db: Session) -> date | None:
-    from app.models.workstation import DataSource, MarketObservation, SourceArtifact
-    from app.services.canonical_market_service import observation_trade_date
-    statement = (
-        select(MarketObservation)
-        .join(SourceArtifact, SourceArtifact.id == MarketObservation.artifact_id)
-        .join(DataSource, DataSource.id == SourceArtifact.data_source_id)
-        .where(MarketObservation.is_selected.is_(True), MarketObservation.frequency.in_(("daily","intraday")), MarketObservation.instrument_id.is_not(None))
-        .order_by(MarketObservation.effective_at.desc())
-        .limit(1)
-    )
-    if not settings.is_synthetic_environment:
-        statement = statement.where(func.lower(DataSource.name) != "mock")
-    observed = db.scalar(statement)
-    legacy = select(func.max(MarketPrice.trade_date))
-    if not settings.is_synthetic_environment:
-        legacy = legacy.where(func.lower(MarketPrice.source) != "mock")
-    return observation_trade_date(observed) if observed else db.scalar(legacy)
+    from app.services.market_session import resolve_session
+    session = resolve_session(db)
+    return session.trade_date if session else None
 
 
 def resolve_market_date(db: Session, requested_date: date | None) -> date:
@@ -125,7 +112,7 @@ def resolve_market_date(db: Session, requested_date: date | None) -> date:
         fallback = select(MarketPrice.id).where(MarketPrice.trade_date == requested_date)
         if not settings.is_synthetic_environment:
             fallback = fallback.where(func.lower(MarketPrice.source) != "mock")
-        if canonical_prices_for_date(db, requested_date) or db.scalar(fallback.limit(1)):
+        if canonical_prices_for_date(db, requested_date, include_intraday=True) or db.scalar(fallback.limit(1)):
             return requested_date
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -192,10 +179,13 @@ def _price_query(trade_date: date) -> Select[tuple[MarketPrice]]:
 
 
 def _prices_for_date(db: Session, trade_date: date) -> list[MarketPrice | CanonicalPrice]:
-    canonical = canonical_prices_for_date(db,trade_date,include_intraday=True) if trade_date==datetime.now(ZoneInfo("Asia/Karachi")).date() else canonical_prices_for_date(db,trade_date)
+    from app.services.market_session import resolve_session
+    session = resolve_session(db)
+    intraday = bool(session and session.trade_date == trade_date and session.basis == "intraday")
+    canonical = canonical_prices_for_date(db, trade_date, include_intraday=intraday)
     if canonical:
         return _without_indices(db, canonical)
-    return list(db.scalars(_price_query(trade_date)))
+    return _without_indices(db, list(db.scalars(_price_query(trade_date))))
 
 
 def _without_indices(db, prices):
@@ -207,13 +197,13 @@ def _without_indices(db, prices):
 
 def get_top_gainers(db: Session, requested_date: date | None = None, limit: int = 10) -> list[MarketPriceResponse]:
     trade_date = resolve_market_date(db, requested_date)
-    rows = sorted(_prices_for_date(db, trade_date), key=lambda row: (row.change_percent, row.volume), reverse=True)[:limit]
+    rows = sorted((row for row in _prices_for_date(db, trade_date) if row.change > 0), key=lambda row: (row.change_percent, row.volume), reverse=True)[:limit]
     return [serialize_price(row) for row in rows]
 
 
 def get_top_losers(db: Session, requested_date: date | None = None, limit: int = 10) -> list[MarketPriceResponse]:
     trade_date = resolve_market_date(db, requested_date)
-    rows = sorted(_prices_for_date(db, trade_date), key=lambda row: (row.change_percent, -row.volume))[:limit]
+    rows = sorted((row for row in _prices_for_date(db, trade_date) if row.change < 0), key=lambda row: (row.change_percent, -row.volume))[:limit]
     return [serialize_price(row) for row in rows]
 
 
@@ -225,30 +215,51 @@ def get_top_volume(db: Session, requested_date: date | None = None, limit: int =
 
 def get_sectors(db: Session, requested_date: date | None = None) -> list[SectorDailyStatsResponse]:
     trade_date = resolve_market_date(db, requested_date)
-    canonical = _without_indices(db, canonical_prices_for_date(db, trade_date))
+    canonical = _prices_for_date(db, trade_date)
     if canonical:
-        companies = {row.symbol: row for row in db.scalars(select(Company).where(Company.symbol.in_([price.symbol for price in canonical])))}
-        grouped: dict[str, list[CanonicalPrice]] = {}
-        for price in canonical:
-            grouped.setdefault(companies.get(price.symbol).sector if companies.get(price.symbol) else "Unknown", []).append(price)
-        return sorted([
-            SectorDailyStatsResponse(
-                sector=sector, trade_date=trade_date,
-                total_volume=sum(row.volume for row in prices),
-                total_value=sum((row.value for row in prices), Decimal("0")),
-                average_change_percent=sum((row.change_percent for row in prices), Decimal("0")) / len(prices),
-                advancers=sum(row.change > 0 for row in prices), decliners=sum(row.change < 0 for row in prices),
-                unchanged=sum(row.change == 0 for row in prices), source="canonical_selected_observations",
-            ) for sector, prices in grouped.items()
-        ], key=lambda row: row.average_change_percent, reverse=True)
+        return _sector_stats(db, trade_date, canonical)
     statement = select(SectorDailyStats).where(SectorDailyStats.trade_date == trade_date)
     if not settings.is_synthetic_environment:
         statement = statement.where(func.lower(SectorDailyStats.source) != "mock")
-    rows = db.scalars(
-        statement
-        .order_by(SectorDailyStats.average_change_percent.desc())
-    ).all()
-    return [serialize_sector_stats(row) for row in rows]
+    return [serialize_sector_stats(row) for row in db.scalars(statement.order_by(SectorDailyStats.average_change_percent.desc()))]
+
+
+def _sector_stats(db, trade_date, canonical):
+    companies = {row.symbol: row for row in db.scalars(select(Company).where(Company.symbol.in_([price.symbol for price in canonical])))}
+    grouped: dict[str, list[CanonicalPrice]] = {}
+    for price in canonical:
+        grouped.setdefault(companies.get(price.symbol).sector if companies.get(price.symbol) else "Unknown", []).append(price)
+    return sorted([
+        SectorDailyStatsResponse(
+            sector=sector, trade_date=trade_date,
+            total_volume=sum(row.volume for row in prices),
+            total_value=sum((row.value for row in prices), Decimal("0")),
+            average_change_percent=sum((row.change_percent for row in prices), Decimal("0")) / len(prices),
+            advancers=sum(row.change > 0 for row in prices), decliners=sum(row.change < 0 for row in prices),
+            unchanged=sum(row.change == 0 for row in prices),
+            source="canonical_selected_observations" if all(isinstance(row, CanonicalPrice) for row in prices) else prices[0].source,
+        ) for sector, prices in grouped.items()
+    ], key=lambda row: row.average_change_percent, reverse=True)
+
+def get_market_overview(db: Session, requested_date: date | None = None) -> MarketOverviewResponse:
+    from app.services.market_session import resolve_session
+    session = resolve_session(db)
+    trade_date = resolve_market_date(db, requested_date)
+    prices = _prices_for_date(db, trade_date)
+    return MarketOverviewResponse(
+        trade_date=trade_date,
+        price_basis=session.basis if session and session.trade_date == trade_date else "daily",
+        priced_securities=len(prices),
+        observed_at=session.observed_at if session and session.trade_date == trade_date else None,
+        latest_quote_date=session.latest_quote_date if session else None,
+        latest_quote_count=session.latest_quote_count if session else 0,
+        prices=[serialize_price(row) for row in prices],
+        snapshot=get_market_snapshot(db, trade_date),
+        top_gainers=[serialize_price(row) for row in sorted((row for row in prices if row.change > 0), key=lambda row: (row.change_percent, row.volume), reverse=True)[:5]],
+        top_losers=[serialize_price(row) for row in sorted((row for row in prices if row.change < 0), key=lambda row: (row.change_percent, -row.volume))[:5]],
+        top_volume=[serialize_price(row) for row in sorted(prices, key=lambda row: row.volume, reverse=True)[:5]],
+        sectors=_sector_stats(db, trade_date, prices) if prices else [],
+    )
 
 
 def get_sector_performance(
@@ -359,6 +370,39 @@ def _trade_date_status(latest_trade_date: date | None, now_karachi: datetime) ->
 
 
 def get_market_freshness(db: Session) -> MarketFreshnessResponse:
+    from app.services.market_session import resolve_session
+    session = resolve_session(db)
+    if session and session.source and session.source.lower() != "mock":
+        now = datetime.now(PSX_TZ)
+        observed = session.observed_at
+        observed_utc = (observed.astimezone(UTC) if observed and observed.tzinfo
+                        else observed.replace(tzinfo=UTC) if observed else None)
+        age = max(0, (datetime.now(UTC) - observed_utc).total_seconds()) if observed_utc else None
+        # Before the opening window, yesterday's close is the latest expected
+        # session. Ingestion time alone must never make an old trade date fresh.
+        expected = _last_expected_business_day(now.date())
+        if now.weekday() < 5 and now.time() < PSX_SESSION_OPEN:
+            expected = _last_expected_business_day(expected - timedelta(days=1))
+        previous = _last_expected_business_day(expected - timedelta(days=1))
+        trade_status = "current" if session.trade_date == expected else "prior_session" if session.trade_date == previous else "stale"
+        exchange_status = _exchange_session_status(now)
+        stale = trade_status == "stale" or (exchange_status == "open" and (
+            session.basis == "daily" or age is None or age > (session.source_sla_minutes or 120) * 60))
+        warning = ("Only the previous daily session is available; current quotes are awaiting ingestion."
+                   if stale and session.basis == "daily" and exchange_status == "open" else
+                   "The displayed market session is out of date."
+                   if stale else None)
+        return MarketFreshnessResponse(
+            market_data_mode=settings.market_data_mode, refresh_seconds=settings.market_data_refresh_seconds,
+            last_successful_ingestion_at=observed, latest_trade_date=session.trade_date,
+            latest_source=session.source, latest_used_provider=session.source,
+            is_stale=stale, stale_warning=warning, ingestion_staleness_warning=warning,
+            ingestion_age_seconds=age, trade_date_status=trade_status,
+            exchange_session_status=exchange_status, exchange_session_note=EXCHANGE_SESSION_NOTE,
+            price_basis=session.basis, priced_securities=session.securities,
+            latest_quote_date=session.latest_quote_date, latest_quote_count=session.latest_quote_count,
+            source_freshness_sla_minutes=session.source_sla_minutes,
+        )
     run_statement = select(MarketIngestionRun)
     snapshot_statement = select(MarketSnapshot)
     if not settings.is_synthetic_environment:

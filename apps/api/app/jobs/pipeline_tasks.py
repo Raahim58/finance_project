@@ -16,7 +16,7 @@ QUEUES={'briefing':'pipeline_heavy','discover':'pipeline_discovery','fetch':'pip
     'index':'pipeline_heavy','sections':'pipeline_parse','link':'pipeline_parse','extract':'pipeline_enrich','classify':'pipeline_enrich',
     'events':'pipeline_enrich','intelligence':'pipeline_intelligence','enrich':'pipeline_model',
     'secondary_tables':'pipeline_numeric','prices':'pipeline_numeric','reports':'pipeline_discovery','report_fetch':'pipeline_fetch',
-    'report_index':'pipeline_heavy','report_extract':'pipeline_heavy','history_prices':'pipeline_numeric','maintenance':'pipeline_parse'}
+    'report_index':'pipeline_heavy','report_extract':'pipeline_heavy','history_prices':'pipeline_numeric','market_daily':'pipeline_numeric','maintenance':'pipeline_parse'}
 
 class DeferredStage(Exception): pass
 
@@ -27,6 +27,12 @@ def successor(db,run,stage,payload):
 
 def perform(db,run):
     p=run.input;stage=run.stage
+    if stage=='market_daily':
+        from app.jobs.market_daily import run_once
+        results = run_once()
+        if any(row.get('status') in ('failed', 'retry_wait', 'another_worker_running') for row in results):
+            raise DeferredStage('daily_market_lane_incomplete')
+        return {'stages': results}, []
     if stage=='briefing':
         from app.services.pipeline.briefing import capture
         return capture(db),[]

@@ -36,6 +36,10 @@ def price_bucket(db,now):
 def scheduled_bucket(schedule,now,db):
     local=now.astimezone(KARACHI)
     if schedule=='prices': return price_bucket(db,now)[0]
+    if schedule=='market_daily':
+        from app.jobs.market_daily import target_day
+        # The pipeline owns the daily catch-up as well as intraday prices.
+        return target_day(now).isoformat()
     hours=NEWS_HOURS if schedule=='news' else (18,) if schedule=='announcements' else (2,) if schedule=='maintenance' else (9,) if schedule=='briefing' else ()
     if not hours: raise ValueError('unknown_source_schedule')
     buckets=[datetime.combine(local.date(),time(hour),tzinfo=KARACHI) for hour in hours]

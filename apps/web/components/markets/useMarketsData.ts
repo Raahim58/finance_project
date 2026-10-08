@@ -19,6 +19,7 @@ export function useMarketsData() {
 
   useEffect(() => {
     let active = true;
+    let refreshing = false;
     const read = async <T,>(fetcher: () => Promise<T>, setter: (value: Resource<T>) => void) => {
       setter(loading<T>());
       try { const data = await fetcher(); if (active) setter({ status: "ready", data }); return data; }
@@ -30,7 +31,24 @@ export function useMarketsData() {
     void read(getMarketOverview, setMarket);
     // Independent of the snapshot: the snapshot can be missing while index closes are stored.
     void read(() => getIndexHistory(INDEX_SYMBOL), setHistory);
-    return () => { active = false; };
+    const refresh = async () => {
+      if (document.hidden || refreshing) return;
+      refreshing = true;
+      const results = await Promise.allSettled([getMarketOverview(), getMarketFreshness(), getIndexHistory(INDEX_SYMBOL)]);
+      if (active) {
+        if (results[0].status === "fulfilled") setMarket({ status: "ready", data: results[0].value });
+        if (results[1].status === "fulfilled") setFreshness({ status: "ready", data: results[1].value });
+        if (results[2].status === "fulfilled") setHistory({ status: "ready", data: results[2].value });
+        if (results.some(result => result.status === "rejected")) {
+          setFreshness(current => ({ ...current, error: "Automatic refresh failed; the last loaded session remains displayed." }));
+        }
+      }
+      refreshing = false;
+    };
+    const visible = () => { if (!document.hidden) void refresh(); };
+    const timer = setInterval(() => void refresh(), 60_000);
+    document.addEventListener("visibilitychange", visible);
+    return () => { active = false; clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
   }, [revision]);
 
   return { market, freshness, companies, events, history, reload: () => setRevision(value => value + 1) };

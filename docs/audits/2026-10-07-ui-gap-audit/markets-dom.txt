@@ -1,0 +1,186 @@
+- complementary "Primary navigation":
+  - link "RAAHIM":
+    - /url: /dashboard
+    - generic: RAAHIM
+  - paragraph: Workspace
+  - link "Overview":
+    - /url: /dashboard
+    - generic: Overview
+  - paragraph: Investment
+  - link "Portfolios":
+    - /url: /portfolios
+    - generic: Portfolios
+  - link "Markets":
+    - /url: /markets
+    - generic: Markets
+  - link "Research":
+    - /url: /research
+    - generic: Research
+  - paragraph: Oversight
+  - link "Recommendations":
+    - /url: /recommendations
+    - generic: Recommendations
+  - link "Monitoring":
+    - /url: /monitoring
+    - generic: Monitoring
+  - link "Activity":
+    - /url: /activity
+    - generic: Activity
+  - paragraph: System
+  - link "Settings":
+    - /url: /settings
+    - generic: Settings
+  - strong: Decision support only
+  - text: No broker connection or trade execution
+- main:
+  - paragraph:
+    - generic: Fri, 2 Oct 2026
+    - generic: Market closed
+    - generic: KSE-100 -0.29%
+  - heading "Markets" [level=1]
+  - status:
+    - generic: Market data needs review · Market data is older than MARKET_DATA_REFRESH_SECONDS. Refresh ingestion before relying on the latest view.
+  - navigation "Market views":
+    - button "KSE-100"
+    - button "All stocks"
+    - button "Sectors"
+  - region "KSE-100 performance":
+    - heading "KSE-100" [level=2]
+    - strong: 168,155.49
+    - paragraph: "-481.36 -0.29% latest stored close · 02 Oct 2026"
+    - group "Chart range":
+      - button "1W"
+      - button "1M" [pressed]
+      - button "3M"
+      - button "1Y"
+      - button "ALL"
+    - img "KSE-100 closing level from 01 Sept 2026 to 02 Oct 2026"
+    - term: Previous close
+    - definition: 168,636.85
+    - term: 52W high (close)
+    - definition: 189,166.83
+    - term: 52W low (close)
+    - definition: 146,480.15
+    - term: Volume
+    - definition: —
+    - term: Value traded
+    - definition: —
+  - region "Movers":
+    - heading "Movers" [level=2]
+    - textbox "Search stocks":
+      - /placeholder: Search stocks, sectors…
+    - heading "Top gainers" [level=3]
+    - button "Gainers" [pressed]
+    - button "Losers"
+    - table:
+      - rowgroup:
+        - row "# Symbol Price Day % Volume 30D trend":
+          - columnheader "#"
+          - columnheader "Symbol"
+          - columnheader "Price"
+          - columnheader "Day %"
+          - columnheader "Volume"
+          - columnheader "30D trend"
+      - rowgroup:
+        - row "1 LUCK 410.95 +0.15% 263.8K 30 recent closes, lower overall":
+          - cell "1"
+          - cell "LUCK":
+            - link "LUCK":
+              - /url: /companies/LUCK
+              - generic: LU
+              - generic: LUCK
+          - cell "410.95"
+          - cell "+0.15%"
+          - cell "263.8K"
+          - cell "30 recent closes, lower overall":
+            - img "30 recent closes, lower overall"
+        - row "2 FFC 539.95 +0.11% 74.1K 30 recent closes, lower overall":
+          - cell "2"
+          - cell "FFC":
+            - link "FFC":
+              - /url: /companies/FFC
+              - generic: FF
+              - generic: FFC
+          - cell "539.95"
+          - cell "+0.11%"
+          - cell "74.1K"
+          - cell "30 recent closes, lower overall":
+            - img "30 recent closes, lower overall"
+    - heading "Top by volume" [level=3]
+    - table:
+      - rowgroup:
+        - row "# Symbol Price Day % Volume 30D trend":
+          - columnheader "#"
+          - columnheader "Symbol"
+          - columnheader "Price"
+          - columnheader "Day %"
+          - columnheader "Volume"
+          - columnheader "30D trend"
+      - rowgroup:
+        - row "1 LUCK 410.95 +0.15% 263.8K 30 recent closes, lower overall":
+          - cell "1"
+          - cell "LUCK":
+            - link "LUCK":
+              - /url: /companies/LUCK
+              - generic: LU
+              - generic: LUCK
+          - cell "410.95"
+          - cell "+0.15%"
+          - cell "263.8K"
+          - cell "30 recent closes, lower overall":
+            - img "30 recent closes, lower overall"
+        - row "2 FFC 539.95 +0.11% 74.1K 30 recent closes, lower overall":
+          - cell "2"
+          - cell "FFC":
+            - link "FFC":
+              - /url: /companies/FFC
+              - generic: FF
+              - generic: FFC
+          - cell "539.95"
+          - cell "+0.11%"
+          - cell "74.1K"
+          - cell "30 recent closes, lower overall":
+            - img "30 recent closes, lower overall"
+  - region "Sector performance":
+    - heading "Sector performance" [level=2]
+    - button "View all": View all →
+    - status: Sector statistics unavailable.
+  - paragraph: dps · trade date 13 Aug 2026 · ingested 77008 min ago
+  - complementary "Market brief":
+    - heading "Market brief" [level=2]
+    - link "View all":
+      - /url: /research
+      - text: View all →
+    - heading "Fuel Price Shock Pushes Global Gas Car Sales Below 50% for First Time" [level=3]
+    - paragraph: The share of gasoline cars in global vehicle sales fell below 50% for the first time ever as the Hormuz shock and the resulting record-high fuel prices accelerated the previously sluggish…
+    - paragraph: 3 days ago · Geopolitical risk · OilPrice
+    - article:
+      - heading "Iraq Shifts Oil Strategy By Arranging Tanker To Move Past Hormuz" [level=4]
+      - generic: High
+      - paragraph: Drone view of oil tanker HELGA berthed at one of Iraq's southern offshore oil terminals near Basra as it prepares to load crude oil, becoming the second vessel to arrive since the closure…
+      - paragraph:
+        - generic: 3 days ago
+        - generic: News
+    - article:
+      - heading "Iran Is Losing Some of Its Leverage Over the Strait of Hormuz" [level=4]
+      - generic: High
+      - paragraph: The flow of crude from the Persian Gulf has recovered to near-prewar levels, but the latest data shows that much of the oil is reaching markets through routes and shipping arrangements th…
+      - paragraph:
+        - generic: 4 days ago
+        - generic: News
+    - article:
+      - heading "Six Vessels Hit in Strait of Hormuz Since Sunday" [level=4]
+      - generic: High
+      - paragraph: Vessels in the Strait of Hormuz, as seen from Musandam, Oman, July 31, 2026. REUTERS/Stringer Another tanker has been struck in the Strait of Hormuz, bringing the number of vessels report…
+      - paragraph:
+        - generic: 5 days ago
+        - generic: News
+    - article:
+      - heading "Saudis Plan Assault on Houthis to Break Red Sea Chokehold" [level=4]
+      - generic: High
+      - paragraph: Vessels in the Strait of Hormuz, as seen from Musandam, Oman, August 3, 2026. REUTERS/Stringer By Timour Azhari and Mubasher Bukhari RIYADH, Oct 2 (Reuters) – Saudi Arabia is planning an …
+      - paragraph:
+        - generic: 5 days ago
+        - generic: News
+- button "Open Assistant": Assistant
+- alert

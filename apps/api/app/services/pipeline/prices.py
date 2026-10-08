@@ -29,8 +29,12 @@ def parse_market_watch(html):
                     (('close','CURRENT'),('previous_close','LDCP'),('open','OPEN'),('high','HIGH'),('low','LOW'))}
                 volume=int(values['VOLUME'].replace(',',''))
             except (InvalidOperation,ValueError): continue
-            if any(not v.is_finite() or v<=0 for v in nums.values()) or volume<0: continue
-            if nums['high']<max(nums['open'],nums['close']) or nums['low']>min(nums['open'],nums['close']): continue
+            if any(not v.is_finite() or v<0 for v in nums.values()) or volume<0: continue
+            if nums['close']<=0 or nums['previous_close']<=0: continue
+            # Published positive quotes with zero trades can have zero OHLC.
+            # Preserve the source zeros; never synthesize an opening/high/low.
+            untraded = volume == 0 and all(nums[k] == 0 for k in ('open','high','low'))
+            if not untraded and (nums['open']<=0 or nums['low']<=0 or nums['high']<max(nums['open'],nums['close']) or nums['low']>min(nums['open'],nums['close'])): continue
             quotes.append({'symbol':symbol,**{k:str(v) for k,v in nums.items()},'volume':volume});seen.add(symbol)
     if not quotes: raise ValueError('market_watch_contract_changed_or_empty')
     return quotes
@@ -71,6 +75,10 @@ def refresh(db, *, now=None,symbols=None):
             values_json=json.dumps(row),currency='PKR',unit='price',adjustment_state='unadjusted',artifact_id=artifact.id,is_selected=True))
         count+=1
     from app.models.pipeline import SourceTarget
+    metadata = json.loads(artifact.response_metadata_json or '{}')
+    artifact.response_metadata_json = json.dumps({**metadata,
+        'quote_scope': 'symbol_subset' if symbols else 'all_regular_equities',
+        'accepted_quotes': count, 'source_rows': len(rows)})
     numeric=source(db,'PSX pipeline numeric targets','market','https://dps.psx.com.pk',10,120,'Target configuration; not data provenance.')
     price_target=db.scalar(select(SourceTarget).where(SourceTarget.adapter_key=='prices',SourceTarget.enabled.is_(True)))
     if price_target and not symbols:

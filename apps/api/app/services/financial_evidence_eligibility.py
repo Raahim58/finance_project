@@ -1,5 +1,5 @@
 """SQL eligibility for public financial context; observed is not reviewed."""
-from sqlalchemy import false, func, or_, select
+from sqlalchemy import and_, false, func, not_, or_, select
 
 from app.models.document import Document
 from app.models.workstation import FinancialFact, StandardizedFinancialFact
@@ -10,7 +10,19 @@ def public_primary_financials():
         Document.owner_user_id.is_(None),Document.portfolio_id.is_(None),
         Document.status.not_in(('revoked','superseded','failed')),
         Document.data_status.not_in(('synthetic_demo','excluded_irrelevant')))
-    return or_(FinancialFact.document_id.is_(None),FinancialFact.document_id.in_(documents))
+    label = func.lower(func.coalesce(FinancialFact.source_label, ""))
+    # A citation cannot make a misclassified tax deduction into revenue, or a
+    # dividend receipt into a cash balance. Keep the source observations stored
+    # but fail closed when their own label contradicts their taxonomy.
+    contradiction = or_(
+        and_(FinancialFact.taxonomy_key == "revenue",
+             or_(label.like("%sales tax%"), label.like("%excise duty%"))),
+        and_(FinancialFact.taxonomy_key == "cash", label.like("%dividend receipt%")),
+        and_(FinancialFact.taxonomy_key.in_(("assets", "liabilities", "equity", "debt")),
+             FinancialFact.value < 0),
+    )
+    return and_(or_(FinancialFact.document_id.is_(None),FinancialFact.document_id.in_(documents)),
+                not_(contradiction))
 
 
 def verified_secondary_financials():

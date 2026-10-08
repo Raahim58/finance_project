@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     test_database_url: str = "sqlite+pysqlite:///:memory:"
     database_pool_size: int = Field(default=24, ge=1, le=100)
     database_max_overflow: int = Field(default=8, ge=0, le=100)
+    database_max_parallel_workers_per_gather: int = Field(default=0, ge=0, le=8)
     jwt_secret_key: str = "dev-only-change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
@@ -28,6 +29,7 @@ class Settings(BaseSettings):
     encryption_key: str = "dev-only-invalid-key"
     market_data_mode: str = "mock"
     market_data_refresh_seconds: int = 300
+    market_broad_coverage_ratio: float = Field(default=0.8, gt=0, le=1)
     phase2_refill_seconds: int = Field(default=2, ge=1, le=60)
     phase2_max_retries: int = Field(default=3, ge=0, le=10)
     phase2_retry_backoff_seconds: int = Field(default=300, ge=1, le=86400)

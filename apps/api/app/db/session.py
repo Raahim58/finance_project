@@ -20,6 +20,11 @@ else:
     engine_kwargs["pool_size"] = settings.database_pool_size
     engine_kwargs["max_overflow"] = settings.database_max_overflow
     engine_kwargs["pool_pre_ping"] = True
+    if settings.database_url.startswith("postgresql"):
+        # Bound per-connection parallel-query shared-memory demand. This does not
+        # change PostgreSQL's persistent configuration or restart its container.
+        engine_kwargs["connect_args"] = {"options":
+            f"-c max_parallel_workers_per_gather={settings.database_max_parallel_workers_per_gather}"}
 
 engine = create_engine(settings.database_url, future=True, **engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, future=True)
