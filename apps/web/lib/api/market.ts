@@ -22,3 +22,9 @@ export const getCompanyDetail=(symbol:string)=>request<CompanyDetail>(`/market/c
 export const getCompanyHistory=(symbol:string,limit=2000)=>request<MarketPrice[]>(`/market/company/${encodeURIComponent(symbol)}/history?limit=${encodeURIComponent(String(limit))}`);
 export type IndexClose={trade_date:string;close:string};
 export const getIndexHistory=(symbol:string,limit=400)=>request<IndexClose[]>(`/market/index/${encodeURIComponent(symbol)}/history?limit=${limit}`);
+
+export async function getCompanyTrends(symbols: string[]) {
+  if (!symbols.length) return {};
+  const rows = await request<Record<string, string[]>>(`/market/trends?symbols=${encodeURIComponent(symbols.join(","))}`);
+  return Object.fromEntries(Object.entries(rows).map(([symbol, values]) => [symbol, values.map(Number).filter(Number.isFinite)]));
+}

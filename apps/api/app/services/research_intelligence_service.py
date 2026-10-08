@@ -71,7 +71,7 @@ def current_profile(db, user, instrument, provider=None, model=None):
     return db.scalar(statement.order_by(CompanyExposureProfile.generated_at.desc()).limit(1))
 
 
-def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=None, end=None):
+def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=None, end=None, newest_first=False):
     """Scope issuers from RAW links. Never inherit the cluster's union of companies.
 
     Stored normalized classification/materiality/freshness is preserved. Evidence must
@@ -125,11 +125,9 @@ def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=Non
             ),
         )
     )
-    query = query.where(Event.id.in_(usable_sources)).order_by(
-        case((NormalizedEvent.materiality == "high", 0), else_=1),
-        Event.occurred_at.desc(),
-        Event.id,
-    )
+    ordering = [Event.occurred_at.desc(), Event.id] if newest_first else [
+        case((NormalizedEvent.materiality == "high", 0), else_=1), Event.occurred_at.desc(), Event.id]
+    query = query.where(Event.id.in_(usable_sources)).order_by(*ordering)
     rows = list(db.execute(query.offset(offset).limit(limit)))
     if not rows:
         return []

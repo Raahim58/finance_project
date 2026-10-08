@@ -2,6 +2,8 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
+from fastapi import HTTPException, Request, Response
+from app.models.market import CompanyMark
 
 from app.db.session import get_db
 from app.schemas.market import (
@@ -30,6 +32,18 @@ from app.services.market_service import (
 )
 
 router = APIRouter()
+
+
+@router.get("/company/{symbol}/logo")
+def company_logo(symbol: str, request: Request, db: Session = Depends(get_db)):
+    mark = db.get(CompanyMark, symbol.upper())
+    if not mark or not mark.content or mark.status != "available":
+        raise HTTPException(404, "No sourced company icon is stored")
+    headers = {"Cache-Control": "public, max-age=86400", "ETag": f'"{mark.sha256}"',
+        "X-Content-Type-Options": "nosniff"}
+    if request.headers.get("if-none-match") == headers["ETag"]:
+        return Response(status_code=304, headers=headers)
+    return Response(mark.content, media_type="image/png", headers=headers)
 
 
 @router.get("/freshness", response_model=MarketFreshnessResponse)
@@ -101,6 +115,15 @@ def companies(
     db: Session = Depends(get_db),
 ):
     return search_companies(db, q, limit)
+
+
+@router.get("/trends")
+def trends(symbols: str, db: Session = Depends(get_db)):
+    from app.services.market_trends import recent_closes
+    selected = sorted({part.strip().upper() for part in symbols.split(",") if part.strip()})
+    if len(selected) > 30:
+        raise HTTPException(422, "At most 30 symbols per trend request")
+    return recent_closes(db, selected)
 
 
 @router.get("/company/{symbol}", response_model=CompanyDetailResponse)

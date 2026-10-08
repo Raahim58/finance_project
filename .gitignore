@@ -27,3 +27,5 @@ storage/
 apps/api/storage/
 data/
 images/
+.next-ui-preview/
+.next-*/

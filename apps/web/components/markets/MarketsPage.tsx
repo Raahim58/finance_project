@@ -10,7 +10,7 @@ import { chartRanges, closePoints, indexLatest, sliceRange, timeAgo, yearExtreme
 import type { Resource } from "@/components/overview/useOverviewData";
 import { CompanyLogo } from "./CompanyLogo";
 import { IndexChart } from "./IndexChart";
-import { CompanyTrend } from "./Sparkline";
+import { SparkPath } from "./Sparkline";
 import { useMarketsData } from "./useMarketsData";
 import { MarketCatalog, type MarketView } from "./MarketCatalog";
 import { MarketRail } from "./MarketRail";
@@ -113,14 +113,14 @@ function MoversPanels({ data, bySymbol, query, setQuery }: { data: Data; bySymbo
   return <section className={styles.movers} aria-label="Movers">
     <div className={styles.moversBar}><h2>Movers</h2><SearchBox companies={data.companies.data ?? []} query={query} setQuery={setQuery} /></div>
     <div className={styles.moverGrid}>
-      <MoverTable title={side === "top_gainers" ? "Top gainers" : "Top losers"} rows={market?.[side] ?? []} bySymbol={bySymbol} resource={data.market}
+      <MoverTable title={side === "top_gainers" ? "Top gainers" : "Top losers"} rows={market?.[side] ?? []} bySymbol={bySymbol} resource={data.market} trends={data.trends}
         toggle={<div className={styles.toggle}>{([["top_gainers", "Gainers"], ["top_losers", "Losers"]] as const).map(([key, label]) => <button key={key} aria-pressed={side === key} onClick={() => setSide(key)}>{label}</button>)}</div>} />
-      <MoverTable title="Top by volume" rows={market?.top_volume ?? []} bySymbol={bySymbol} resource={data.market} />
+      <MoverTable title="Top by volume" rows={market?.top_volume ?? []} bySymbol={bySymbol} resource={data.market} trends={data.trends} />
     </div>
   </section>;
 }
 
-function MoverTable({ title, rows, bySymbol, resource, toggle }: { title: string; rows: MarketPrice[]; bySymbol: Map<string, Company>; resource: Resource<unknown>; toggle?: React.ReactNode }) {
+function MoverTable({ title, rows, bySymbol, resource, toggle, trends }: { trends: Record<string, number[]>; title: string; rows: MarketPrice[]; bySymbol: Map<string, Company>; resource: Resource<unknown>; toggle?: React.ReactNode }) {
   return <div className={styles.table}>
     <div className={styles.tableHead}><h3>{title}</h3>{toggle}</div>
     {rows.length ? <table><thead><tr><th>#</th><th>Symbol</th><th>Price</th><th>Day %</th><th>Volume</th><th>30D trend</th></tr></thead>
@@ -128,7 +128,7 @@ function MoverTable({ title, rows, bySymbol, resource, toggle }: { title: string
         <td>{index + 1}</td>
         <td><Link href={`/companies/${row.symbol}` as never} className={styles.symbol}><CompanyLogo symbol={row.symbol} website={bySymbol.get(row.symbol)?.official_website} /><b>{row.symbol}</b></Link></td>
         <td>{formatNumber(row.close)}</td><td className={tone(row.change_percent)}>{formatPercent(row.change_percent)}</td><td>{formatNumber(row.volume, 1, true)}</td>
-        <td><CompanyTrend symbol={row.symbol} /></td></tr>)}</tbody></table> : <Note resource={resource} empty={`${title} unavailable.`} />}
+        <td><SparkPath values={trends[row.symbol] ?? []} /></td></tr>)}</tbody></table> : <Note resource={resource} empty={`${title} unavailable.`} />}
   </div>;
 }
 
