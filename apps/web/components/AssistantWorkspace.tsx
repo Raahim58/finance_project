@@ -380,6 +380,7 @@ export function AssistantWorkspaceProvider({
             instrument_id: company?.id,
             symbol: company?.symbol,
             company_name: company?.name,
+            explicit_scope: !symbol && (fullPage || explicitCompanyScope || Boolean(portfolioId)),
           });
           setContextReady(!requestedPortfolioId || !!portfolio);
           if (symbol && !company) setContextReady(false);

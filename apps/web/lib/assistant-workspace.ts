@@ -2,6 +2,7 @@ import { API_BASE_URL, getToken, request } from "@/lib/api/client";
 import type { AssistantResult } from "@/lib/api";
 export type MessageContext = {
   page: "workspace" | "company" | "portfolio";
+  explicit_scope?: boolean;
   instrument_id?: string | null;
   symbol?: string | null;
   company_name?: string | null;
@@ -88,12 +89,12 @@ export const submitRun = (
       question,
       client_request_id: clientRequestId,
       provider,
-      page_context: {
+      ...(context.explicit_scope ? {portfolio_id:context.portfolio_id??null,instrument_id:context.instrument_id??null,company_only:!context.portfolio_id} : {page_context: {
         page: context.page,
         instrument_id: context.instrument_id ?? null,
         portfolio_id:
           context.page === "portfolio" ? context.portfolio_id : null,
-      },
+      }}),
     }),
   });
 export const stopRun = (id: string) =>

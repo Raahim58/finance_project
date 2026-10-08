@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => ({
   keys: vi.fn(),
   updatePreferences: vi.fn(),
 }));
-vi.mock("next/navigation", () => ({ usePathname: () => mocks.path }));
+vi.mock("next/navigation", () => ({ usePathname: () => mocks.path, useRouter: () => ({push:vi.fn(),replace:vi.fn()}) }));
 vi.mock("@/lib/api", () => ({
   getToken: () => mocks.token,
   getPortfolios: mocks.portfolios,
