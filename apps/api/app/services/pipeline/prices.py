@@ -2,6 +2,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 import json
+import re
 from bs4 import BeautifulSoup
 from sqlalchemy import select
 from app.models.workstation import Instrument, MarketObservation
@@ -40,6 +41,32 @@ def parse_market_watch(html):
     return quotes
 
 
+def parse_live_indices(html):
+    """Published trading-panel levels/change/volume/value, not invented OHLC."""
+    output = []; seen = set()
+    for tr in BeautifulSoup(html, 'html.parser').find_all('tr'):
+        cells = tr.find_all('td')
+        if len(cells) != 7: continue
+        values = [c.get_text(' ', strip=True) for c in cells]
+        symbol = values[0]
+        if symbol not in ('KSE100', 'KSE100PR') or symbol in seen: continue
+        match = re.fullmatch(r'([+-]?[\d,]+(?:\.\d+)?)\s*\(([+-]?[\d,]+(?:\.\d+)?)%\)', values[4])
+        if not match: continue
+        try:
+            close, high, low = [Decimal(v.replace(',', '')) for v in values[1:4]]
+            change, percent = [Decimal(v.replace(',', '')) for v in match.groups()]
+            volume = int(values[5].replace(',', '')); value = Decimal(values[6].replace(',', ''))
+            if 'change__text--neg' in cells[4].get('class', []):
+                change, percent = -abs(change), -abs(percent)
+        except (InvalidOperation, ValueError): continue
+        if not all(v.is_finite() for v in (close, high, low, change, percent, value)): continue
+        if close <= 0 or not low <= close <= high or volume < 0 or value < 0: continue
+        output.append({'symbol': symbol, 'close': str(close), 'high': str(high), 'low': str(low),
+                       'change': str(change), 'change_percent': str(percent), 'volume': volume, 'value': str(value)})
+        seen.add(symbol)
+    return output
+
+
 def refresh(db, *, now=None,symbols=None):
     now=now or datetime.now(UTC)
     bucket,basis=price_bucket(db,now)
@@ -55,6 +82,22 @@ def refresh(db, *, now=None,symbols=None):
     rows=parse_market_watch(response.text)
     publisher=source(db,'PSX DPS market watch','market','https://dps.psx.com.pk',10,120,
         'Regular intraday quote snapshot. Time basis is retrieval time where no source timestamp exists.')
+    publisher.freshness_sla_minutes = 120
+    index_source = source(db, 'PSX DPS trading panel', 'market', 'https://dps.psx.com.pk', 10, 120,
+        'Published index snapshot during an open regular session; observation timestamp is retrieval time.')
+    index_source.freshness_sla_minutes = 120
+    panel_artifact = store_artifact(db, index_source, panel.content, url=str(panel.url), method='GET',
+        parser_version='dps-trading-panel-v1', content_type='text/html', effective_at=now)
+    indices = parse_live_indices(panel.text)
+    for row in indices:
+        instrument = db.scalar(select(Instrument).where(Instrument.symbol == row['symbol']))
+        if instrument is None: continue
+        if db.scalar(select(MarketObservation.id).where(MarketObservation.instrument_id == instrument.id,
+            MarketObservation.frequency == 'index_intraday', MarketObservation.effective_at == now,
+            MarketObservation.artifact_id == panel_artifact.id)): continue
+        db.add(MarketObservation(instrument_id=instrument.id, artifact_id=panel_artifact.id,
+            effective_at=now, frequency='index_intraday', values_json=json.dumps(row),
+            unit='index_points', adjustment_state='unadjusted', is_selected=True))
     store_artifact(db,publisher,universe_response.content,url=str(universe_response.url),method='GET',
         parser_version=provider.parser_version,content_type='application/json',effective_at=now)
     from app.services.market_ingestion import sync_observed_dps_universe
@@ -87,7 +130,7 @@ def refresh(db, *, now=None,symbols=None):
             scope='reports:'+inst.symbol
             if scope not in scopes:
                 db.add(SourceTarget(data_source_id=numeric.id,instrument_id=inst.id,scope_key=scope,adapter_key='reports',schedule='announcements',enabled=True))
-    db.flush();return {'status':'completed' ,'quotes':count,'timestamp_basis':'retrieved_at','calendar_basis':basis}
+    db.flush();return {'status':'completed' ,'quotes':count,'indices':len(indices),'timestamp_basis':'retrieved_at','calendar_basis':basis}
 
 
 def regular_market_state(html):

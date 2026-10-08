@@ -9,6 +9,7 @@ NEWS_HOURS=(10,14,21)
 # https://www.psx.com.pk/psx/exchange/general/trading-hours (verified 2026-10-06).
 REGULAR=(('09:32','15:30'),)
 FRIDAY=(('09:17','12:00'),('14:32','16:30'))
+PRICE_INTERVAL_MINUTES = 60
 
 def session_windows(db, day):
     explicit=db.scalar(select(ExchangeCalendarDay).where(ExchangeCalendarDay.exchange_code=='PSX',ExchangeCalendarDay.session_date==day))
@@ -29,7 +30,7 @@ def price_bucket(db,now):
         start=datetime.combine(local.date(),time.fromisoformat(opened),tzinfo=KARACHI)
         end=datetime.combine(local.date(),time.fromisoformat(closed),tzinfo=KARACHI)
         if start<=local<end:
-            bucket=start+timedelta(hours=int((local-start).total_seconds()//3600))
+            bucket=start+timedelta(minutes=PRICE_INTERVAL_MINUTES*int((local-start).total_seconds()//(PRICE_INTERVAL_MINUTES*60)))
             return bucket.isoformat(),basis
     return None,basis
 

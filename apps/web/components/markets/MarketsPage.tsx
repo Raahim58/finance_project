@@ -62,7 +62,7 @@ export function MarketsPage() {
         <MoversPanels data={data} bySymbol={bySymbol} query={query} setQuery={setQuery} />
         <SectorSummary resource={data.market} onViewAll={() => setView("sectors")} />
       </> : null}
-      <p className={styles.source}>{fresh?.latest_used_provider ?? fresh?.latest_source ?? snapshot?.source ?? "Source unavailable"} · prices as of {formatDate(session?.trade_date ?? fresh?.latest_trade_date ?? snapshot?.snapshot_date)} · refreshes every minute</p>
+      <p className={styles.source}>{fresh?.latest_used_provider ?? fresh?.latest_source ?? snapshot?.source ?? "Source unavailable"} · prices as of {formatDate(session?.trade_date ?? fresh?.latest_trade_date ?? snapshot?.snapshot_date)} · refreshes hourly</p>
     </div>
     <MarketBrief events={data.events} changes={changeBySymbol} />
   </div>;

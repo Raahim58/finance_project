@@ -127,6 +127,30 @@ def resolve_market_date(db: Session, requested_date: date | None) -> date:
 
 def get_market_snapshot(db: Session, requested_date: date | None = None) -> MarketSnapshotResponse | None:
     trade_date = resolve_market_date(db, requested_date)
+    from app.models.workstation import DataSource, Instrument, MarketObservation, SourceArtifact
+    import json
+    start = datetime.combine(trade_date, time.min, tzinfo=ZoneInfo('Asia/Karachi'))
+    index_query = select(MarketObservation, SourceArtifact, DataSource).join(
+        Instrument, Instrument.id == MarketObservation.instrument_id).join(
+        SourceArtifact, SourceArtifact.id == MarketObservation.artifact_id).join(
+        DataSource, DataSource.id == SourceArtifact.data_source_id).where(
+        Instrument.symbol == 'KSE100', MarketObservation.frequency == 'index_intraday',
+        MarketObservation.is_selected.is_(True), MarketObservation.effective_at >= start,
+        MarketObservation.effective_at < start + timedelta(days=1),
+        DataSource.name == 'PSX DPS trading panel')
+    live_index = db.execute(index_query.order_by(MarketObservation.effective_at.desc()).limit(1)).first()
+    from app.services.market_session import resolve_session
+    session = resolve_session(db)
+    # Once a newer daily close is available it supersedes earlier intraday levels.
+    if live_index and session and session.basis == 'intraday':
+        observation, artifact, publisher = live_index
+        values = json.loads(observation.values_json)
+        return MarketSnapshotResponse(snapshot_date=trade_date, index_name='KSE-100',
+            index_value=Decimal(values['close']), index_change=Decimal(values['change']),
+            index_change_percent=Decimal(values['change_percent']), total_volume=values['volume'],
+            total_value=Decimal(values['value']), source=publisher.name, source_url=artifact.source_url,
+            ingested_at=observation.effective_at,
+            totals_note='Published index-session volume and value from the PSX trading panel. Chart history uses daily closes.')
     statement = select(MarketSnapshot).where(MarketSnapshot.snapshot_date == trade_date)
     if not settings.is_synthetic_environment:
         statement = statement.where(func.lower(MarketSnapshot.source) != "mock")

@@ -46,7 +46,7 @@ export function useMarketsData() {
       refreshing = false;
     };
     const visible = () => { if (!document.hidden) void refresh(); };
-    const timer = setInterval(() => void refresh(), 60_000);
+    const timer = setInterval(() => void refresh(), 3_600_000);
     document.addEventListener("visibilitychange", visible);
     return () => { active = false; clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
   }, [revision]);
