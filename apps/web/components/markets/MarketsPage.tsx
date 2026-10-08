@@ -4,20 +4,19 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Icon } from "@/components/Icon";
 import type { Company, MarketPrice, SectorDailyStats } from "@/lib/api";
-import type { ResearchEventView } from "@/lib/api/research";
 import { clearApiCache } from "@/lib/api";
-import { formatDate, formatNumber, formatPercent, humanize, numeric } from "@/lib/overview";
+import { formatDate, formatNumber, formatPercent, numeric } from "@/lib/overview";
 import { chartRanges, closePoints, indexLatest, sliceRange, timeAgo, yearExtremes, type ChartRange } from "@/lib/markets";
 import type { Resource } from "@/components/overview/useOverviewData";
 import { CompanyLogo } from "./CompanyLogo";
 import { IndexChart } from "./IndexChart";
 import { CompanyTrend } from "./Sparkline";
 import { useMarketsData } from "./useMarketsData";
+import { MarketCatalog, type MarketView } from "./MarketCatalog";
+import { MarketRail } from "./MarketRail";
 import styles from "./markets.module.css";
 
 type Data = ReturnType<typeof useMarketsData>;
-type View = "index" | "stocks" | "sectors";
-const views: Array<[View, string]> = [["index", "KSE-100"], ["stocks", "All stocks"], ["sectors", "Sectors"]];
 const tone = (value: unknown) => { const n = numeric(value); return n == null || n === 0 ? "" : n > 0 ? styles.positive : styles.negative; };
 const signed = (value: unknown, digits = 2) => { const n = numeric(value); return n == null ? "—" : `${n > 0 ? "+" : ""}${formatNumber(n, digits)}`; };
 
@@ -29,7 +28,7 @@ function Note({ resource, empty }: { resource: Resource<unknown>; empty: string 
 
 export function MarketsPage() {
   const data = useMarketsData();
-  const [view, setView] = useState<View>("index");
+  const [view, setView] = useState<MarketView>("index");
   const [query, setQuery] = useState("");
   const snapshot = data.market.data?.snapshot;
   const fresh = data.freshness.data;
@@ -40,13 +39,15 @@ export function MarketsPage() {
   const changeBySymbol = useMemo(() => new Map((session?.prices ?? [...(session?.top_gainers ?? []), ...(session?.top_losers ?? []), ...(session?.top_volume ?? [])]).map(row => [row.symbol, row.change_percent])), [session]);
   const failed = [data.market, data.freshness, data.events, data.history, data.companies].some(resource => resource.status === "error");
   return <div className={styles.page}>
+    <MarketCatalog view={view} select={setView} market={session ?? null} freshness={fresh} companies={data.companies.data ?? []} />
     <div className={styles.main}>
+      <div className={styles.viewHeader}><h1>{view === "index" ? "KSE-100" : view === "stocks" ? "All stocks" : "Sectors"}</h1>
+        <button className={styles.refresh} onClick={() => { clearApiCache(); data.reload(); }}><Icon name="clock" size={14} />Refresh view</button></div>
       <p className={styles.dateline}>
         <span>{(session?.trade_date ?? fresh?.latest_trade_date ?? latest?.date) ? new Date(`${session?.trade_date ?? fresh?.latest_trade_date ?? latest?.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : "Date unavailable"}</span>
         <span>{fresh ? `Market ${fresh.exchange_session_status === "unknown" ? "session unknown" : fresh.exchange_session_status}` : "Session unavailable"}</span>
         {latest?.percent != null ? <span>{latest.name} <b className={tone(latest.percent)}>{formatPercent(latest.percent)}</b></span> : null}
       </p>
-      <h1 className={styles.title}>Markets</h1>
       {session?.trade_date ? <p className={styles.source} role="status">
         {session.price_basis === "intraday" ? "Observed intraday quotes" : "Latest daily session"} · {formatDate(session.trade_date)} · {session.priced_securities} securities
         {session.observed_at ? ` · Retrieved ${timeAgo(session.observed_at)}` : ""}
@@ -56,7 +57,6 @@ export function MarketsPage() {
       {fresh?.market_data_mode === "mock" || fresh?.is_stale || fresh?.provider_mode_warning || fresh?.ingestion_staleness_warning ? <div className={styles.notice} role="status"><Icon name="warning" size={15} />
         <span>{fresh.market_data_mode === "mock" ? "Demo market data" : "Market data needs review"}{[fresh.provider_mode_warning, fresh.ingestion_staleness_warning, fresh.stale_warning].filter(Boolean).slice(0, 1).map(text => ` · ${text}`)}</span></div> : null}
       {failed ? <div className={styles.notice} role="status"><span>Some sections could not be loaded. Available data is shown below.</span><button onClick={() => { clearApiCache(); data.reload(); }}>Retry</button></div> : null}
-      <nav className={styles.tabs} aria-label="Market views">{views.map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => setView(key)}>{label}</button>)}</nav>
       {view === "index" ? <IndexPanel data={data} /> : view === "stocks" ? <StocksPanel companies={data.companies} query={query} setQuery={setQuery} changes={changeBySymbol} prices={prices} /> : <SectorsPanel resource={data.market} />}
       {view === "index" ? <>
         <MoversPanels data={data} bySymbol={bySymbol} query={query} setQuery={setQuery} />
@@ -64,7 +64,7 @@ export function MarketsPage() {
       </> : null}
       <p className={styles.source}>{fresh?.latest_used_provider ?? fresh?.latest_source ?? snapshot?.source ?? "Source unavailable"} · prices as of {formatDate(session?.trade_date ?? fresh?.latest_trade_date ?? snapshot?.snapshot_date)} · refreshes hourly</p>
     </div>
-    <MarketBrief events={data.events} changes={changeBySymbol} />
+    <MarketRail market={session ?? null} events={data.events.data ?? []} loading={data.events.status === "loading"} />
   </div>;
 }
 
@@ -72,18 +72,21 @@ function IndexPanel({ data }: { data: Data }) {
   const [range, setRange] = useState<ChartRange>("1M");
   const snapshot = data.market.data?.snapshot;
   const all = useMemo(() => closePoints(data.history.data ?? []), [data.history.data]);
-  const shown = useMemo(() => sliceRange(all, range), [all, range]);
+  const livePoint = snapshot && data.market.data?.price_basis === "intraday" && numeric(snapshot.index_value) != null
+    ? { date: snapshot.snapshot_date, close: Number(snapshot.index_value) } : null;
+  const shown = useMemo(() => sliceRange(livePoint ? [...all.filter(point => point.date < livePoint.date), livePoint] : all, range), [all, range, livePoint?.date, livePoint?.close]);
   const extremes = useMemo(() => yearExtremes(all), [all]);
   const latest = useMemo(() => indexLatest(data.history.data ?? [], snapshot), [data.history.data, snapshot]);
   if (!latest) return <section className={styles.hero}><Note resource={data.history.status === "ready" ? data.market : data.history} empty="KSE-100 data unavailable." /></section>;
   const previous = latest.level != null && latest.change != null ? latest.level - latest.change : null;
   return <section className={styles.hero} aria-label={`${latest.name} performance`}>
     <div className={styles.heroTop}>
-      <div><h2>{latest.name}</h2><strong className={styles.level}>{formatNumber(latest.level)}</strong>
-        <p className={`${styles.change} ${tone(latest.percent)}`}>{signed(latest.change)} &nbsp;{formatPercent(latest.percent)} <span>{latest.derived ? `latest stored close · ${formatDate(latest.date)}` : "latest session"}</span></p></div>
+      <div><span className={styles.muted}>Index level</span><strong className={styles.level}>{formatNumber(latest.level)}</strong>
+        <p className={`${styles.change} ${tone(latest.percent)}`}>{signed(latest.change)} &nbsp;{formatPercent(latest.percent)} <span>{livePoint ? "observed session" : `stored close · ${formatDate(latest.date)}`}</span></p></div>
       <div className={styles.ranges} role="group" aria-label="Chart range">{chartRanges.map(([label]) => <button key={label} aria-pressed={range === label} onClick={() => setRange(label)}>{label}</button>)}</div>
     </div>
-    {data.history.status === "ready" ? <IndexChart points={shown} name={latest.name} /> : <Note resource={data.history} empty="Index history unavailable." />}
+    {data.history.status === "ready" ? <IndexChart points={shown} name={latest.name} liveDate={livePoint?.date} /> : <Note resource={data.history} empty="Index history unavailable." />}
+    {livePoint ? <p className={styles.chartCaption}>Daily closes with the latest observed index level at the final point.</p> : null}
     <dl className={styles.stats}>
       <Stat label="Previous close" value={formatNumber(previous)} />
       <Stat label="52W high (close)" value={formatNumber(extremes?.high.close)} />
@@ -155,34 +158,16 @@ function SectorsPanel({ resource }: { resource: Resource<{ sectors: SectorDailyS
 }
 
 function StocksPanel({ companies, query, setQuery, changes, prices }: { companies: Resource<Company[]>; query: string; setQuery: (value: string) => void; changes: Map<string, string>; prices: Map<string, MarketPrice> }) {
+  const [visible, setVisible] = useState(100);
   const needle = query.trim().toLowerCase();
   const rows = (companies.data ?? []).filter(company => !needle || company.symbol.toLowerCase().includes(needle) || company.name.toLowerCase().includes(needle) || company.sector.toLowerCase().includes(needle));
   return <section className={styles.sectors}>
     <div className={styles.moversBar}><h2>{rows.length} companies</h2>
       <div className={styles.search}><Icon name="search" size={15} /><input aria-label="Filter stocks" placeholder="Filter by symbol, name or sector…" value={query} onChange={event => setQuery(event.target.value)} /></div></div>
     {rows.length ? <div className={styles.directory}><table><thead><tr><th>Symbol</th><th>Company</th><th>Sector</th><th>Price (PKR)</th><th>Day %</th><th>Volume</th><th>Quote date</th></tr></thead>
-      <tbody>{rows.slice(0, 200).map(company => <tr key={company.symbol}>
+      <tbody>{rows.slice(0, visible).map(company => <tr key={company.symbol}>
         <td><Link href={`/companies/${company.symbol}` as never} className={styles.symbol}><CompanyLogo symbol={company.symbol} website={company.official_website} /><b>{company.symbol}</b></Link></td>
         <td>{company.name}</td><td>{company.sector}</td><td>{formatNumber(prices.get(company.symbol)?.close)}</td><td className={tone(changes.get(company.symbol))}>{changes.has(company.symbol) ? formatPercent(changes.get(company.symbol)) : "—"}</td><td>{formatNumber(prices.get(company.symbol)?.volume, 1, true)}</td><td>{prices.has(company.symbol) ? formatDate(prices.get(company.symbol)?.trade_date) : "—"}</td></tr>)}</tbody></table>
-      {rows.length > 200 ? <p className={styles.source}>Showing 200 of {rows.length}; refine the filter to narrow.</p> : null}</div> : <Note resource={companies} empty={needle ? `No active company matches “${query}”.` : "No active companies are available."} />}
+      {rows.length > visible ? <button className={styles.loadMore} onClick={() => setVisible(value => value + 100)}>Show more companies · {Math.min(visible, rows.length)} of {rows.length}</button> : null}</div> : <Note resource={companies} empty={needle ? `No active company matches “${query}”.` : "No active companies are available."} />}
   </section>;
-}
-
-function MarketBrief({ events, changes }: { events: Resource<ResearchEventView[]>; changes: Map<string, string> }) {
-  const rows = events.data ?? [];
-  const [lead, ...rest] = rows;
-  const snippet = (event: ResearchEventView) => { const text = event.evidence[0]?.text?.replace(/\s+/g, " ").trim(); return text ? (text.length > 190 ? `${text.slice(0, 187)}…` : text) : null; };
-  return <aside className={styles.rail} aria-label="Market brief">
-    <div className={styles.railHead}><h2>Market brief</h2><Link href={"/research" as never}>View all <span aria-hidden="true">→</span></Link></div>
-    {lead ? <>
-      <h3 className={styles.lead}>{lead.title}</h3>
-      {snippet(lead) ? <p className={styles.leadText}>{snippet(lead)}</p> : null}
-      <p className={styles.time}>{timeAgo(lead.occurred_at)} · {humanize(lead.event_type)}{lead.evidence[0]?.source_name ? ` · ${lead.evidence[0].source_name}` : ""}</p>
-      <div className={styles.items}>{rest.slice(0, 6).map(event => <article key={event.event_key}>
-        <div><h4>{event.title}</h4><span className={`${styles.badge} ${event.materiality === "high" ? styles.badgeHigh : ""}`}>{humanize(event.materiality)}</span></div>
-        {snippet(event) ? <p>{snippet(event)}</p> : null}
-        <p className={styles.meta}><span>{timeAgo(event.occurred_at)}</span><span>{humanize(event.source_document_type)}</span>
-          {event.subjects.slice(0, 3).map(subject => <Link key={subject.subject_key} href={`/companies/${subject.subject_key}` as never}>{subject.subject_key}{changes.has(subject.subject_key) ? <b className={tone(changes.get(subject.subject_key))}> {formatPercent(changes.get(subject.subject_key))}</b> : null}</Link>)}</p>
-      </article>)}</div></> : <Note resource={events} empty="No dated market events are stored yet." />}
-  </aside>;
 }

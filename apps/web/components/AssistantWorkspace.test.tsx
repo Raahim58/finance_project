@@ -33,7 +33,8 @@ vi.mock("@/lib/api", () => ({
   getLLMKeys: mocks.keys,
   updatePreferences: mocks.updatePreferences,
 }));
-vi.mock("@/lib/assistant-workspace", () => ({
+vi.mock("@/lib/assistant-workspace", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/assistant-workspace")>(),
   listChats: mocks.list,
   getHistory: mocks.history,
   submitRun: mocks.submit,

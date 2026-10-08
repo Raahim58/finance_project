@@ -1,20 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { AssistantWorkspaceProvider } from "@/components/AssistantWorkspace";
+import { AssistantWorkspaceProvider, useAssistantWorkspace } from "@/components/AssistantWorkspace";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Icon, IconName } from "@/components/Icon";
-import overviewStyles from "@/components/overview/overview.module.css";
+import { PortfolioContextPicker } from "@/components/PortfolioContextPicker";
 
 type NavEntry = [string, string, IconName];
 
 const groups: Array<{ label: string; items: NavEntry[] }> = [
-  { label: "Workspace", items: [["Overview", "/dashboard", "grid"]] },
+  { label: "Workspace", items: [["Today", "/dashboard", "grid"]] },
   { label: "Investment", items: [
-    ["Portfolios", "/portfolios", "briefcase"],
     ["Markets", "/markets", "market"],
-    ["Research", "/research", "search"],
+    ["Portfolios", "/portfolios", "briefcase"],
+    ["Research", "/research", "document"],
   ] },
   { label: "Oversight", items: [
     ["Recommendations", "/recommendations", "lightbulb"],
@@ -35,10 +35,15 @@ function NavItem({ item, pathname }: { item: NavEntry; pathname: string }) {
   const active = isActive(pathname, href);
   return (
     <Link href={href as never} aria-current={active ? "page" : undefined} title={label} className="nav-item">
-      <Icon name={icon} size={17} />
+      <span className="rail-icon"><Icon name={icon} size={20} /></span>
       <span className="sidebar-label">{label}</span>
     </Link>
   );
+}
+
+function ChatNavigation() {
+  const workspace = useAssistantWorkspace();
+  return <button className="nav-item" onClick={() => workspace?.open()}><span className="rail-icon"><Icon name="assistant" size={20} /></span><span className="sidebar-label">Chat</span></button>;
 }
 
 function currentScope(pathname: string) {
@@ -99,9 +104,6 @@ function MobileNavDrawer({ pathname, onClose }: { pathname: string; onClose: () 
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const overview = pathname === "/dashboard";
-  const editorial = overview || pathname === "/market" || pathname.startsWith("/portfolios");
-  const navigationGroups = overview ? groups.map(group => group.label === "Investment" ? { ...group, items: [group.items[1], group.items[0], group.items[2]] } : group) : groups;
   const publicRoute = pathname === "/" || pathname === "/login" || pathname === "/signup" || pathname === "/onboarding";
   const [menuOpen, setMenuOpen] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
@@ -110,27 +112,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (publicRoute) return <>{children}</>;
 
   return (
-    <AssistantWorkspaceProvider><div className={`app-shell ${editorial ? overviewStyles.overviewShell : ""}`}>
+    <AssistantWorkspaceProvider><div className="app-shell workstation-shell" data-workspace={pathname === "/market" || pathname === "/markets" ? "markets" : "default"}>
       <aside className="app-sidebar" aria-label="Primary navigation">
-        <Link href="/dashboard" className="flex h-[76px] w-full items-center gap-3 px-5 max-lg:justify-center max-lg:px-0">
-          {editorial ? <span className={overviewStyles.wordmark}>RAAHIM</span> : <><span className="brand-mark">PX</span>
-          <span className="sidebar-wordmark min-w-0">
-            <strong className="block text-[13px] font-semibold tracking-[-.01em]">PSX Workstation</strong>
-            <span className="block text-[11px] text-muted">Portfolio intelligence</span>
-          </span></>}
-        </Link>
-        <div className="flex-1 overflow-y-auto pb-5 max-md:flex max-md:items-center max-md:overflow-x-auto max-md:pb-0">
-          {navigationGroups.map(group => (
+        <Link href="/dashboard" className="workstation-brand" aria-label="RAAHIM home">R</Link>
+        <nav className="rail-navigation" aria-label="Workspace navigation">
+          {groups.filter(group => group.label !== "System").map(group => (
             <div key={group.label}>
-              <p className="nav-section sidebar-section">{group.label}</p>
-              {group.items.map(item => <NavItem key={item[1]} item={item} pathname={pathname} />)}
+              {group.items.filter(([label]) => !["Recommendations", "Activity"].includes(label)).map(item => <NavItem key={item[1]} item={item} pathname={pathname} />)}
             </div>
           ))}
-        </div>
-        <div className="sidebar-footer-copy mx-4 mb-4 rounded-lg bg-surface p-3 text-[11px] leading-5 text-muted">
-          <strong className="block font-semibold text-ink">Decision support only</strong>
-          No broker connection or trade execution
-        </div>
+          <ChatNavigation />
+          <details className="rail-more"><summary className="nav-item"><span className="rail-icon"><Icon name="more" size={20} /></span><span className="sidebar-label">More</span></summary><nav aria-label="More workspace pages" className="rail-more-menu">
+            {groups.flatMap(group => group.items).filter(([label]) => ["Recommendations", "Activity"].includes(label)).map(item => <NavItem key={item[1]} item={item} pathname={pathname} />)}
+          </nav></details>
+        </nav>
+        <div className="rail-bottom"><NavItem item={["Settings", "/settings", "settings"]} pathname={pathname} /></div>
       </aside>
       <div className="app-main">
         <header className="app-topbar">
@@ -139,16 +135,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Icon name="menu" />
             </button>
             <span className="truncate text-[12px] font-semibold text-ink">{currentScope(pathname)}</span>
-            <span className="desktop-only h-4 w-px bg-line" />
-            <span className="desktop-only flex items-center gap-2 text-[11px] text-muted">
-              <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-              Source and freshness labels active
-            </span>
           </div>
           <div className="flex items-center gap-1">
+            <PortfolioContextPicker />
             <Link className="icon-btn" title="Search evidence" aria-label="Search evidence" href={"/research" as never}><Icon name="search" /></Link>
             <Link className="icon-btn" title="Open monitoring" aria-label="Open monitoring" href={"/monitoring" as never}><Icon name="bell" /></Link>
-            <Link className="ml-1 hidden h-8 items-center border-l border-line pl-4 text-[12px] font-semibold sm:flex" href={"/settings" as never}>Investor desk</Link>
+            <Link className="icon-btn" aria-label="Account settings" href={"/settings" as never}><Icon name="settings" /></Link>
           </div>
         </header>
         <main>{children}</main>

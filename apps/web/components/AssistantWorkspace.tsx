@@ -90,6 +90,12 @@ export function AssistantWorkspaceProvider({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const [scopeRevision, setScopeRevision] = useState(0);
+  useEffect(() => {
+    const changed = () => setScopeRevision(value => value + 1);
+    window.addEventListener("psx-portfolio-change", changed);
+    return () => window.removeEventListener("psx-portfolio-change", changed);
+  }, []);
   const [account, setAccount] = useState<string | null>(null);
   const [opened, setOpened] = useState(false),
     [expanded, setExpanded] = useState(false),
@@ -366,7 +372,7 @@ export function AssistantWorkspaceProvider({
     return () => {
       valid = false;
     };
-  }, [pathname, account, opened]);
+  }, [pathname, account, opened, scopeRevision]);
   useEffect(() => {
     if (selected)
       void loadHistory(selected)

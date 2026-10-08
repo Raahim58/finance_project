@@ -3,27 +3,28 @@
 @tailwind utilities;
 
 :root {
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
   color-scheme: light;
-  --canvas: #f7f7f4;
+  --canvas: #ffffff;
   --paper: #ffffff;
   --surface: #f1f2ef;
   --surface-strong: #e9ebe7;
-  --ink: #171a1d;
+  --ink: #141619;
   --ink-2: #3f454b;
-  --muted: #666c72;
+  --muted: #70757d;
   --tertiary: #8b9096;
-  --line: rgba(23, 26, 29, .075);
+  --line: #eceef1;
   --line-strong: rgba(23, 26, 29, .16);
-  --green: #126b52;
+  --green: #00875a;
   --green-hover: #0e5944;
   --green-soft: #e8f3ee;
-  --red: #b9473c;
+  --red: #d92d20;
   --red-soft: #f8ece9;
   --amber: #a86f18;
   --amber-soft: #fbf2df;
   --blue-soft: #edf2f4;
   --focus: #1f7a60;
-  --sidebar: 252px;
+  --sidebar: 80px;
   --radius-sm: 6px;
   --radius-md: 9px;
   --radius-lg: 12px;
@@ -37,7 +38,7 @@ body {
   min-width: 320px;
   background: var(--canvas);
   color: var(--ink);
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
   font-size: 14px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
@@ -380,3 +381,36 @@ body:has(select[aria-label="Activity type"]) .data-table td:nth-child(n+4):not(:
 @media(max-width:640px){.assistant-drawer,.assistant-expanded{inset:0;width:100%;height:100dvh;border:0;border-radius:0}.assistant-launcher{bottom:18px;right:16px}.assistant-composer{padding-bottom:max(16px,env(safe-area-inset-bottom))}.assistant-composer-footer>span{max-width:140px}.assistant-header .icon-btn[aria-label*="Expand"],.assistant-header .icon-btn[aria-label*="Collapse"]{display:none}}
 
 .assistant-tokens{font-size:11px;font-variant-numeric:tabular-nums;padding:6px 18px 10px;color:#617077}.assistant-tokens-total{padding:8px 18px;border-top:1px solid #dce3e7;margin-top:8px}
+
+/* Shared workstation chrome. Individual analytical pages keep their workflows. */
+.workstation-shell .app-sidebar { width:80px; background:#fff; align-items:stretch; border-color:var(--line); }
+.workstation-brand { height:60px; display:grid; place-items:center; font-size:27px; font-weight:600; letter-spacing:-.08em; color:var(--ink); }
+.rail-navigation { flex:1; width:100%; padding:3px 0; }
+.workstation-shell .app-sidebar .nav-item { flex-direction:column; justify-content:center; gap:3px; min-height:62px; width:100%; margin:0; padding:5px 3px; border:0; border-radius:0; background:transparent; color:#636870; font-size:11px; font-weight:400; text-align:center; }
+.workstation-shell .app-sidebar .sidebar-label { display:block; }
+.rail-icon { display:grid; place-items:center; width:32px; height:32px; border-radius:50%; }
+.workstation-shell .app-sidebar .nav-item:hover .rail-icon { background:#f5f6f7; }
+.workstation-shell .app-sidebar .nav-item[aria-current="page"] { color:var(--ink); font-weight:600; }
+.workstation-shell .app-sidebar .nav-item[aria-current="page"] .rail-icon { background:#f0f1f2; }
+.workstation-shell .app-sidebar .nav-item[aria-current="page"]::before { display:none; }
+.rail-bottom { padding:8px 0 14px; }
+.rail-more { position:relative; }
+.rail-more summary { list-style:none; cursor:pointer; }
+.rail-more summary::-webkit-details-marker { display:none; }
+.rail-more-menu { position:absolute; z-index:60; left:calc(100% + 6px); bottom:0; width:205px; padding:6px; border:1px solid var(--line); border-radius:8px; background:#fff; box-shadow:0 6px 20px #0000000c; }
+.workstation-shell .rail-more-menu .nav-item { flex-direction:row; justify-content:flex-start; gap:9px; min-height:42px; padding:6px 10px; font-size:13px; text-align:left; }
+.workstation-shell .app-topbar { height:46px; padding:0 22px; background:#fff; border-color:var(--line); backdrop-filter:none; }
+.workstation-shell .app-main { margin-left:80px; }
+.workstation-shell .app-main h1 { font-family:var(--font-ui); font-size:28px; font-weight:600; letter-spacing:-.035em; }
+.workstation-shell .app-main h2,.workstation-shell .app-main h3,.workstation-shell .app-main h4 { font-family:var(--font-ui); }
+.portfolio-context { position:relative; margin-right:9px; }
+.portfolio-context select { max-width:260px; width:100%; border:0; background:transparent; padding:6px 22px 6px 8px; font-size:12px; color:var(--ink); text-overflow:ellipsis; }
+.portfolio-context span { position:absolute; right:0; top:100%; width:240px; padding:10px; background:#fff; border:1px solid var(--line); font-size:12px; z-index:40; }
+.workstation-shell[data-workspace="markets"] .assistant-launcher { display:none; }
+@media(max-width:720px) {
+  .workstation-shell .app-sidebar { display:none; }
+  .workstation-shell .app-main { margin-left:0; }
+  .workstation-shell .app-topbar { padding:0 10px; }
+  .portfolio-context select { max-width:160px; font-size:11px; }
+  .workstation-shell .app-topbar .icon-btn[aria-label="Search evidence"],.workstation-shell .app-topbar .icon-btn[aria-label="Open monitoring"] { display:none; }
+}
