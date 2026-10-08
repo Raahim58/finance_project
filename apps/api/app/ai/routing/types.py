@@ -41,6 +41,7 @@ class Block(str, Enum):
     MARKET_SNAPSHOT = 'market_snapshot'          # market.overview (SQL index/movers/sectors)
     MARKET_BRIEF = 'market_brief'                # research.morning_brief (commentary, never exact numbers)
     PORTFOLIO_PERFORMANCE = 'portfolio_performance'  # portfolio.performance (ledger history)
+    PORTFOLIO_EVENTS = 'portfolio_events'        # portfolio.event_exposure (events mapped to holdings)
     SECURITY_QUANT = 'security_quant'            # quant.security (per-instrument return/risk)
     # No backing tool today. Planned as explicit gaps, never invented.
     TECHNICAL_LEVELS = 'technical_levels'
@@ -50,7 +51,7 @@ class Block(str, Enum):
 
 UNAVAILABLE_BLOCKS = frozenset({Block.TECHNICAL_LEVELS, Block.ANALYST_REVISIONS, Block.EARNINGS_CALENDAR})
 PORTFOLIO_BLOCKS = frozenset({Block.PORTFOLIO_SNAPSHOT, Block.IPS_COMPLIANCE, Block.PORTFOLIO_QUANT,
-                              Block.PORTFOLIO_PERFORMANCE})
+                              Block.PORTFOLIO_PERFORMANCE, Block.PORTFOLIO_EVENTS})
 
 
 @dataclass(frozen=True)

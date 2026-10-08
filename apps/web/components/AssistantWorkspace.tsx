@@ -513,7 +513,7 @@ export function AssistantWorkspaceProvider({
     live = Object.values(runs).filter((r) => r.conversationId === selected),
     running = live.find((r) => active(r.status)),
     draft = drafts[selected ?? "new"] ?? "";
-  const marketWorkspace = pathname === "/market" || pathname === "/markets" || pathname.startsWith("/companies/") || ["/portfolios","/research","/monitoring","/recommendations","/activity"].includes(pathname) || /^\/portfolios\/[^/]+\/(overview|ips|quant|build|research|activity)$/.test(pathname);
+  const marketWorkspace = true;
   const action: WorkspaceAction = { open, setCompanyPortfolioScope, setPortfolioScope:setCompanyPortfolioScope, close: () => setOpened(false), opened, chats, selected,
     selectChat: id => { setSelected(id); setOpened(true); setShowChats(false); nearBottom.current = true; },
     newChat, moreChats: () => { if (chatCursor) void refreshChats(chatCursor); }, hasMoreChats: !!chatCursor };
@@ -522,13 +522,13 @@ export function AssistantWorkspaceProvider({
       {children}
       {!fullPage?<button
         ref={trigger}
-        className={`assistant-launcher${marketWorkspace ? " assistant-market-launcher" : ""}${marketWorkspace&&!pathname.startsWith("/companies/") ? " assistant-toolbar-launcher" : ""}`}
+        className="assistant-launcher"
         type="button"
         aria-label="Open Assistant"
         aria-expanded={opened}
         onClick={() => setOpened(!opened)}
       >
-        <span aria-hidden="true">✦</span> {marketWorkspace ? "Ask" : "Assistant"}
+        <span aria-hidden="true">✦</span> Ask
         {Object.values(runs).some((r) => active(r.status)) ? (
           <span className="assistant-running-dot" />
         ) : null}

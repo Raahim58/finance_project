@@ -19,7 +19,12 @@ export const getDataHealth=()=>request<DataHealth>("/ingestion/health");
 export const getCompanyCompleteness=(symbol:string)=>request<CompanyCompleteness>(`/ingestion/companies/${encodeURIComponent(symbol)}/completeness`);
 export function getCompanies(query?:string,options?:{signal?:AbortSignal}){const params=new URLSearchParams({limit:"1000"});if(query)params.set("q",query);return request<Company[]>(`/market/companies?${params.toString()}`,options?.signal?{signal:options.signal}:{})}
 export const getCompanyDetail=(symbol:string)=>request<CompanyDetail>(`/market/company/${encodeURIComponent(symbol)}`);
-export const getCompanyHistory=(symbol:string,limit=2000)=>request<MarketPrice[]>(`/market/company/${encodeURIComponent(symbol)}/history?limit=${encodeURIComponent(String(limit))}`);
+export function getCompanyHistory(symbol:string,limit=2000,dates?:{startDate?:string;endDate?:string}) {
+  const params=new URLSearchParams({limit:String(limit)});
+  if(dates?.startDate)params.set("start_date",dates.startDate);
+  if(dates?.endDate)params.set("end_date",dates.endDate);
+  return request<MarketPrice[]>(`/market/company/${encodeURIComponent(symbol)}/history?${params}`);
+}
 export type IndexClose={trade_date:string;close:string};
 export const getIndexHistory=(symbol:string,limit=400)=>request<IndexClose[]>(`/market/index/${encodeURIComponent(symbol)}/history?limit=${limit}`);
 

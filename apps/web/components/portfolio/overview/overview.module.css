@@ -85,3 +85,9 @@
 .table{font-size:13px;min-width:650px}.table th{font-size:12px}.table td{height:42px}.table .name{max-width:135px}.tableHead h3,.rail h3{font-size:20px;font-weight:600}
 .lead{font-size:23px;font-weight:600;line-height:1.35}.leadText{font-size:14px;line-height:1.65}.mover{grid-template-columns:24px 45px minmax(0,1fr) auto;gap:8px;font-size:12px}.mover .name{display:none}.mover>span:last-child{font-size:11px}
 @media(max-width:720px){.heading{font-size:29px!important}.ask{margin-top:0}.rail{padding:20px 18px}.mover{grid-template-columns:24px 45px 1fr auto}.table{min-width:620px}}
+
+/* Section headings share one quiet style across the left, main and right panes. */
+.rail h3, .tableHead h3, .contribution h3, .facts h3 { font-family: var(--font-ui); font-size: 15px; font-weight: 650; letter-spacing: -.01em; line-height: 1.3; color: var(--ink); }
+.rail h3 { margin: 0 0 12px; }
+.rail h4 { font-size: 13px; font-weight: 600; letter-spacing: 0; }
+.main { padding-top: 22px; }

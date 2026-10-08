@@ -161,7 +161,7 @@ def _packet_receipt(checkpoint):
     }
 
 
-PORTFOLIO_SCOPED_TOOLS = {'portfolio.summary', 'portfolio.performance', 'ips.compliance', 'quant.portfolio'}
+PORTFOLIO_SCOPED_TOOLS = {'portfolio.summary', 'portfolio.performance', 'portfolio.event_exposure', 'ips.compliance', 'quant.portfolio'}
 
 
 def _pin_selected_portfolio(call: ContentBlock, identity: dict) -> None:
@@ -186,7 +186,7 @@ def _company_tool_allowed(name: str, arguments=None) -> bool:
 
 
 CORE_TOOLS={'research.morning_brief','market.latest','research.company_sections','research.search','research.events',
-    'documents.search','portfolio.summary','ips.compliance','quant.portfolio','quant.securities','market.universe'}
+    'documents.search','portfolio.summary','portfolio.event_exposure','ips.compliance','quant.portfolio','quant.securities','market.universe'}
 
 def _catalog(company_only=False, selected=()) -> list[ProviderTool]:
     wanted=CORE_TOOLS|set(selected)
@@ -677,7 +677,7 @@ def _sync_tool(user_id: str, call: ContentBlock) -> dict[str, Any]:
         if db.bind is not None and db.bind.dialect.name == "postgresql":
             db.execute(
                 text("select set_config('statement_timeout', :timeout, true)"),
-                {"timeout": f"{definition.timeout_seconds * 1000}ms"},
+                {"timeout": f"{int(definition.timeout_seconds * settings.tool_timeout_multiplier * 1000)}ms"},
             )
         user = db.get(User, user_id)
         if user is None:
@@ -687,7 +687,7 @@ def _sync_tool(user_id: str, call: ContentBlock) -> dict[str, Any]:
 
 async def _execute_tool(user_id: str, call: ContentBlock) -> ToolExecution:
     definition = _definitions().get(call.name or "")
-    timeout_seconds = 1 if definition is None else definition.timeout_seconds
+    timeout_seconds = 1 if definition is None else definition.timeout_seconds * settings.tool_timeout_multiplier
     started = time.perf_counter()
     try:
         envelope = await asyncio.wait_for(

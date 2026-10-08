@@ -22,7 +22,11 @@ const axisName = (name: string, gap: number) => ({ name, nameLocation: "middle" 
 type Datum = { name: string; value: [number, number] };
 
 export function frontierOption(frontier: EfficientFrontier, assumptions: CapitalMarketAssumptions | null, markers: ComparePoint[], showAssets: boolean) {
-  const curve = [...frontier.points].sort((a, b) => a.volatility - b.volatility).map(point => [point.volatility, point.expected_return]);
+  // The optimizer can return several identical low-risk points; draw each coordinate once.
+  const seen = new Set<string>();
+  const curve = [...frontier.points].sort((a, b) => a.volatility - b.volatility || a.expected_return - b.expected_return)
+    .filter(point => { const key = `${point.volatility.toFixed(5)}:${point.expected_return.toFixed(5)}`; return seen.has(key) ? false : (seen.add(key), true); })
+    .map(point => [point.volatility, point.expected_return]);
   const assets: Datum[] = showAssets ? (assumptions?.securities ?? []).filter(item => item.volatility != null && item.expected_return != null).map(item => ({ name: item.symbol, value: [item.volatility as number, item.expected_return as number] })) : [];
   const tip = (p: { seriesName: string; data: { name?: string; value: number[] } }) =>
     `<b>${p.data.name || p.seriesName}</b><br/>${pct(p.data.value[1])} expected return<br/>${pct(p.data.value[0])} volatility`;

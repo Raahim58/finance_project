@@ -32,6 +32,7 @@ RISK_WORDS = re.compile(r'\brisks?\b|\bvolatil|\bbeta\b|\bsharpe\b|\bdrawdown\b|
 ALTERNATIVE_WORDS = ALTERNATIVES
 MAX_HOLDINGS_QUANT = 10
 UNIVERSE_SCREEN = ['score', 'sector_percentile', 'completeness', 'growth_flag', 'net_margin', 'liquidity']
+EVENT_WORDS = re.compile(r'\bevents?\b|\bnews\b|\bannouncements?\b|\bheadlines?\b|\bexposure\b', re.I)
 PERFORMANCE_WORDS = re.compile(r'\bgoals?\b|\bperformance\b|\breturns?\b|\bdrawdown\b|\bcagr\b|\bmeet\b', re.I)
 
 
@@ -148,7 +149,7 @@ def plan_initial_evidence(identity: dict, question: str, company_only: bool, all
         portfolio = selected
     if portfolio is None:
         for block in tuple(allowed):
-            if block in (Block.PORTFOLIO_SNAPSHOT, Block.IPS_COMPLIANCE, Block.PORTFOLIO_QUANT):
+            if block in (Block.PORTFOLIO_SNAPSHOT, Block.IPS_COMPLIANCE, Block.PORTFOLIO_QUANT, Block.PORTFOLIO_EVENTS):
                 if block in contract.required:
                     missing.append({'block': block.value, 'reason': 'no_portfolio_selected'})
                 allowed.pop(block)
@@ -189,6 +190,9 @@ def plan_initial_evidence(identity: dict, question: str, company_only: bool, all
             add(Block.IPS_COMPLIANCE, 'ips.compliance', dict(pid))
         if Block.PORTFOLIO_QUANT in allowed and not named_entities:
             add(Block.PORTFOLIO_QUANT, 'quant.portfolio', dict(pid))
+        if Block.PORTFOLIO_EVENTS in allowed:
+            add(Block.PORTFOLIO_EVENTS, 'portfolio.event_exposure', {**pid, 'limit': 8},
+                promote=bool(EVENT_WORDS.search(question)))
         wants_performance = bool(PERFORMANCE_WORDS.search(question))
         if Block.PORTFOLIO_PERFORMANCE in allowed and (wants_performance or Block.PORTFOLIO_PERFORMANCE in contract.required):
             add(Block.PORTFOLIO_PERFORMANCE, 'portfolio.performance', {**pid, 'limit': 365},

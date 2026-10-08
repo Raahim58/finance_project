@@ -581,6 +581,23 @@ def list_allocation_sets(db: Session, user: User, portfolio_id: str) -> list[All
     return [_serialize_allocation(db, row) for row in db.scalars(select(AllocationSet).where(AllocationSet.portfolio_id == portfolio.id).order_by(AllocationSet.created_at.desc()))]
 
 
+def rename_allocation_set(db: Session, user: User, portfolio_id: str, allocation_id: str, name: str) -> AllocationSetResponse:
+    """Proposal names live in the free-form assumptions record; no schema change is needed."""
+    portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    row = db.scalar(select(AllocationSet).where(AllocationSet.id == allocation_id, AllocationSet.portfolio_id == portfolio.id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Saved proposal not found")
+    cleaned = " ".join(name.split())[:80]
+    assumptions = json.loads(row.assumptions_json or "{}")
+    if cleaned:
+        assumptions["name"] = cleaned
+    else:
+        assumptions.pop("name", None)
+    row.assumptions_json = json.dumps(assumptions, sort_keys=True)
+    db.commit()
+    return _serialize_allocation(db, row)
+
+
 def get_portfolio_risk_flags(db: Session, user: User, portfolio_id: str) -> PortfolioRiskFlagsResponse:
     summary = get_portfolio_summary(db, user, portfolio_id)
     exposure = get_portfolio_exposure(db, user, portfolio_id)

@@ -2,7 +2,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import { PortfolioWorkspace } from "@/components/PortfolioWorkspace";
-import { AssistantControls } from "@/components/AssistantControls";
 import { useWorkspaceData } from "@/components/workspace/useWorkspaceData";
 import { clearApiCache, createIpsVersion, getIpsCompliance, getIpsVersions, type IpsVersion, type Compliance } from "@/lib/api";
 import { fromIps, ipsPayload, type IpsForm, blankIps } from "./ipsForm";

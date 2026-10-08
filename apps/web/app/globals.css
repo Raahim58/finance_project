@@ -406,7 +406,6 @@ body:has(select[aria-label="Activity type"]) .data-table td:nth-child(n+4):not(:
 .portfolio-context { position:relative; margin-right:9px; }
 .portfolio-context select { max-width:260px; width:100%; border:0; background:transparent; padding:6px 22px 6px 8px; font-size:12px; color:var(--ink); text-overflow:ellipsis; }
 .portfolio-context span { position:absolute; right:0; top:100%; width:240px; padding:10px; background:#fff; border:1px solid var(--line); font-size:12px; z-index:40; }
-.workstation-shell[data-workspace="markets"] .assistant-launcher { display:none; }
 @media(max-width:720px) {
   .workstation-shell .app-sidebar { display:none; }
   .workstation-shell .app-main { margin-left:0; }
@@ -591,3 +590,27 @@ body:has(select[aria-label="Activity type"]) .data-table td:nth-child(n+4):not(:
 .workstation-shell[data-workspace="portfolio"] .app-topbar .market-ask-controls { width: 96px; }
 .workstation-shell[data-workspace="portfolio"] .app-topbar .portfolio-context { max-width: 300px; }
 .workstation-shell[data-workspace="portfolio"] .app-topbar .portfolio-context select { max-width: 280px; }
+
+/* One Ask launcher and one side panel for every page, in the app's own palette. */
+.assistant-launcher,.assistant-market-launcher { right:20px; bottom:20px; padding:10px 16px; gap:7px; background:#fff; color:var(--ink); border:1px solid var(--line); border-radius:999px; font-family:var(--font-ui); font-size:13px; font-weight:600; box-shadow:0 2px 10px #14161912; cursor:pointer; }
+.assistant-launcher:hover { background:#f6f7f8; }
+.assistant-launcher > span:first-child,.assistant-market-launcher > span:first-child { color:#00875a; font-size:15px; }
+.assistant-drawer { font-family:var(--font-ui); color:var(--ink); background:#fff; border-color:var(--line); }
+.assistant-market-overlay { width:400px; border:0; border-left:1px solid var(--line); box-shadow:-6px 0 20px #1416190c; }
+.assistant-market-overlay.assistant-expanded { width:min(900px,calc(100vw - 96px)); }
+.assistant-header,.assistant-composer,.assistant-chat-list,.assistant-toolbar { border-color:var(--line); }
+.assistant-header strong { font-size:14px; font-weight:650; letter-spacing:-.01em; }
+.assistant-drawer .btn,.assistant-drawer .icon-btn { font-family:var(--font-ui); }
+.assistant-drawer .btn-primary { background:var(--ink); border-color:var(--ink); color:#fff; border-radius:8px; }
+.assistant-drawer .btn-secondary { background:#fff; border:1px solid var(--line); color:var(--ink); border-radius:8px; }
+.assistant-drawer textarea { font-family:var(--font-ui); font-size:13px; border:1px solid var(--line); border-radius:10px; }
+.assistant-drawer textarea:focus { outline:none; border-color:#b9bfc7; }
+.assistant-markdown a,.assistant-sources a { color:#00875a; }
+@media(max-width:1250px) and (min-width:1051px) { .assistant-market-overlay:not(.assistant-expanded) { width:360px; } }
+.assistant-launcher[aria-expanded="true"] { display:none; }
+
+/* Page-level notices and errors across the workstation: flat, bordered, one accent edge. */
+.workstation-shell .notice { background:#fff; border:1px solid var(--line); border-left:3px solid #2b6fd6; border-radius:8px; color:var(--ink-2); font-size:12.5px; line-height:1.55; padding:11px 14px; }
+.workstation-shell .notice-warn { background:#fff; border-left-color:#c98a1b; }
+.workstation-shell .notice-error { background:#fff; border-left-color:#c4402f; color:var(--ink); }
+.workstation-shell .notice svg { flex:none; margin-top:1px; }

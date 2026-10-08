@@ -109,15 +109,15 @@ export function QuantTab({ portfolioId, data, setMessage, loading }: { portfolio
       <div className={s.subtabs} role="tablist" aria-label="Quant analyses">
         {quantTabs.map(item => <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)}>{item.label}</button>)}
       </div>
-      <header className={s.viewHeading}><h1>{quantTabs.find(item => item.id === tab)?.label}</h1><p>{tab === "frontier" ? "Risk and return for your portfolio’s risky sleeve" : tab === "capm" ? "Observed market inputs and security returns" : tab === "correlation" ? "How your holdings move together" : tab === "rolling" ? "How modeled risk changes through time" : tab === "distribution" ? "Daily returns from your stored portfolio history" : "How each holding contributes to modeled risk"}</p>{tab === "frontier" ? <span>Each point represents a modeled portfolio. The frontier shows feasible allocations with higher expected return for a given level of risk.</span> : null}</header>
       <div className={s.chartBox}>{view}</div>
+      <section className={s.metricsBlock}><h2 className={s.railTitle}>Selected portfolio metrics</h2>{metrics}</section>
       {quant?.warnings.length ? <Notes items={quant.warnings} /> : null}
       <p className={s.basis}>
         {comparing ? `Showing ${focus?.label} against the current portfolio. ` : ""}
         Return, volatility and Sharpe use the risky-sleeve estimator ({assumptions ? `data to ${assumptions.data_cutoff}` : "date unavailable"}); drawdown and beta come from the ledger history and exist only for the current portfolio. Historical estimates are a modeling lens, not a forecast.
       </p>
     </div>
-    <QuantRail metrics={metrics} onRetryAssumptions={resources.assumptions.status === "error" ? resources.assumptions.retry : undefined} assumptions={assumptions} frontier={frontier} points={points} checked={checked}
+    <QuantRail onRetryAssumptions={resources.assumptions.status === "error" ? resources.assumptions.retry : undefined} assumptions={assumptions} frontier={frontier} points={points} checked={checked}
       onToggle={id => setOverrides(current => ({ ...current, [id]: !checked[id] }))}
       showAssets={showAssets} onToggleAssets={() => setShowAssets(value => !value)} assetsAvailable={assetsAvailable}
       canPng={Boolean(rows)} canCsv={Boolean(rows)} onPng={png} onCsv={csv} />

@@ -1,3 +1,4 @@
+import hashlib
 import json
 from decimal import Decimal
 from typing import Literal
@@ -14,6 +15,10 @@ from app.tools.registry import ToolDefinition, ToolRegistry, tool_result
 
 class PortfolioInput(BaseModel):
     portfolio_id: str
+
+
+class PortfolioEventExposureInput(PortfolioInput):
+    limit: int = Field(default=8, ge=1, le=15)
 
 
 class PortfolioPerformanceInput(PortfolioInput):
@@ -107,6 +112,45 @@ def _performance(db, user, payload: PortfolioPerformanceInput):
                        returned=len(points), remaining=0)
 
 
+EXCERPT_CHARS = 260
+
+
+def _event_exposure(db, user, payload: PortfolioEventExposureInput):
+    """Recent stored events mapped onto the selected portfolio's holdings, weighted from SQL.
+
+    Compact by design: top events only, at most two short original excerpts each.
+    Direction and size of impact are not calculated anywhere, and this says so.
+    """
+    from app.services.research_intelligence_service import portfolio_intelligence
+
+    result = portfolio_intelligence(db, user, payload.portfolio_id, payload.limit)
+    sources, events = {}, []
+    for row in result["events"]:
+        event = row["event"]
+        refs = []
+        excerpts = []
+        for item in (event.get("evidence") or event.get("sources") or [])[:2]:
+            ref = "evt-" + hashlib.sha256(json.dumps([item.get("source_url"), item.get("document_id"), item.get("title") or item.get("source_name")], default=str).encode()).hexdigest()[:20]
+            sources[ref] = {"id": ref, "source_name": item.get("source_name") or item.get("title") or "Event source",
+                            "source_url": item.get("source_url"), "document_id": item.get("document_id"),
+                            "published_at": item.get("published_at")}
+            refs.append(ref)
+            if item.get("text"):
+                excerpts.append({"source_ref": ref, "text": str(item["text"])[:EXCERPT_CHARS]})
+        events.append({
+            "title": event.get("title"), "occurred_at": event.get("occurred_at"), "event_type": event.get("event_type"),
+            "materiality": event.get("materiality"), "freshness": event.get("freshness_status"),
+            "affected_holdings": [{"symbol": c["symbol"], "relationship": c["relationship_kind"],
+                                   "portfolio_weight": c.get("current_portfolio_weight")} for c in row["companies"]],
+            "potentially_affected_weight": row.get("potentially_affected_weight"),
+            "impact": "not_calculated", "evidence": excerpts, "source_refs": refs,
+        })
+    data = {"events": events, "coverage": result.get("coverage"), "valuation_complete": result.get("valuation_complete"),
+            "window": "90 days; classified medium/high materiality events with indexed original evidence",
+            "note": "Exposure is the share of the portfolio in affected holdings; impact direction and size are not calculated."}
+    return tool_result("ok" if events else "missing", data, sources=list(sources.values()), returned=len(events), remaining=0)
+
+
 def _ips(db, user, payload: PortfolioInput):
     data = ips_compliance(db, user, payload.portfolio_id, persist_analysis=False)
     version = db.get(PortfolioIPSVersion, data["ips_version_id"]) if data.get("ips_version_id") else None
@@ -177,6 +221,19 @@ def register_portfolio_tools(registry: ToolRegistry) -> None:
             False,
             10,
             _performance,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            "portfolio.event_exposure",
+            "1.0",
+            "Recent stored market and company events mapped to the selected portfolio's holdings with portfolio weights and original evidence excerpts; no impact forecast",
+            PortfolioEventExposureInput,
+            "portfolio:read",
+            True,
+            False,
+            12,
+            _event_exposure,
         )
     )
     registry.register(

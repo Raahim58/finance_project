@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { AssistantControls } from "@/components/AssistantControls";
 import { Icon } from "@/components/Icon";
 import { CompanyLogo } from "@/components/markets/CompanyLogo";
 import { IndexChart } from "@/components/markets/IndexChart";
@@ -54,7 +53,6 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
       <p className={styles.source}>{summary.portfolio.source_mode} · {summary.data_source ?? "Source unavailable"}</p>
     </aside>
     <div data-portfolio-panel="content" className={styles.main}>
-      <h2 className={styles.heading}>Overview</h2>
       <div className={`${styles.notice} ${status === "BREACH" ? styles.bad : status === "PASS" && !notices.length ? styles.ok : ""}`} role="status">
         <span><b>Mandate:</b> {status === "PASS" ? "Within IPS limits" : status === "BREACH" ? `IPS breach${compliance?.violations.length ? ` (${compliance.violations.length})` : ""}` : status === "NOT_EVALUATED" ? "Not evaluated (IPS data missing)" : "Compliance unavailable"}</span>
         <span><b>Prices:</b> {summary.data_freshness_date ? `as of ${formatDate(summary.data_freshness_date)}` : "date unavailable"} · {summary.data_source ?? "source unavailable"}</span>

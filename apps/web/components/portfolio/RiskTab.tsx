@@ -37,7 +37,7 @@ export function RiskTab({ portfolioId, data }: { portfolioId: string; data: Work
   const systematic = systematicRows(quant);
   const mandate = mandateRows(compliance, exposure);
   const breaches = mandate.filter(row => row.status === "BREACH");
-  const notEvaluated = (compliance?.not_evaluated?.length ?? 0) + mandate.filter(row => row.status === "NOT_EVALUATED").length;
+  const notEvaluated = mandate.filter(row => row.status === "NOT_EVALUATED").length;
   const sectors = [...(exposure?.by_sector ?? [])].sort((a, b) => Number(b.weight_percent) - Number(a.weight_percent));
   const brief = riskBrief({ breaches: breaches.map(row => row.rule), notEvaluated, volatility: overall.volatility, topSector: sectors[0] ? `${sectors[0].sector} (${Number(sectors[0].weight_percent).toFixed(1)}%)` : undefined });
 

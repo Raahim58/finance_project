@@ -1,0 +1,67 @@
+import React from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MarketPrice } from "@/lib/api/market";
+import { getCompanyHistory, getMarketFreshness } from "@/lib/api/market";
+import { TechnicalChart } from "./TechnicalChart";
+const mock = vi.hoisted(() => ({ option: null as any, events: null as any, dispatch: vi.fn() }));
+vi.mock("@/lib/api/market", () => ({ getCompanyHistory: vi.fn(), getMarketFreshness: vi.fn() }));
+vi.mock("echarts-for-react", () => ({ default: React.forwardRef(function Chart(props: any, ref) { mock.option = props.option; mock.events = props.onEvents; React.useImperativeHandle(ref, () => ({ getEchartsInstance: () => ({ resize: vi.fn(), dispatchAction: mock.dispatch }) })); return <div data-testid="chart"/>; }) }));
+const history: MarketPrice[] = Array.from({ length: 80 }, (_, i) => ({ symbol: "TEST", trade_date: new Date(Date.UTC(2026, 6, i + 1)).toISOString().slice(0, 10), open: "10", high: "12", low: "9", close: "11", volume: 100, previous_close: "10", change: "1", change_percent: "10", value: "1100", source: "demo", ingested_at: "2026-10-08T00:00:00Z" }));
+afterEach(cleanup);
+beforeEach(() => { vi.resetAllMocks(); vi.mocked(getCompanyHistory).mockResolvedValue(history); vi.mocked(getMarketFreshness).mockResolvedValue({ is_stale: true, stale_warning: "Test freshness warning", latest_trade_date: "2026-10-08" } as any); });
+describe("technical canvas", () => {
+    it("keeps zoom and overlays through mode and pane switches; reset changes only zoom", async () => {
+        render(<TechnicalChart symbol="TEST" endDate="2026-09-18"/>);
+        await screen.findByTestId("chart");
+        expect(mock.option.series[0].type).toBe("candlestick");
+        expect(mock.option.series).toHaveLength(2);
+        fireEvent.click(screen.getByText("Indicators ▾"));
+        fireEvent.click(screen.getByLabelText("MA20"));
+        act(() => mock.events.datazoom({ batch: [{ start: 25, end: 75 }] }));
+        fireEvent.click(screen.getByRole("button", { name: "Line" }));
+        expect(mock.option.series[0].type).toBe("line");
+        expect(mock.option.dataZoom[0].start).toBe(25);
+        expect(mock.option.dataZoom[0].end).toBe(75);
+        expect(mock.option.series.find((s: any) => s.name === "MA20").data.every((v: any) => v !== null)).toBe(true);
+        fireEvent.click(screen.getByLabelText("MACD (12, 26, 9)"));
+        expect(mock.option.grid).toHaveLength(3);
+        fireEvent.click(screen.getByLabelText("Volume", { selector: "input" }));
+        expect(mock.option.grid).toHaveLength(2);
+        expect(mock.option.dataZoom[0].start).toBe(25);
+        fireEvent.click(screen.getByRole("button", { name: "Reset zoom" }));
+        expect(mock.dispatch).toHaveBeenCalledWith({ type: "dataZoom", start: 0, end: 100 });
+        expect(screen.getByLabelText("MA20")).toBeChecked();
+        expect(screen.getByText("Test freshness warning")).toBeInTheDocument();
+        expect(screen.getByText(/includes demo or synthetic/)).toBeInTheDocument();
+    });
+    it("never replaces a newer range with an older asynchronous response", async () => {
+        let resolve: (value: MarketPrice[]) => void = () => { };
+        vi.mocked(getCompanyHistory).mockImplementationOnce(() => new Promise(r => { resolve = r; })).mockResolvedValueOnce(history);
+        render(<TechnicalChart symbol="TEST" endDate="2026-09-18"/>);
+        expect(screen.getByRole("status")).toHaveTextContent("Loading");
+        fireEvent.click(screen.getByRole("button", { name: "3M" }));
+        await screen.findByTestId("chart");
+        await act(async () => resolve([]));
+        expect(screen.getByTestId("chart")).toBeInTheDocument();
+        expect(getCompanyHistory).toHaveBeenLastCalledWith("TEST", 2000, expect.objectContaining({ startDate: expect.any(String), endDate: "2026-09-18" }));
+    });
+    it("handles API errors and retry without inventing candles", async () => {
+        vi.mocked(getCompanyHistory).mockRejectedValueOnce(new Error("Service unavailable"));
+        render(<TechnicalChart symbol="TEST" endDate="2026-09-18"/>);
+        expect(await screen.findByRole("alert")).toHaveTextContent("Service unavailable");
+        expect(screen.queryByTestId("chart")).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        await screen.findByTestId("chart");
+    });
+    it("reports empty and insufficient histories", async () => {
+        vi.mocked(getCompanyHistory).mockResolvedValueOnce([]).mockResolvedValueOnce(history.slice(-18));
+        render(<TechnicalChart symbol="TEST" endDate="2026-09-18"/>);
+        await screen.findByText(/No valid daily OHLCV/);
+        fireEvent.click(screen.getByRole("button", { name: "MAX" }));
+        await screen.findByTestId("chart");
+        fireEvent.click(screen.getByText("Indicators ▾"));
+        fireEvent.click(screen.getByLabelText("MA50"));
+        await waitFor(() => expect(screen.getByText("MA50 unavailable: insufficient history")).toBeInTheDocument());
+    });
+});

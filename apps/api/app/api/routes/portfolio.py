@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query, Response, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -44,6 +45,7 @@ from app.services.portfolio_service import (
     get_portfolio_summary,
     get_positions,
     list_allocation_sets,
+    rename_allocation_set,
     list_holdings,
     list_portfolios,
     list_transactions,
@@ -156,6 +158,15 @@ def allocations(portfolio_id: str, current_user: User = Depends(get_current_user
 @router.post("/{portfolio_id}/allocations", response_model=AllocationSetResponse, status_code=201)
 def create_allocation(portfolio_id: str, payload: AllocationSetCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return create_allocation_set(db, current_user, portfolio_id, payload)
+
+
+class AllocationRename(BaseModel):
+    name: str = Field(max_length=120)
+
+
+@router.patch("/{portfolio_id}/allocations/{allocation_id}", response_model=AllocationSetResponse)
+def rename_allocation(portfolio_id: str, allocation_id: str, payload: AllocationRename, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return rename_allocation_set(db, current_user, portfolio_id, allocation_id, payload.name)
 
 
 @router.get("/{portfolio_id}/summary", response_model=PortfolioSummaryResponse)

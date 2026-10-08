@@ -1,12 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
-import { getCompanyDetail, getCompanyHistory, getCompanyResearch, getCompanyCompleteness, getPortfolios, getDocuments,
-  getContextRefresh, deactivateContextRefresh, type ApiDocument, type CompanyDetail, type CompanyResearch, type CompanyCompleteness, type MarketPrice, type Portfolio } from "@/lib/api";
+import { getCompanyDetail, getCompanyResearch, getCompanyCompleteness, getPortfolios, getDocuments,
+  getContextRefresh, deactivateContextRefresh, type ApiDocument, type CompanyDetail, type CompanyResearch, type CompanyCompleteness, type Portfolio } from "@/lib/api";
 import { getCompanyIntelligence, type CompanyIntelligence } from "@/lib/api/research";
 
 export function useCompanyData(symbol: string) {
   const [detail,setDetail]=useState<CompanyDetail|null>(null), [research,setResearch]=useState<CompanyResearch|null>(null);
-  const [history,setHistory]=useState<MarketPrice[]>([]), [portfolios,setPortfolios]=useState<Portfolio[]>([]);
+  const [portfolios,setPortfolios]=useState<Portfolio[]>([]);
   const [portfolioId,setPortfolioId]=useState("");
   const [portfolioContext,setPortfolioContext]=useState<CompanyResearch|null>(null);
   const [intelligence,setIntelligence]=useState<CompanyIntelligence|null>(null);
@@ -22,7 +22,6 @@ export function useCompanyData(symbol: string) {
       finally {if(active)setLoaded(old=>({...old,[key]:true}));}
     }
     void read("company",()=>getCompanyDetail(symbol),setDetail);
-    void read("history",()=>getCompanyHistory(symbol,2000),setHistory);
     void read("research",()=>getCompanyResearch(symbol,{displayOnly:true}),setResearch);
     void read("intelligence",()=>getCompanyIntelligence(symbol),setIntelligence);
     void read("documents",()=>getDocuments(symbol),setDocuments);
@@ -52,5 +51,5 @@ export function useCompanyData(symbol: string) {
     }catch{if(active)timer=setTimeout(()=>void poll(),10000);}};
     void poll();return()=>{active=false;if(timer)clearTimeout(timer);void deactivateContextRefresh(id).catch(()=>undefined);};
   },[research?.refresh_request_id]);
-  return {detail,research,history,portfolios,portfolioId,setPortfolioId,portfolioContext,intelligence,documents,coverage,errors,loaded};
+  return {detail,research,portfolios,portfolioId,setPortfolioId,portfolioContext,intelligence,documents,coverage,errors,loaded};
 }

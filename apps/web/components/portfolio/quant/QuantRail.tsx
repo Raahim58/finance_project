@@ -1,7 +1,6 @@
 "use client";
 
-import { AssistantControls } from "@/components/AssistantControls";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import type { CapitalMarketAssumptions, EfficientFrontier } from "@/lib/api";
 import { formatDate, humanize, numeric } from "@/lib/overview";
 import { pctFraction, riskFreeRate, type ComparePoint } from "@/lib/portfolio-quant";
@@ -9,7 +8,6 @@ import { markerColor } from "./chartOptions";
 import s from "./quant.module.css";
 
 type Props = {
-  metrics: ReactNode;
   onRetryAssumptions?: () => void;
   assumptions: CapitalMarketAssumptions | null; frontier: EfficientFrontier | null; points: ComparePoint[];
   checked: Record<string, boolean>; onToggle: (id: string) => void; showAssets: boolean; onToggleAssets: () => void; assetsAvailable: boolean;
@@ -69,7 +67,6 @@ export function QuantRail(props: Props) {
         </label></li>
       </ul>
     </section>
-    <section className={s.railSection}><h2 className={s.railTitle}>Selected portfolio metrics</h2>{props.metrics}<p className={s.readonly}>Model output, not forecast.</p></section>
     <div className={s.exportWrap}>
       {menu ? <div className={s.exportMenu} role="menu">
         <button type="button" role="menuitem" disabled={!props.canPng} onClick={() => { props.onPng(); setMenu(false); }}>Chart image (PNG){props.canPng ? "" : " — no chart loaded"}</button>

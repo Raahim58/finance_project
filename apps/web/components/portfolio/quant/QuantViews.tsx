@@ -32,7 +32,7 @@ export function FrontierView({ frontier, assumptions, points, showAssets, chartR
   const drawn = points.filter(point => point.plottable);
   const assetCount = (assumptions?.securities ?? []).filter(item => item.volatility != null && item.expected_return != null).length;
   return <>
-    <p className={s.caption}><b>{frontier.feasible_set_label}.</b> Annualized expected return and volatility of the risky sleeve (cash excluded), estimator {frontier.estimator.replaceAll("_", " ")}.</p>
+    <p className={s.caption}>{frontier.feasible_set_label} · risky sleeve, cash excluded · {frontier.estimator.replaceAll("_", " ")} estimator.</p>
     <QuantChart chartRef={chartRef} height={400} option={frontierOption(frontier, assumptions, drawn, showAssets)} />
     <div className={s.legend}>
       <span><i className={s.dot} style={{ background: palette.green }} />Efficient frontier</span>

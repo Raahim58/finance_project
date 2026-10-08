@@ -8,7 +8,7 @@ import { ComparisonTable } from "@/components/DecisionTables";
 import { CompanyLogo } from "@/components/markets/CompanyLogo";
 import styles from "@/components/portfolio/build/build.module.css";
 import type { WorkspaceData } from "@/components/workspace/useWorkspaceData";
-import { PortfolioComparison, comparePortfolio, createAllocation, decideRecommendation, runOptimizer } from "@/lib/api";
+import { PortfolioComparison, comparePortfolio, createAllocation, decideRecommendation, getAllocations, renameAllocation, runOptimizer, type AllocationSet } from "@/lib/api";
 import { BuildExtras, getBuildExtras } from "@/lib/api/portfolio-build";
 import { normalizeWeights, weightSummary } from "@/lib/analytics";
 import { formatDate, formatNumber, humanize, numeric } from "@/lib/overview";
@@ -29,7 +29,11 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
   const [question, setQuestion] = useState("");
   const [selectedAllocationId, setSelectedAllocationId] = useState("");
   const hydratedAllocation = useRef("");
-  const savedAllocations = useMemo(() => [...data.allocations].filter(row => ["optimized", "sandbox"].includes(row.kind)).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)), [data.allocations]);
+  const proposalName = (row: AllocationSet) => typeof row.assumptions?.name === "string" ? row.assumptions.name : "";
+  const proposalLabel = (row: AllocationSet) => proposalName(row) || `${humanize(row.kind)} v${row.version} · ${formatDate(row.created_at)}`;
+  const [fresh, setFresh] = useState<AllocationSet[] | null>(null);
+  const refreshAllocations = () => void getAllocations(portfolioId).then(setFresh).catch(() => undefined);
+  const savedAllocations = useMemo(() => [...(fresh ?? data.allocations)].filter(row => ["optimized", "sandbox"].includes(row.kind)).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)), [fresh, data.allocations]);
   const savedAllocation = savedAllocations.find(row => row.id === selectedAllocationId) ?? savedAllocations[0] ?? null;
   const [dirty, setDirty] = useState(false);
   const recommendationId = useSearchParams().get("recommendation");
@@ -119,7 +123,7 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
       if (result.status !== "optimal") { setMessage(`Optimizer returned ${result.status}. ${String(result.diagnostics.reason ?? "")}`); return; }
       setDirty(true); setProposed(result.weights);
       setComparison(await comparePortfolio(portfolioId, result.weights, "Optimized proposal"));
-      setMessage(`Optimized proposal saved as allocation ${result.allocation_set_id}. No trades were placed.`);
+      setMessage(`Optimized proposal saved as allocation ${result.allocation_set_id}. No trades were placed.`); refreshAllocations();
     } catch (error) { setMessage(error instanceof Error ? error.message : "Optimization failed"); } finally { setRunning(false); }
   }
   async function saveSandbox() {
@@ -131,7 +135,7 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
         items: Object.entries(proposed).filter(([, weight]) => weight > 0).map(([symbol, weight]) => ({ symbol, target_weight: weight, locked: false, is_cash: symbol === "CASH" })),
       });
       if (recommendationId) await decideRecommendation(recommendationId, "reviewed");
-      setMessage(`Sandbox allocation v${allocation.version} saved${recommendationId ? " and linked to the recommendation" : ""}. Actual holdings were not changed.`);
+      setMessage(`Sandbox allocation v${allocation.version} saved${recommendationId ? " and linked to the recommendation" : ""}. Actual holdings were not changed.`); refreshAllocations();
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not save sandbox"); } finally { setRunning(false); }
   }
   function reset() { setObjective(DEFAULT_OBJECTIVE); setMethod(DEFAULT_METHOD); setTargetVolatility(""); setTargetBeta(""); setAnalystReturns({}); setDirty(true); setProposed(current); setComparison(null); setDiagnostics(null); }
@@ -209,7 +213,12 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
   const proposalStatus = !comparison ? "Not evaluated" : fitProposed?.notEvaluated || comparison.proposed_compliance.status === "BREACH" ? `${(fitProposed?.evaluated ?? 0) - (fitProposed?.passed ?? 0)} breach · ${fitProposed?.notEvaluated ?? 0} check unavailable` : comparison.proposed_compliance.status === "PASS" ? "Evaluated checks passed" : "Not evaluated";
   return <div className={styles.root}>
     <main data-portfolio-panel="content" className={styles.main}>
-      <h1 className={styles.title}>{savedAllocation && !dirty ? `Saved proposal · ${formatDate(savedAllocation.created_at)}` : "Portfolio construction"}</h1>
+      {savedAllocation && !dirty
+        ? <input key={savedAllocation.id} className={styles.titleInput} aria-label="Proposal name" maxLength={80} defaultValue={proposalName(savedAllocation)} placeholder={`Saved proposal · ${formatDate(savedAllocation.created_at)}`}
+            onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); }}
+            onBlur={event => { const name = event.currentTarget.value.trim(); if (name === proposalName(savedAllocation)) return;
+              void renameAllocation(portfolioId, savedAllocation.id, name).then(refreshAllocations).catch(error => setMessage(error instanceof Error ? error.message : "Could not rename the proposal")); }} />
+        : <h1 className={styles.title}>Portfolio construction</h1>}
       <div className={styles.toolbar}>
         <label className={styles.control}>Objective<select id="build-objective" className={styles.field} value={objective} onChange={event => setObjective(event.target.value)}>{objectiveOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <label className={styles.control}>Method<select id="build-method" className={styles.field} value={method} disabled={!usesReturns} onChange={event => setMethod(event.target.value)}>{returnMethodOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
@@ -218,7 +227,7 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
         <details className={styles.actions}><summary aria-label="Construction actions">•••</summary><button type="button" disabled={running || Boolean(compatibilityProblem) || analystIncomplete || missingTarget} onClick={optimize}>Run optimization</button><button type="button" disabled={running} onClick={reset}>Reset to current holdings</button></details>
       </div>
       <p className={styles.sub}>Proposal only · holdings and transactions remain unchanged. Comparison uses current stored market inputs; configuration controls apply to a new optimizer run.</p>
-      {savedAllocations.length > 1 ? <label className={styles.saved}>Saved proposal<select className={styles.field} value={savedAllocation?.id ?? ""} onChange={event => {setDirty(false); hydratedAllocation.current = ""; setSelectedAllocationId(event.target.value);}}>{savedAllocations.map(row => <option key={row.id} value={row.id}>{humanize(row.kind)} v{row.version} · {formatDate(row.created_at)}</option>)}</select></label> : null}
+      {savedAllocations.length > 1 ? <label className={styles.saved}>Saved proposal<select className={styles.field} value={savedAllocation?.id ?? ""} onChange={event => {setDirty(false); hydratedAllocation.current = ""; setSelectedAllocationId(event.target.value);}}>{savedAllocations.map(row => <option key={row.id} value={row.id}>{proposalLabel(row)}</option>)}</select></label> : null}
       {summary.valuation_complete === false ? <div className={styles.noticeBad}>{summary.valuation_note ?? `Missing prices: ${summary.unpriced_symbols.join(", ")}`}</div> : null}
       {compatibilityProblem ? <p className={styles.notice}>{compatibilityProblem}</p> : null}
       {objective === "target_volatility_maximum_return" ? <label className={styles.saved}>Target volatility (%)<input className={styles.field} type="number" min="0.1" step="0.1" value={targetVolatility} onChange={event => setTargetVolatility(event.target.value)} /></label> : null}

@@ -37,7 +37,7 @@ export type CompanyResearch = {
   market: Record<string,unknown>|null;
   market_research: Record<string,unknown>;
   fundamentals: Array<{id?:string;taxonomy_key:string;period_type:string;period_start?:string|null;accounting_basis?:string|null;source_label?:string|null;source_url?:string|null;period_end:string;filing_date?:string|null;value:string|number;unit:string;currency?:string|null;document_id?:string|null;page_number?:number|null;classification?:string;provenance:FactProvenance}>;
-  derived_fundamentals: { latest?:Record<string,Record<string,unknown>>; growth?:Record<string,Record<string,unknown>>; ratios?:Record<string,Record<string,unknown>>; valuation?:Record<string,unknown> };
+  derived_fundamentals: { latest?:Record<string,Record<string,unknown>>; growth?:Record<string,Record<string,unknown>>; ratios?:Record<string,Record<string,unknown>>; unavailable?:Record<string,string>; valuation?:Record<string,unknown> };
   documents: Array<Record<string,unknown>>; events: CompanyEvent[]; portfolio_relevance:Array<Record<string,unknown>>;
   has_synthetic_data: boolean;
   context_contract_version:string;
@@ -505,6 +505,10 @@ export function getIpsVersions(portfolioId: string) { return request<IpsVersion[
 
 export function createAllocation(portfolioId: string, payload: Record<string, unknown>) {
   return request<Record<string, unknown>>(`/portfolios/${encodeURIComponent(portfolioId)}/allocations`, { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function renameAllocation(portfolioId: string, allocationId: string, name: string) {
+  return request<AllocationSet>(`/portfolios/${encodeURIComponent(portfolioId)}/allocations/${encodeURIComponent(allocationId)}`, { method: "PATCH", body: JSON.stringify({ name }) });
 }
 
 export function runScenario(portfolioId: string, payload: Record<string, unknown>) {

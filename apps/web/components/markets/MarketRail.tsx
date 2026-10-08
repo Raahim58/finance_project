@@ -1,7 +1,6 @@
 "use client";
 import Link from "next/link";
 import { useAssistantWorkspace } from "@/components/AssistantWorkspace";
-import { AssistantControls } from "@/components/AssistantControls";
 import { Icon } from "@/components/Icon";
 import type { MarketOverview } from "@/lib/api";
 import type { ResearchEventView } from "@/lib/api/research";
@@ -21,7 +20,7 @@ export function MarketRail({ market, events, loading }: { market: MarketOverview
   const evidence = events.filter(event => { const key = `${event.evidence[0]?.source_name}:${event.event_type}`; if (seen.has(key)) return false; seen.add(key); return true; }).slice(0, 3);
   const ask = (text: string) => assistant?.open(text);
   return <aside className={styles.rail} aria-label="Market context and Assistant">
-    <div className={styles.railControls}><AssistantControls /></div><div className={styles.railHead}><h2>Market brief</h2><span>From market data</span></div>
+    <div className={styles.railHead}><h2>Market brief</h2><span>From market data</span></div>
     <section className={styles.digest}>
       <h3>{percent == null ? "Your market view, in context" : `KSE-100 ${percent < 0 ? "down" : percent > 0 ? "up" : "unchanged"}${percent === 0 ? "" : ` ${Math.abs(percent).toFixed(2)}%`}`}</h3>
       <p>{market ? `${market.priced_securities ?? "—"} securities across ${market.sectors.length} sectors are available in the ${market.price_basis === "intraday" ? "observed intraday snapshot" : "stored daily session"}.` : "The digest appears when a dated market snapshot is available."}</p>

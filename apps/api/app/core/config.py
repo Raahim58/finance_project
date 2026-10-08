@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     app_env: str = "local"
     database_url: str = "sqlite+pysqlite:///./psx_ai_local.db"
     test_database_url: str = "sqlite+pysqlite:///:memory:"
+    # Declared tool limits assume an idle host; the shared 2-vCPU box measured 2-16s for
+    # compliance/quant/search under pipeline load, so every tool limit is scaled by this.
+    tool_timeout_multiplier: float = Field(default=3.0, ge=1.0, le=10.0)
     database_pool_size: int = Field(default=24, ge=1, le=100)
     database_max_overflow: int = Field(default=8, ge=0, le=100)
     database_max_parallel_workers_per_gather: int = Field(default=0, ge=0, le=8)

@@ -8,7 +8,6 @@ import { Icon, IconName } from "@/components/Icon";
 import { getPortfolios } from "@/lib/api";
 import { PortfolioContextPicker } from "@/components/PortfolioContextPicker";
 import { NotificationBell } from "@/components/NotificationBell";
-import { AssistantControls } from "@/components/AssistantControls";
 import { PortfolioTabs, portfolioRoute } from "@/components/PortfolioTabs";
 
 type NavEntry = [string, string, IconName];
@@ -143,7 +142,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {portfolioRoute(pathname) ? <PortfolioTabs /> : <span className="truncate text-[12px] font-semibold text-ink">{currentScope(pathname)}</span>}
           </div>
           <div className="flex items-center gap-1">
-            {portfolioRoute(pathname) ? <AssistantControls /> : null}
             <PortfolioContextPicker />
             <NotificationBell />
             <Link className="icon-btn" aria-label="Account settings" href={"/settings" as never}><Icon name="settings" /></Link>

@@ -122,3 +122,17 @@ def test_default_demo_seed_creates_investor_state_without_external_world(monkeyp
         assert db.query(MarketPrice).count() == 0
         assert db.query(OptimizerRun).count() == 0
         assert db.query(ScenarioRun).count() == 0
+
+
+def test_saved_proposal_can_be_renamed_by_its_owner_only(client):
+    headers = auth(client, "rename@example.com"); portfolio_id = portfolio(client, headers)
+    client.post(f"/portfolios/{portfolio_id}/holdings", headers=headers, json={"symbol": "MEBL", "quantity": "10", "average_cost": "100"})
+    created = client.post(f"/portfolios/{portfolio_id}/allocations", headers=headers, json={"kind": "sandbox", "base_value": 1000, "items": [{"symbol": "MEBL", "target_weight": 1.0}]}).json()
+    url = f"/portfolios/{portfolio_id}/allocations/{created['id']}"
+    renamed = client.patch(url, headers=headers, json={"name": "  Lower   concentration  "})
+    assert renamed.status_code == 200 and renamed.json()["assumptions"]["name"] == "Lower concentration"
+    assert client.get(f"/portfolios/{portfolio_id}/allocations", headers=headers).json()[0]["assumptions"]["name"] == "Lower concentration"
+    assert client.patch(url, headers=headers, json={"name": ""}).json()["assumptions"].get("name") is None
+    other = auth(client, "intruder@example.com")
+    assert client.patch(url, headers=other, json={"name": "x"}).status_code == 404
+    assert client.patch(f"/portfolios/{portfolio_id}/allocations/missing", headers=headers, json={"name": "x"}).status_code == 404

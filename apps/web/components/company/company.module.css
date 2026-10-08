@@ -28,3 +28,14 @@
 @media(max-width:1050px) and (min-width:721px) {.workspace {grid-template-columns:270px minmax(0,1fr)}.right {grid-column:2;border-left:0;border-top:1px solid var(--line)}.identity {grid-row:1 / span 2}.rightBody {min-height:auto}.holdingStats {grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:720px) {.workspace {display:block}.identity {padding:20px 18px;border-right:0;border-bottom:1px solid var(--line)}.companyHeading strong {font-size:25px}.identity > :global(div[role=img]),.identity > .caption,.identity > .ranges,.held,.coverage {display:none}.companyNav {flex-direction:row;flex-wrap:wrap;border-bottom:0;padding:10px 0;margin-top:12px}.companyNav button {font-size:11px;gap:6px;padding:7px;min-height:34px}.companyNav button > svg:last-child {display:none}.centerBar {padding:0 18px}.tabs {padding:0 18px;gap:18px}.content {padding:20px 18px}.right {border-left:0;border-top:1px solid var(--line)}.rightBody {padding:22px 18px;min-height:auto}.rightBody h2 {font-size:18px}.holdingStats {grid-template-columns:repeat(3,minmax(0,1fr))}.keyFacts {grid-template-columns:1fr}.composer {margin-bottom:25px}}
 .right{padding-top:46px}
+
+.companyHeading { position:relative; }
+.search { margin-left:auto; position:relative; flex:0 0 108px; }
+.search input { width:100%; border:1px solid var(--line); border-radius:8px; background:#fff; padding:7px 10px; font-size:12px; color:var(--ink); }
+.search input:focus { outline:none; border-color:#b9bfc7; }
+.search ul { position:absolute; right:0; top:calc(100% + 6px); z-index:30; width:260px; margin:0; padding:6px; list-style:none; background:#fff; border:1px solid var(--line); border-radius:10px; box-shadow:0 8px 24px #14161914; }
+.search li button { display:flex; gap:10px; align-items:baseline; width:100%; text-align:left; border:0; background:none; padding:8px 9px; border-radius:6px; cursor:pointer; font-size:12px; }
+.search li button:hover { background:#f4f5f6; }
+.search li b { font-weight:650; min-width:52px; }
+.search li span { color:var(--muted); overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.content { padding-top:26px; }
