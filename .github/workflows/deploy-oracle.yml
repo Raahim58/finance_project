@@ -58,12 +58,6 @@ jobs:
           deploy_sha="$1"
           cd /home/ubuntu/finance_project
 
-          exec 9>/tmp/psx-oracle-deploy.lock
-          if ! flock -n 9; then
-            echo "Another Oracle deployment is already running." >&2
-            exit 1
-          fi
-
           echo "== Fetching the triggering commit =="
           git fetch origin "$deploy_sha"
           git cat-file -e "${deploy_sha}^{commit}"
