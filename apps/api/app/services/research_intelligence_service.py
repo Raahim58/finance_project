@@ -1,6 +1,8 @@
 """Read-only company/event projections shared by research, portfolio and Assistant."""
 
 import json
+import threading
+import time
 from datetime import UTC, datetime, timedelta, date
 from decimal import Decimal
 from fastapi import HTTPException
@@ -557,9 +559,45 @@ def company_intelligence(db, user, symbol):
     }
 
 
+_PORTFOLIO_EVENT_TTL_SECONDS = 120
+_portfolio_event_cache: dict[tuple, tuple[float, dict]] = {}
+_portfolio_event_locks: dict[tuple, threading.Lock] = {}
+_portfolio_event_guard = threading.Lock()
+
+
 def portfolio_intelligence(db, user, portfolio_id, limit=5):
-    portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    """Short-lived read cache around the projection below.
+
+    Building the dependency fingerprint reads every holding's evidence windows and
+    1000 event candidates, so repeat navigations paid that cost each time and, under
+    load, held a database connection long enough to exhaust the pool. The key
+    includes the holdings/price summary and the calendar day, so a changed
+    portfolio or price is never served stale; new events and briefs can lag by at
+    most the TTL. Concurrent identical requests share one computation.
+    """
+    get_portfolio_or_404(db, user, portfolio_id)
     summary = get_portfolio_summary(db, user, portfolio_id)
+    key = (user.id, portfolio_id, str(date.today()), VERSION, fingerprint(summary.model_dump(mode="json")))
+    now = time.monotonic()
+    with _portfolio_event_guard:
+        hit = _portfolio_event_cache.get(key)
+        lock = _portfolio_event_locks.setdefault(key, threading.Lock())
+    if hit is None or now - hit[0] > _PORTFOLIO_EVENT_TTL_SECONDS:
+        with lock:
+            hit = _portfolio_event_cache.get(key)
+            if hit is None or time.monotonic() - hit[0] > _PORTFOLIO_EVENT_TTL_SECONDS:
+                payload = json.loads(json.dumps(_portfolio_intelligence(db, user, portfolio_id, summary), default=str))
+                with _portfolio_event_guard:
+                    cutoff = time.monotonic() - _PORTFOLIO_EVENT_TTL_SECONDS
+                    for stale in [k for k, (at, _) in _portfolio_event_cache.items() if at < cutoff]:
+                        _portfolio_event_cache.pop(stale, None)
+                        _portfolio_event_locks.pop(stale, None)
+                    _portfolio_event_cache[key] = hit = (time.monotonic(), payload)
+    return {**hit[1], "events": hit[1]["events"][:limit]}
+
+
+def _portfolio_intelligence(db, user, portfolio_id, summary):
+    portfolio = get_portfolio_or_404(db, user, portfolio_id)
     candidates = event_candidates(db)
     instruments = {h.symbol: resolve_company(db, h.symbol) for h in summary.holdings}
     profiles = {
@@ -634,7 +672,6 @@ def portfolio_intelligence(db, user, portfolio_id, limit=5):
     )
     if snapshot:
         cached = json.loads(snapshot.payload_json)
-        cached["events"] = cached["events"][:limit]
         return cached
     priced = all(h.latest_price is not None for h in summary.holdings)
     valid = priced and summary.valuation_complete and summary.total_value > 0
@@ -687,7 +724,7 @@ def portfolio_intelligence(db, user, portfolio_id, limit=5):
     payload = {
         "portfolio_id": portfolio_id,
         "portfolio_name": portfolio.name,
-        "events": rows[:limit],
+        "events": rows[:20],
         "valuation_complete": valid,
         "total_value": str(summary.total_value),
         "coverage": {

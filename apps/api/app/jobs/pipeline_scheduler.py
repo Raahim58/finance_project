@@ -61,6 +61,21 @@ def reconstruct(db,limit=100):
     db.commit();return count
 
 
+_last_monitoring_hour=None
+
+
+def run_monitoring_tick(db,now):
+    """Evaluate enabled monitoring rules once per hour. Alerts are only created by a run,
+    and this scheduler replaced the legacy one that used to trigger them."""
+    global _last_monitoring_hour
+    hour=now.replace(minute=0,second=0,microsecond=0)
+    if _last_monitoring_hour==hour: return 0
+    _last_monitoring_hour=hour
+    from app.jobs.scheduler import run_monitoring_jobs
+    try: return run_monitoring_jobs(db)
+    except Exception: db.rollback();return 0
+
+
 def run_once(now=None):
     if not settings.pipeline_enabled: return {'status':'disabled'}
     with engine.connect() as coordination:
@@ -72,7 +87,8 @@ def run_once(now=None):
                 recovered=recover(db);scheduled=schedule_sources(db,now or datetime.now(UTC));reconstructed=reconstruct(db) if not settings.pipeline_dispatch_scope else 0
                 queued=dispatch(db,lambda identifier,stage,mode:execute.apply_async(args=(identifier,),
                     queue=QUEUES[stage],priority=8 if mode=='historical' else 0),scope=settings.pipeline_dispatch_scope)
-                return {'status':'running','recovered':recovered,'scheduled':scheduled,'reconstructed':reconstructed,'queued':queued}
+                monitored=run_monitoring_tick(db,now or datetime.now(UTC))
+                return {'status':'running','recovered':recovered,'scheduled':scheduled,'reconstructed':reconstructed,'queued':queued,'monitoring_runs':monitored}
         finally:
             if pg: coordination.execute(text("SELECT pg_advisory_unlock(hashtext('pipeline-restoration'))"))
 

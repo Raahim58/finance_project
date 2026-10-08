@@ -394,7 +394,7 @@ def _effective_risk_free_rate(db: Session, as_of: date, series_key: str | None =
     No default rate is invented. A series is eligible only when explicitly selected,
     marked ``is_risk_free`` in metadata, or uses a recognized SBP risk-free key.
     """
-    preferred_keys = [series_key] if series_key else ["sbp.tbill.3m_yield", "pk.tbill.3m_yield", "government.tbill.3m_yield"]
+    preferred_keys = [series_key] if series_key else ["PK_TBILL_3M", "sbp.tbill.3m_yield", "pk.tbill.3m_yield", "government.tbill.3m_yield"]
     candidates = list(db.scalars(select(MacroSeries)))
     ranked = []
     for series in candidates:

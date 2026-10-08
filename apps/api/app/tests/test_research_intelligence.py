@@ -768,3 +768,27 @@ def test_digest_rejects_quantity_that_differs_from_cited_database_value():
         validate_output("digest", json.dumps(output), payload)
     output["events"][0]["what_happened"]["text"] = "Revenue was PKR 8 billion."
     assert validate_output("digest", json.dumps(output), payload)["events"]
+
+
+def test_portfolio_intelligence_is_cached_per_holdings_and_limits_events(monkeypatch):
+    from types import SimpleNamespace
+    from app.services import research_intelligence_service as service
+
+    service._portfolio_event_cache.clear()
+    calls = []
+    summary = SimpleNamespace(model_dump=lambda mode="json": {"total_value": "100"})
+    monkeypatch.setattr(service, "get_portfolio_or_404", lambda *_: None)
+    monkeypatch.setattr(service, "get_portfolio_summary", lambda *_: summary)
+
+    def build(_db, _user, _portfolio_id, _summary):
+        calls.append(1)
+        return {"events": [{"n": i} for i in range(10)]}
+
+    monkeypatch.setattr(service, "_portfolio_intelligence", build)
+    user = SimpleNamespace(id="u1")
+    assert len(service.portfolio_intelligence(None, user, "p1", 3)["events"]) == 3
+    assert len(service.portfolio_intelligence(None, user, "p1", 7)["events"]) == 7
+    assert len(calls) == 1
+    summary.model_dump = lambda mode="json": {"total_value": "101"}
+    service.portfolio_intelligence(None, user, "p1", 3)
+    assert len(calls) == 2
