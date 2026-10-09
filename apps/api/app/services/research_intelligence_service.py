@@ -1,6 +1,8 @@
 """Read-only company/event projections shared by research, portfolio and Assistant."""
 
 import json
+import threading
+import time
 from datetime import UTC, datetime, timedelta, date
 from decimal import Decimal
 from fastapi import HTTPException
@@ -28,6 +30,9 @@ from app.services.research_evidence_service import report_coverage, company_wind
 from app.services.portfolio_service import get_portfolio_summary, get_portfolio_or_404
 from app.services.rag_service import active_embedding_model
 from app.core.config import settings
+from app.services.financial_evidence_eligibility import public_primary_financials, verified_secondary_financials
+from app.services.pipeline.event_reads import event_records, rank_score
+from app.services.pipeline.events import VERSION as RECORD_VERSION
 
 
 def resolve_company(db, symbol):
@@ -68,7 +73,7 @@ def current_profile(db, user, instrument, provider=None, model=None):
     return db.scalar(statement.order_by(CompanyExposureProfile.generated_at.desc()).limit(1))
 
 
-def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=None, end=None):
+def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=None, end=None, newest_first=False):
     """Scope issuers from RAW links. Never inherit the cluster's union of companies.
 
     Stored normalized classification/materiality/freshness is preserved. Evidence must
@@ -88,6 +93,8 @@ def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=Non
             Event.occurred_at <= datetime.now(UTC),
             NormalizedEvent.classification_status == "classified",
             NormalizedEvent.materiality.in_(("medium", "high")),
+            # Classified event records are read whole by event_records(), not per raw member.
+            NormalizedEvent.detection_version != RECORD_VERSION,
         )
     )
     if end:
@@ -114,19 +121,15 @@ def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=Non
             Document.status == "parsed",
             Document.id.in_(
                 select(DocumentChunk.document_id).where(
-                    DocumentChunk.embedding_status == "indexed",
-                    DocumentChunk.embedding_model == active_embedding_model(),
-                    DocumentChunk.embedding_index_version == settings.embedding_index_version,
+                    DocumentChunk.embedding_status.in_(("indexed","lexical_only")),
                     DocumentChunk.content_type != "boilerplate",
                 )
             ),
         )
     )
-    query = query.where(Event.id.in_(usable_sources)).order_by(
-        case((NormalizedEvent.materiality == "high", 0), else_=1),
-        Event.occurred_at.desc(),
-        Event.id,
-    )
+    ordering = [Event.occurred_at.desc(), Event.id] if newest_first else [
+        case((NormalizedEvent.materiality == "high", 0), else_=1), Event.occurred_at.desc(), Event.id]
+    query = query.where(Event.id.in_(usable_sources)).order_by(*ordering)
     rows = list(db.execute(query.offset(offset).limit(limit)))
     if not rows:
         return []
@@ -163,9 +166,7 @@ def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=Non
         )
         .where(
             DocumentChunk.document_id.in_(document_ids),
-            DocumentChunk.embedding_status == "indexed",
-            DocumentChunk.embedding_model == active_embedding_model(),
-            DocumentChunk.embedding_index_version == settings.embedding_index_version,
+            DocumentChunk.embedding_status.in_(("indexed","lexical_only")),
             DocumentChunk.content_type != "boilerplate",
         )
         .subquery()
@@ -213,11 +214,14 @@ def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=Non
                 "normalized_event_id": norm.id,
                 "title": raw.title,
                 "occurred_at": raw.occurred_at,
+                "event_time_end":norm.event_time_end, "geography":norm.geography,
+                "magnitude":norm.magnitude,"magnitude_unit":norm.magnitude_unit,
+                "details":json.loads(norm.details_json or "{}"),
                 "event_type": norm.event_type,
                 "classification_status": norm.classification_status,
-                "source_document_type": "announcement"
-                if raw.event_type == "announcement"
-                else "news",
+                "source_document_type": documents[selected[0].document_id].document_type if selected else raw.event_type,
+                "statement_kind":json.loads(raw.details_json or "{}").get("kind"),
+                "lifecycle":json.loads(raw.details_json or "{}").get("lifecycle"),
                 "factor": norm.factor,
                 "factors": detect_factors(text),
                 "materiality": norm.materiality,
@@ -289,8 +293,19 @@ def event_views(db, *, symbol=None, window_days=90, offset=0, limit=5, start=Non
     return merged
 
 
+def event_candidates(db, *, window_days=90, limit=1000, start=None, end=None):
+    """Classified event records first, then legacy rows not already inside one."""
+    records = event_records(db, window_days=window_days, start=start, end=end, limit=limit, candidate_limit=limit)
+    covered = {raw for row in records for raw in row["raw_event_ids"]}
+    legacy = [row for row in event_views(db, window_days=window_days, limit=limit, start=start, end=end)
+              if row.get("raw_event_id") not in covered]
+    return records + legacy
+
+
 def _company_event_matches(db, user, instrument, *, limit=5, window_days=90, candidate_events=None, start=None, end=None):
-    direct = event_views(db, symbol=instrument.symbol, window_days=window_days, limit=limit, start=start, end=end)
+    records = event_records(db, symbols=[instrument.symbol], window_days=window_days, start=start, end=end,
+                            limit=limit, candidate_limit=max(limit, 500))
+    direct = records + event_views(db, symbol=instrument.symbol, window_days=window_days, limit=limit, start=start, end=end)
     for row in direct:
         row["relationship_kind"] = "direct"
     profile = current_profile(db, user, instrument) if user else None
@@ -302,7 +317,7 @@ def _company_event_matches(db, user, instrument, *, limit=5, window_days=90, can
         for candidate in (
             candidate_events
             if candidate_events is not None
-            else event_views(db, window_days=window_days, limit=1000, start=start, end=end)
+            else event_candidates(db, window_days=window_days, start=start, end=end)
         ):
             row = dict(candidate)
             matched = factors.intersection(row["factors"])
@@ -315,7 +330,7 @@ def _company_event_matches(db, user, instrument, *, limit=5, window_days=90, can
     return direct, indirect, profile is not None
 
 
-def company_event_page(db, user, instrument, *, offset=0, limit=5, start=None, end=None):
+def company_event_page(db, user, instrument, *, offset=0, limit=5, start=None, end=None, event_types=None):
     """One bounded matching query for Assistant readers; no model generation.
 
     Reuse the company page's exposure matching, preserve legacy directly linked
@@ -346,17 +361,21 @@ def company_event_page(db, user, instrument, *, offset=0, limit=5, start=None, e
     # members already merged by event_views must not reappear as raw duplicates.
     clustered = {raw_id for row in matched.values() for raw_id in row.get("raw_event_ids", [])}
     rows = [row for row in matched.values() if row["id"] not in clustered or row.get("raw_event_ids")]
-    rows.sort(key=lambda row: (-int(row.get("materiality") == "high"), -utc(row["occurred_at"]).timestamp(), row["event_key"]))
+    if event_types:
+        rows = [row for row in rows if row.get("event_type") in event_types]
+    rows.sort(key=lambda row: (-rank_score(row), row["event_key"]))
     selected = rows[offset:offset + limit]
     more = offset + len(selected) < len(rows)
     return {"events": selected, "coverage": {
-        "symbol": instrument.symbol, "period_start": str(start) if start else None,
+        "symbol": instrument.symbol, "event_types": sorted(event_types) if event_types else None,
+        "period_start": str(start) if start else None,
         "period_end": str(end) if end else None,
         "indirect_window_days": 90 if start is None else None,
         "direct_window": "explicit_dates" if start else "stored_history",
         "exposure_profile_available": profile_available,
         "indirect_factors": ["oil_price", "pk_policy_rate", "usd_pkr"],
         "candidate_limit": candidate_limit, "completeness": "bounded_scan",
+        "ranking": "freshness 0.45 + materiality 0.35 + confidence 0.20",
         "matched_in_scan": len(rows), "returned": len(selected), "has_more": more,
         "continuation": str(offset + len(selected)) if more else None,
         "empty_meaning": "No matches on this page within the stated window and bounded candidate scan.",
@@ -372,13 +391,7 @@ def company_events(db, user, instrument, *, limit=5, window_days=90, candidate_e
     chosen += [r for r in direct[3:] + indirect[2:] if r["event_key"] not in seen][
         : max(0, limit - len(chosen))
     ]
-    chosen.sort(
-        key=lambda r: (
-            -int(r["materiality"] == "high"),
-            -utc(r["occurred_at"]).timestamp(),
-            r["event_key"],
-        )
-    )
+    chosen.sort(key=lambda r: (-rank_score(r), r["event_key"]))
     return chosen[:limit]
 
 
@@ -389,6 +402,7 @@ def exact_facts(db, instrument, limit=12):
             select(FinancialFact)
             .where(
                 FinancialFact.instrument_id == instrument.id,
+                public_primary_financials(),
                 FinancialFact.period_end <= today,
                 or_(FinancialFact.confidence.is_(None), FinancialFact.confidence > 0),
                 or_(FinancialFact.filing_date.is_(None), FinancialFact.filing_date <= today),
@@ -420,7 +434,7 @@ def exact_facts(db, instrument, limit=12):
             select(StandardizedFinancialFact)
             .where(
                 StandardizedFinancialFact.instrument_id == instrument.id,
-                StandardizedFinancialFact.quality_status == "observed",
+                verified_secondary_financials(),
                 StandardizedFinancialFact.period_end <= today,
             )
             .order_by(StandardizedFinancialFact.period_end.desc(), StandardizedFinancialFact.id)
@@ -545,10 +559,46 @@ def company_intelligence(db, user, symbol):
     }
 
 
+_PORTFOLIO_EVENT_TTL_SECONDS = 120
+_portfolio_event_cache: dict[tuple, tuple[float, dict]] = {}
+_portfolio_event_locks: dict[tuple, threading.Lock] = {}
+_portfolio_event_guard = threading.Lock()
+
+
 def portfolio_intelligence(db, user, portfolio_id, limit=5):
-    portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    """Short-lived read cache around the projection below.
+
+    Building the dependency fingerprint reads every holding's evidence windows and
+    1000 event candidates, so repeat navigations paid that cost each time and, under
+    load, held a database connection long enough to exhaust the pool. The key
+    includes the holdings/price summary and the calendar day, so a changed
+    portfolio or price is never served stale; new events and briefs can lag by at
+    most the TTL. Concurrent identical requests share one computation.
+    """
+    get_portfolio_or_404(db, user, portfolio_id)
     summary = get_portfolio_summary(db, user, portfolio_id)
-    candidates = event_views(db, limit=1000)
+    key = (user.id, portfolio_id, str(date.today()), VERSION, fingerprint(summary.model_dump(mode="json")))
+    now = time.monotonic()
+    with _portfolio_event_guard:
+        hit = _portfolio_event_cache.get(key)
+        lock = _portfolio_event_locks.setdefault(key, threading.Lock())
+    if hit is None or now - hit[0] > _PORTFOLIO_EVENT_TTL_SECONDS:
+        with lock:
+            hit = _portfolio_event_cache.get(key)
+            if hit is None or time.monotonic() - hit[0] > _PORTFOLIO_EVENT_TTL_SECONDS:
+                payload = json.loads(json.dumps(_portfolio_intelligence(db, user, portfolio_id, summary), default=str))
+                with _portfolio_event_guard:
+                    cutoff = time.monotonic() - _PORTFOLIO_EVENT_TTL_SECONDS
+                    for stale in [k for k, (at, _) in _portfolio_event_cache.items() if at < cutoff]:
+                        _portfolio_event_cache.pop(stale, None)
+                        _portfolio_event_locks.pop(stale, None)
+                    _portfolio_event_cache[key] = hit = (time.monotonic(), payload)
+    return {**hit[1], "events": hit[1]["events"][:limit]}
+
+
+def _portfolio_intelligence(db, user, portfolio_id, summary):
+    portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    candidates = event_candidates(db)
     instruments = {h.symbol: resolve_company(db, h.symbol) for h in summary.holdings}
     profiles = {
         symbol: current_profile(db, user, instrument) for symbol, instrument in instruments.items()
@@ -622,7 +672,6 @@ def portfolio_intelligence(db, user, portfolio_id, limit=5):
     )
     if snapshot:
         cached = json.loads(snapshot.payload_json)
-        cached["events"] = cached["events"][:limit]
         return cached
     priced = all(h.latest_price is not None for h in summary.holdings)
     valid = priced and summary.valuation_complete and summary.total_value > 0
@@ -675,7 +724,7 @@ def portfolio_intelligence(db, user, portfolio_id, limit=5):
     payload = {
         "portfolio_id": portfolio_id,
         "portfolio_name": portfolio.name,
-        "events": rows[:limit],
+        "events": rows[:20],
         "valuation_complete": valid,
         "total_value": str(summary.total_value),
         "coverage": {

@@ -41,7 +41,7 @@ from app.tools import build_tool_registry
 from app.tools.registry import expand_model_data, normalize_json, tool_result
 
 
-CITATION_RE = re.compile(r"\[\[([A-Za-z][A-Za-z0-9_-]{0,63})\]\]")
+CITATION_RE = re.compile(r"\[\[([A-Za-z][A-Za-z0-9_-]{0,63}(?:\s*,\s*[A-Za-z][A-Za-z0-9_-]{0,63})*)\]\]")
 logger = logging.getLogger(__name__)
 TRUNCATED_REASONS = {
     "length",
@@ -85,9 +85,11 @@ SYSTEM_PROMPT = """You are a read-only PSX investment assistant. Answer the user
 EVIDENCE
 - Use the current evidence JSON first; it contains source-linked database facts and document excerpts already retrieved for this question. Call tools for missing evidence or deeper investigation, not to repeat supplied reads.
 - Get exact prices, financials, holdings and calculations from database tools. Use document tools for supporting text.
+- State the reporting period and consolidated/standalone basis beside financial figures. Never combine group profit with standalone EPS or mix gross and net revenue. Cite the source supporting each metric; an EPS citation alone does not support a profit figure.
 - Check reporting periods, units, data provenance and price adjustments before comparing numbers. Flag demo inputs and unresolved corporate actions; do not use distorted returns to justify advice.
 - Separate reported facts, historical estimates and your own interpretation. Historical returns are not forecasts.
 - Cite factual claims using exactly [[E1]], [[E2]], etc., from the current evidence. Earlier answers are context, not fresh evidence.
+- For exact reported financial amounts, prefer {{fact:E1:cash:2025-12-31:standalone}} placeholders, choosing the actual reference, metric, period_end and accounting_basis from the delivered SQL row. Use none only for absent period/basis. The server renders its recorded value and unit. Never infer par value or convert dividend percentage to cash without sourced inputs. Cite the correct issuer; a valid marker for another company is invalid support.
 - State missing evidence briefly. Never invent values or claim external verification; external web tools are unavailable.
 
 ALLOCATION
@@ -113,7 +115,8 @@ EXECUTION
 - Never claim a budget is exhausted unless the server reports it. If capacity remains, continue necessary work rather than merely describing tools you could call.
 
 RESPONSE
-Lead with the conclusion, then the evidence and material limitations. Keep it concise. Complete the requested analysis; avoid a checklist that postpones the actual decision."""
+Lead with the conclusion, then the evidence and material limitations. Keep it concise. Complete the requested analysis; avoid a checklist that postpones the actual decision.
+Every factual bullet in your first final answer must include its current inline [[E<number>]] citation. An answer without these markers fails server validation and cannot be displayed. Use the reference attached to that issuer and record."""
 
 
 class AssistantTerminalError(RuntimeError):
@@ -158,8 +161,19 @@ def _packet_receipt(checkpoint):
     }
 
 
+PORTFOLIO_SCOPED_TOOLS = {'portfolio.summary', 'portfolio.performance', 'portfolio.event_exposure', 'ips.compliance', 'quant.portfolio'}
+
+
+def _pin_selected_portfolio(call: ContentBlock, identity: dict) -> None:
+    """The user's selected portfolio id is server-resolved; never trust a model-typed one
+    (seen live: a mistyped id burned a call on not_found)."""
+    selected = (identity.get('portfolio') or {}).get('portfolio_id')
+    if selected and call.name in PORTFOLIO_SCOPED_TOOLS and isinstance(call.arguments, dict):
+        call.arguments['portfolio_id'] = selected
+
+
 def _company_tool_allowed(name: str, arguments=None) -> bool:
-    if name == "search_conversation_history":
+    if name in ("search_conversation_history","tools.catalog"):
         return True
     if not name.startswith(("market.", "research.", "documents.")):
         return False
@@ -171,9 +185,20 @@ def _company_tool_allowed(name: str, arguments=None) -> bool:
     return True
 
 
-def _catalog(company_only=False) -> list[ProviderTool]:
-    return [ProviderTool(**item) for item in build_tool_registry().model_catalog()
-            if not company_only or _company_tool_allowed(item["name"])] + [ProviderTool(
+CORE_TOOLS={'research.morning_brief','market.latest','research.company_sections','research.search','research.events',
+    'documents.search','portfolio.summary','portfolio.event_exposure','ips.compliance','quant.portfolio','quant.securities','market.universe'}
+
+def _catalog(company_only=False, selected=()) -> list[ProviderTool]:
+    wanted=CORE_TOOLS|set(selected)
+    result=[ProviderTool(**item) for item in build_tool_registry().model_catalog()
+        if (not company_only or _company_tool_allowed(item["name"]))
+        and (not settings.pipeline_enabled or item['name'] in wanted)]
+    if settings.pipeline_enabled:
+        result.append(ProviderTool('tools.catalog',
+            'Discover additional evidence/calculation tools by query or names; load their full schemas for the next turn. Categories: market, research, documents, portfolio, ips, quant, allocation.',
+            {'type':'object','properties':{'query':{'type':'string','maxLength':120},
+                'names':{'type':'array','items':{'type':'string'},'maxItems':8}},'additionalProperties':False}))
+    return result + [ProviderTool(
                 "search_conversation_history", "Retrieve older discussion in this conversation. Historical claims are not current evidence.",
                 {"type": "object", "properties": {"query": {"type": "string", "maxLength": 300},
                  "before_message_id": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 20}},
@@ -309,6 +334,22 @@ def _initial_checkpoint(
             .limit(20)
         )
     )
+    if (not mentioned and explicit_instrument is None
+            and re.match(r'^\s*(what about|does that|where did you|wdym|what do you mean|what does that|what is that|what is the percentage|and what|and how)\b',payload.question,re.I)):
+        # Resolve the discussed securities from earlier owned user requests.
+        # Historical answers supply no financial truth or portfolio selection.
+        previous_requests=db.scalars(select(AssistantExecution).where(
+            AssistantExecution.user_id==user.id,
+            AssistantExecution.conversation_id==conversation_id,
+            AssistantExecution.id!=diagnostics.execution_id.get())
+            .order_by(AssistantExecution.created_at.desc()).limit(20))
+        for prior in previous_requests:
+            previous=json.loads(decrypt_secret(prior.request_encrypted))
+            symbols={token.upper() for token in re.findall(
+                r'\b[A-Za-z][A-Za-z0-9.-]{1,14}\b',previous.get('question',''))}
+            mentioned=list(db.scalars(select(Instrument).where(Instrument.symbol.in_(symbols))
+                .order_by(Instrument.symbol,Instrument.id).limit(20)))
+            if mentioned:break
     identity = {
         "portfolio": None
         if portfolio is None
@@ -345,6 +386,7 @@ def _initial_checkpoint(
         "version": "assistant-tool-loop-2",
         "resolved_identity": identity,
         "compact_evidence_enabled": settings.assistant_compact_evidence_enabled,
+        "company_digest_enabled": settings.assistant_company_digest_enabled,
         "turns": [turn.to_dict() for turn in turns],
         "evidence": {},
         "next_evidence": 1,
@@ -426,7 +468,7 @@ def _deduplicate_tool_evidence(turns):
 
 
 async def _provider_turn(
-    provider, api_key, model, turns, tools, continuation_id=None
+    provider, api_key, model, turns, tools, continuation_id=None, *, thinking=True
 ) -> LLMProviderResult:
     from app.services.assistant_policy import execution_policy
     from app.services.assistant_events import StreamBatch
@@ -456,7 +498,7 @@ async def _provider_turn(
         execution = budget_db.get(AssistantExecution, identifier)
         accounting = json.loads(execution.accounting_json)
         elapsed = (datetime.now(UTC) - execution.started_at.replace(tzinfo=UTC)).total_seconds() if execution.started_at else 0
-        remaining_deadline = settings.assistant_execution_deadline_seconds - elapsed + accounting.get("queue_ms", 0) / 1000
+    remaining_deadline = settings.assistant_execution_deadline_seconds - elapsed
     if remaining_deadline <= 0:
         raise AssistantTerminalError("execution_deadline_exhausted")
     calls = accounting.get("calls", 0)
@@ -475,9 +517,17 @@ async def _provider_turn(
         with SessionLocal() as count_db:
             row = count_db.get(AssistantExecution, identifier)
             remaining_input = policy["cumulative_input"] - row.reserved_input_tokens
+        from app.ai.token_counting import payload_breakdown
+        component_measurement=payload_breakdown(provider.name,payload)
         estimated, count_metadata = await preflight_count(provider, api_key, payload,
             input_limit=policy["input"], remaining_input=remaining_input)
-        transmitted_bytes = len(json.dumps(payload, default=str, separators=(",", ":")).encode())
+        count_metadata["payload_component_measurement"] = component_measurement
+        import hashlib
+        import httpx
+        # Match httpx's actual json= encoding, including non-ASCII source text.
+        wire_body = httpx.Request('POST', 'https://provider.invalid', json=payload).content
+        transmitted_bytes = len(wire_body)
+        count_metadata['wire_payload_sha256'] = hashlib.sha256(wire_body).hexdigest()
         if estimated > policy["input"]:
             diagnostics.record_preflight_rejection({**count_metadata, "counted_input_tokens": estimated,
                 "per_call_limit": policy["input"], "remaining_cumulative_input": remaining_input,
@@ -507,7 +557,7 @@ async def _provider_turn(
                                               schema_version="phase11-provider-count-v2", count_metadata=count_metadata)
     options = ProviderCallOptions(max_output_tokens=output_cap,
         deadline_seconds=remaining_deadline, continuation_id=continuation_id,
-        thinking=True, stream=True, on_event=stream, request_guard=guard)
+        thinking=thinking, stream=True, on_event=stream, request_guard=guard)
     if not isinstance(provider, HTTPProvider):
         await guard(json.loads(_request_record(turns, tools)[0]["content"]))
     started = time.perf_counter()
@@ -587,6 +637,21 @@ def _reserve_calls(checkpoint: dict[str, Any], calls: list[ContentBlock]) -> Non
 
 
 def _sync_tool(user_id: str, call: ContentBlock) -> dict[str, Any]:
+    if call.name=='tools.catalog':
+        from pydantic import BaseModel,Field,ConfigDict
+        class CatalogInput(BaseModel):
+            model_config=ConfigDict(extra='forbid')
+            query:str=Field(default='',max_length=120)
+            names:list[str]=Field(default_factory=list,max_length=8)
+        args=CatalogInput.model_validate(call.arguments or {})
+        available=build_tool_registry().model_catalog()
+        matches=[item for item in available if item['name'] in args.names or
+            (args.query and any(term in (item['name']+' '+item['description']).lower() for term in args.query.lower().split()))]
+        if not args.query and not args.names:
+            return tool_result('ok',{'available_tools':[{'name':item['name'],'description':item['description']} for item in available],'loaded_tools':[]})
+        selected=matches[:8]
+        return tool_result('ok',{'loaded_tools':[item['name'] for item in selected],
+            'available_tools':[{'name':item['name'],'description':item['description']} for item in selected]})
     if call.name == "search_conversation_history":
         from app.services.assistant_memory import search
         from pydantic import BaseModel, Field, ConfigDict
@@ -612,7 +677,7 @@ def _sync_tool(user_id: str, call: ContentBlock) -> dict[str, Any]:
         if db.bind is not None and db.bind.dialect.name == "postgresql":
             db.execute(
                 text("select set_config('statement_timeout', :timeout, true)"),
-                {"timeout": f"{definition.timeout_seconds * 1000}ms"},
+                {"timeout": f"{int(definition.timeout_seconds * settings.tool_timeout_multiplier * 1000)}ms"},
             )
         user = db.get(User, user_id)
         if user is None:
@@ -622,7 +687,7 @@ def _sync_tool(user_id: str, call: ContentBlock) -> dict[str, Any]:
 
 async def _execute_tool(user_id: str, call: ContentBlock) -> ToolExecution:
     definition = _definitions().get(call.name or "")
-    timeout_seconds = 1 if definition is None else definition.timeout_seconds
+    timeout_seconds = 1 if definition is None else definition.timeout_seconds * settings.tool_timeout_multiplier
     started = time.perf_counter()
     try:
         envelope = await asyncio.wait_for(
@@ -641,7 +706,7 @@ async def _execute_tool(user_id: str, call: ContentBlock) -> ToolExecution:
     )
 
 
-def _attach_evidence(checkpoint: dict[str, Any], envelope: dict[str, Any]) -> dict[str, Any]:
+def _attach_evidence(checkpoint: dict[str, Any], envelope: dict[str, Any], scope=None) -> dict[str, Any]:
     result = normalize_json(copy.deepcopy(envelope))
     sources = []
     for source in result.get("sources", []):
@@ -649,22 +714,42 @@ def _attach_evidence(checkpoint: dict[str, Any], envelope: dict[str, Any]) -> di
         # Preserve the supplied label rather than displaying only an E marker.
         if not source.get("source_name") and isinstance(source.get("source"), str):
             source["source_name"] = source["source"]
-        identity = json.dumps(source, sort_keys=True, separators=(",", ":"))
+        from app.ai.source_identity import source_identity
+        identity = source_identity(source)
         existing = next(
-            (key for key, value in checkpoint["evidence"].items() if value["identity"] == identity),
+            (key for key, value in checkpoint["evidence"].items() if source_identity(value["source"]) == identity),
             None,
         )
         if existing is None:
             existing = f"E{checkpoint['next_evidence']}"
             checkpoint["next_evidence"] += 1
             checkpoint["evidence"][existing] = {"identity": identity, "source": source}
+        else:
+            checkpoint["evidence"][existing]["source"].update({k:v for k,v in source.items() if v is not None})
         sources.append({**source, "evidence_ref": existing})
     result["sources"] = sources
+    from app.ai.claim_support import financial_observations
+    mapping = {str(source[key]): source['evidence_ref'] for source in sources
+               for key in ('id', 'evidence_id', 'fact_id', 'statement_id') if source.get(key)}
+    for source in sources:
+        underlying = str(source.get('underlying_id') or '')
+        if underlying.startswith(('financial_fact:', 'standardized_fact:')):
+            mapping[underlying.split(':')[1]] = source['evidence_ref']
+    for ref, observation in financial_observations(result.get('data'), mapping, scope or {}):
+        recorded = checkpoint['evidence'][ref].setdefault('observations', [])
+        if observation not in recorded: recorded.append(observation)
     return result
 
 
 def _result_blocks(checkpoint: dict[str, Any], execution: ToolExecution) -> list[ContentBlock]:
-    envelope = _attach_evidence(checkpoint, execution.envelope)
+    identity = checkpoint.get('resolved_identity', {})
+    instrument_id = (execution.call.arguments or {}).get('instrument_id')
+    entities = [*(identity.get('mentioned_instrument_candidates') or []), *(identity.get('portfolio_instruments') or []), identity.get('explicit_instrument') or {}]
+    scope = next((row for row in entities if row.get('instrument_id') == instrument_id), {}) if instrument_id else {}
+    incoming = copy.deepcopy(execution.envelope)
+    if execution.call.name in ('research.company_digest', 'research.company_sections', 'market.latest'):
+        incoming['sources'] = [{**source, **{key: scope[key] for key in ('instrument_id', 'symbol') if scope.get(key)}} for source in incoming.get('sources', [])]
+    envelope = _attach_evidence(checkpoint, incoming, scope)
     if execution.call.name == 'research.search':
         from app.tools.registry import compact_model_data
         envelope['data']=expand_model_data(envelope.get('data'))
@@ -750,15 +835,18 @@ def unwrap_final_text(raw: str) -> str:
 
 def resolve_citations(text_value: str, checkpoint: dict[str, Any]):
     known = checkpoint["evidence"]
+    from app.ai.claim_support import render_financial_placeholders, scope_errors, numeric_errors
+    text_value, selector_errors = render_financial_placeholders(text_value, known)
+    support_errors = selector_errors + scope_errors(text_value, known, CITATION_RE, checkpoint.get('resolved_identity', {}))
+    support_errors += numeric_errors(text_value, known, CITATION_RE)
     resolved: list[dict[str, Any]] = []
     unknown = []
     seen = set()
 
-    def replace(match: re.Match[str]) -> str:
-        marker = match.group(1)
+    def render_marker(marker,position):
         item = known.get(marker)
         if item is None:
-            unknown.append({"marker": marker, "position": match.start()})
+            unknown.append({"marker": marker, "position": position})
             return f"[{marker} reference unavailable]"
         source = item["source"]
         if marker not in seen:
@@ -766,10 +854,12 @@ def resolve_citations(text_value: str, checkpoint: dict[str, Any]):
             seen.add(marker)
         title = source.get("title") or source.get("source_name") or marker
         page = f", p. {source['page_number']}" if source.get("page_number") else ""
-        if source.get("source_url"):
+        if str(source.get("source_url") or "").startswith(("https://","http://")):
             return f"[{marker}: {title}{page}]({source['source_url']})"
         return f"[{marker}: {title}{page}]"
 
+    def replace(match):
+        return " ".join(render_marker(marker.strip(),match.start()) for marker in match.group(1).split(","))
     rendered = CITATION_RE.sub(replace, text_value)
     return (
         rendered,
@@ -784,8 +874,34 @@ def resolve_citations(text_value: str, checkpoint: dict[str, Any]):
             "unknown_references": unknown,
             "missing_citations": not bool(CITATION_RE.search(text_value)),
             "semantic_verification": "not_performed",
+            "support_errors": support_errors,
+            "financial_value_check": "recorded_amounts_only",
         },
     )
+
+
+def citation_gate(outcome, checkpoint):
+    """Presence/identity gate only; resolving a reference is not entailment."""
+    if outcome.get('unknown_references'):
+        return 'citation_reference_unknown'
+    if outcome.get('support_errors'):
+        return 'citation_support_invalid'
+    if not checkpoint.get('evidence') and checkpoint.get('routing', {}).get('decision', {}).get('primary') == 'definition_or_concept':
+        return None  # A generic concept answer has no current financial observations.
+    if not outcome.get('resolved_count'):
+        return 'citation_missing'
+    return None
+
+
+def citation_failure_answer(checkpoint):
+    # Never decorate rejected prose with citations after generation. Its exact
+    # original remains in the encrypted checkpoint for diagnosis/review.
+    return ('The model did not produce an answer with valid evidence references. '
+            'Its investment conclusion was rejected. '
+            'A supported assessment is unavailable.'
+            + (f" {len(checkpoint['evidence'])} evidence references are available in the source panel."
+               if checkpoint.get('evidence') else
+               ' No usable cited evidence was returned.'))
 
 
 def _render_allocation(checkpoint: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -870,17 +986,73 @@ def _record_provider_result(checkpoint: dict[str, Any], result: LLMProviderResul
     checkpoint["web_tool_activity"].extend(result.web_tool_activity)
 
 
+def _routed_decision(identity, payload, checkpoint):
+    """Rule decision, with a saved classifier label applied; same result on every call."""
+    from app.ai.routing.classifier import TieBreak, apply_tie_break
+    from app.ai.routing.planner import rule_decision
+    from app.ai.routing.types import Route
+    decision = rule_decision(identity, payload.question, payload.company_only)
+    saved = checkpoint.get('route_tiebreak')
+    if saved and saved.get('route'):
+        decision = apply_tie_break(decision, TieBreak(Route(saved['route']), saved['confidence'], 'applied'))
+    return decision
+
+
 async def _prepare_evidence(identifier, user_id, payload, checkpoint):
     if not checkpoint.get('compact_evidence_enabled') or checkpoint.get('initial_evidence_prepared'):
         return
     started = time.perf_counter()
-    from app.ai.company_packet import initial_calls, new_packet
+    from app.ai.company_packet import initial_calls, new_packet, price_only_question
     identity = checkpoint.get('resolved_identity', {})
     checkpoint.setdefault('evidence_packet', new_packet(identity))
+    # Resolve held issuers from the ownership-checked SQL summary before planning
+    # company and sector evidence. Never infer holdings from conversational prose.
+    route_decision = _routed_decision(identity, payload, checkpoint)
+    from app.ai.routing.contracts import CONTRACTS
+    contract = CONTRACTS[route_decision.primary]
+    # The route contract decides whether portfolio context is allowed at all:
+    # market briefs, technical setups and definitions never receive it.
+    if (identity.get('portfolio') and not payload.company_only
+            and contract.portfolio_context != 'never' and contract.entity_blocks
+            and 'price_only' not in route_decision.flags
+            and not checkpoint.get('portfolio_scope_prepared')
+            and not checkpoint.get('initial_evidence_plan')):
+        call=ContentBlock('tool_call',id='initial-portfolio-scope',name='portfolio.summary',
+            arguments={'portfolio_id':identity['portfolio']['portfolio_id']})
+        if call.id not in checkpoint['reserved_tool_call_ids']:
+            _reserve_calls(checkpoint,[call])
+            checkpoint['reserved_tool_call_ids'].append(call.id)
+            _save_checkpoint(identifier,checkpoint)
+        execution=await _execute_tool(user_id,call)
+        data=expand_model_data(execution.envelope.get('data')) or {}
+        identity['portfolio_instruments']=[
+            {'instrument_id':row['instrument_id'],'symbol':row['symbol']}
+            for row in data.get('holdings',[]) if row.get('instrument_id') and row.get('symbol')]
+        _result_blocks(checkpoint,execution)
+        checkpoint['completed_tool_call_ids'].append(call.id)
+        checkpoint['portfolio_scope_prepared']=True
+        _save_checkpoint(identifier,checkpoint)
     if 'initial_evidence_plan' not in checkpoint:
-        checkpoint['initial_evidence_plan'] = [call.to_dict() for call in initial_calls(
+        from app.ai.routing.planner import plan_initial_evidence
+        from app.ai.routing.persistence import record_routing
+        decision = route_decision
+        routed = plan_initial_evidence(
             identity, payload.question, payload.company_only,
-            settings.assistant_max_tool_iterations - checkpoint['reserved_tool_calls'])]
+            settings.assistant_max_tool_iterations - checkpoint['reserved_tool_calls'],
+            use_digests=checkpoint.get("company_digest_enabled", settings.assistant_company_digest_enabled),
+            decision=decision,
+            completed_tools=('portfolio.summary',) if checkpoint.get('portfolio_scope_prepared') else ())
+        checkpoint['routing'] = routed.to_record()
+        if checkpoint.get('route_tiebreak'):
+            checkpoint['routing']['tiebreak_outcome'] = checkpoint['route_tiebreak']['outcome']
+        record_routing(user_id, identifier, checkpoint['routing'])
+        # Required blocks with no source are explicit gaps, never silently omitted.
+        checkpoint['evidence_packet']['route_gaps'] = [
+            {'block': gap['block'], 'reason': gap['reason'], 'source': 'route_contract'}
+            for gap in routed.missing_blocks]
+        checkpoint['evidence_packet']['missing_data'].extend(checkpoint['evidence_packet']['route_gaps'])
+        checkpoint['initial_evidence_plan'] = [call.to_dict() for call in routed.calls
+            if not (checkpoint.get('portfolio_scope_prepared') and call.name=='portfolio.summary')]
     calls = [ContentBlock.from_dict(call) for call in checkpoint['initial_evidence_plan']]
     unreserved = [call for call in calls if call.id not in checkpoint['reserved_tool_call_ids']]
     _reserve_calls(checkpoint, unreserved)
@@ -897,16 +1069,80 @@ async def _prepare_evidence(identifier, user_id, payload, checkpoint):
         _result_blocks(checkpoint, execution)
         checkpoint['completed_tool_call_ids'].append(execution.call.id)
         _save_checkpoint(identifier, checkpoint)
-    visited = {call.arguments.get('instrument_id') for call in calls}
+    # A missing reusable digest is a backend coverage gap, not a task the user
+    # must diagnose and fix by requesting tools individually.
+    fallback=[]
+    for call in calls:
+        if call.name!='research.company_digest': continue
+        envelope=checkpoint.get('initial_evidence_results',{}).get(call.id,{})
+        data=expand_model_data(envelope.get('data')) or {}
+        if envelope.get('status')=='ok' and (data.get('financials') or data.get('prepared_intelligence')): continue
+        for name in ('company_facts','sector','market_risk','events','macro'):
+            fallback.append(ContentBlock('tool_call',id=f'initial-fallback-{len(fallback)+1}',
+                name='research.company_sections',arguments={'instrument_id':call.arguments['instrument_id'],
+                    'sections':[name],'limit':16 if name=='company_facts' else 5,
+                    'sector_comparison_limit':5 if name=='sector' else 0}))
+    remaining=max(0,settings.assistant_max_tool_iterations-checkpoint['reserved_tool_calls']-4)
+    fallback=fallback[:remaining]
+    if fallback:
+        unreserved=[call for call in fallback if call.id not in checkpoint['reserved_tool_call_ids']]
+        _reserve_calls(checkpoint,unreserved)
+        checkpoint['reserved_tool_call_ids'].extend(call.id for call in unreserved)
+        _save_checkpoint(identifier,checkpoint)
+        for execution in await asyncio.gather(*[retrieve(call) for call in fallback if call.id not in checkpoint['completed_tool_call_ids']]):
+            _result_blocks(checkpoint,execution)
+            checkpoint['completed_tool_call_ids'].append(execution.call.id)
+            _save_checkpoint(identifier,checkpoint)
+        calls.extend(fallback)
+    visited = {identifier for call in calls for identifier in (
+        [(call.arguments or {}).get('instrument_id')] + (call.arguments or {}).get('instrument_ids', [])) if identifier}
+    scoped_instruments={item['instrument_id']:item for item in [
+        *identity.get('mentioned_instrument_candidates', []),*identity.get('portfolio_instruments', [])]}
     checkpoint['evidence_packet']['first_pass_coverage'] = {
         item['instrument_id']: [call.arguments.get('sections', [call.name])[0]
-            for call in calls if call.arguments.get('instrument_id') == item['instrument_id']]
-        for item in identity.get('mentioned_instrument_candidates', [])}
+            for call in calls if (call.arguments or {}).get('instrument_id') == item['instrument_id']
+            or item['instrument_id'] in (call.arguments or {}).get('instrument_ids', [])]
+        for item in scoped_instruments.values()}
+    prefetched = ['portfolio.summary'] if checkpoint.get('portfolio_scope_prepared') else []
+    checkpoint['evidence_packet']['already_retrieved'] = {
+        'note': 'Backend already retrieved these reads for this question and they are in this packet. '
+                'Do not request them again; call a tool only for evidence not listed here.',
+        'reads': prefetched + [call.name + (':' + ','.join(call.arguments['sections'])
+                if (call.arguments or {}).get('sections') and call.name == 'research.company_sections' else '')
+                for call in calls]}
     checkpoint['evidence_packet']['first_pass_unvisited_instruments'] = [
-        item for item in identity.get('mentioned_instrument_candidates', []) if item['instrument_id'] not in visited]
+        item for item in scoped_instruments.values() if item['instrument_id'] not in visited]
     checkpoint['initial_evidence_prepared'] = True
     _update_allowance(checkpoint)
     checkpoint['initial_evidence_elapsed_ms'] = round((time.perf_counter() - started) * 1000, 3)
+    _save_checkpoint(identifier, checkpoint)
+
+
+async def _route_tiebreak(identifier, payload, checkpoint, provider, api_key, model):
+    """Model-assisted route LABEL only when rules are ambiguous. One bounded call,
+    recorded on the execution ledger; the label never selects tools."""
+    if (not settings.assistant_route_classifier_enabled or not checkpoint.get('compact_evidence_enabled')
+            or 'route_tiebreak' in checkpoint
+            or 'initial_evidence_plan' in checkpoint):
+        return
+    from app.ai.routing.classifier import CLASSIFIER_VERSION, tie_break
+    from app.ai.routing.planner import rule_decision
+    from app.services.assistant_policy import execution_policy
+    decision = rule_decision(checkpoint.get('resolved_identity', {}), payload.question, payload.company_only)
+    if not decision.tiebreak_candidates:
+        return
+    if checkpoint['usage']['model_calls'] >= execution_policy()['calls'] - 2:
+        return  # keep provider calls for the answer
+    async def complete(system, user):
+        turns = [ProviderTurn('system', [ContentBlock('text', text=system)]),
+                 ProviderTurn('user', [ContentBlock('text', text=user)])]
+        result = await _provider_turn(provider, api_key, model, turns, [], None, thinking=False)
+        _record_provider_result(checkpoint, result)
+        return '\n'.join(b.text or '' for b in (result.turn.content if result.turn else [])
+                         if b.type == 'text') or result.content
+    outcome = await tie_break(decision, payload.question, complete)
+    checkpoint['route_tiebreak'] = {'route': outcome.route.value if outcome.route else None,
+        'confidence': outcome.confidence, 'outcome': outcome.outcome, 'version': CLASSIFIER_VERSION}
     _save_checkpoint(identifier, checkpoint)
 
 
@@ -943,7 +1179,7 @@ async def run_tool_loop(
             "reported_input_for_all_calls": True,
         },
     )
-    tools = _catalog(payload.company_only)
+    tools = _catalog(payload.company_only,checkpoint.get("loaded_tools",[]))
     _update_allowance(checkpoint)
     with SessionLocal() as provider_db:
         owned_user = provider_db.get(User, user.id)
@@ -981,6 +1217,7 @@ async def run_tool_loop(
         checkpoint["turns"] = [checkpoint["turns"][0], *[t.to_dict() for t in history], checkpoint["turns"][-1]]
         checkpoint["memory_prepared"] = True
 
+    await _route_tiebreak(identifier, payload, checkpoint, provider, api_key, model)
     await _prepare_evidence(identifier, user.id, payload, checkpoint)
 
     while True:
@@ -1011,6 +1248,7 @@ async def run_tool_loop(
                 async with semaphore:
                     if payload.company_only and not _company_tool_allowed(call.name or "", call.arguments):
                         return ToolExecution(call, tool_result("invalid_arguments", error={"code": "company_scope_violation"}), 0.0)
+                    _pin_selected_portfolio(call, checkpoint.get('resolved_identity', {}))
                     return await _execute_tool(user.id, call)
 
             executions = await asyncio.gather(
@@ -1019,6 +1257,11 @@ async def run_tool_loop(
             blocks = [
                 block for execution in executions for block in _result_blocks(checkpoint, execution)
             ]
+            for execution in executions:
+                if execution.call.name=='tools.catalog' and execution.envelope.get('status')=='ok':
+                    data=expand_model_data(execution.envelope.get('data')) or {}
+                    checkpoint['loaded_tools']=list(dict.fromkeys(checkpoint.get('loaded_tools',[])+data.get('loaded_tools',[])))
+            tools=_catalog(payload.company_only,checkpoint.get('loaded_tools',[]))
             _update_allowance(checkpoint)
             checkpoint["turns"].append(ProviderTurn("user", blocks).to_dict())
             checkpoint["completed_tool_call_ids"].extend(ids)
@@ -1053,6 +1296,8 @@ async def run_tool_loop(
                 raise AssistantTerminalError("provider_continuation_missing")
             from app.services.assistant_policy import execution_policy
             policy = execution_policy()
+            if checkpoint.get('citation_repair_attempted'):
+                tools=[]
             if checkpoint["usage"]["model_calls"] >= policy["calls"] - 1 or checkpoint["usage"]["output_tokens"] >= policy["cumulative_output"] - policy["output"]:
                 tools = []
                 instruction = ContentBlock("text", text="Use the available evidence to give the final grounded answer now; state unresolved gaps. No more tools are available.")
@@ -1108,12 +1353,49 @@ async def run_tool_loop(
             raw_text = "The provider returned no final answer text."
         answer = unwrap_final_text(raw_text)
         answer, citations, citation_outcome = resolve_citations(answer, checkpoint)
+        if generation_status == 'success':
+            terminal_code = citation_gate(citation_outcome, checkpoint)
+            if (terminal_code and not checkpoint.get('citation_repair_attempted')
+                    and checkpoint['evidence']):
+                from app.services.assistant_policy import execution_policy
+                policy=execution_policy()
+                from app.services.assistant_memory import summary_provider_usage
+                summary_calls=summary_provider_usage(identifier)['model_calls']
+                if checkpoint['usage']['model_calls']+summary_calls < policy['calls']:
+                    invalid_refs=', '.join(item['marker'] for item in citation_outcome.get('unknown_references',[]))
+                    checkpoint['citation_repair_attempted']=True
+                    checkpoint['provider_turn_complete']=False
+                    checkpoint['turns'].append(ProviderTurn('user',[ContentBlock('text',text=
+                        'The previous final answer failed server citation validation. '
+                        + (f'Unknown references: {invalid_refs}. These references have no current source. ' if invalid_refs else '')
+                        + ('Source support failures: '+json.dumps(citation_outcome['support_errors'])+'. ' if citation_outcome.get('support_errors') else '')
+                        + 'Historical citation labels cannot be reused as current evidence. Reassess the answer '
+                        'against the supplied evidence and remove unsupported claims. Cite each material '
+                        'factual claim using a valid inline [[E<number>]] reference. Preserve period, units, '
+                        'reporting basis and uncertainty. Do not merely add references to unsupported '
+                        'wording. Give a final answer; do not call further tools.')]).to_dict())
+                    _save_checkpoint(identifier,checkpoint)
+                    continue
+            if terminal_code:
+                generation_status = 'failed'
+                answer = citation_failure_answer(checkpoint)
+                citations = [{'evidence_ref':ref,**item['source']}
+                             for ref,item in checkpoint.get('evidence',{}).items()]
         citations.extend(checkpoint["web_citations"])
         try:
             allocation_text, allocation_outcome = _render_allocation(checkpoint)
         except Exception as exc:
             raise AssistantTerminalError("response_rendering_failed") from exc
         answer += allocation_text
+        from app.services.assistant_memory import summary_provider_usage
+        summary_usage=summary_provider_usage(identifier)
+        execution_usage={**checkpoint['usage']}
+        for field in ('input_tokens','output_tokens','cache_read_tokens','reasoning_tokens',
+                      'transmitted_input_bytes','model_calls'):
+            execution_usage[field]=execution_usage.get(field,0)+summary_usage.get(field,0)
+        execution_usage['reported_input_for_all_calls']=(execution_usage.get('reported_input_for_all_calls',False)
+            and summary_usage['reported_input_for_all_calls'])
+        execution_usage['summary_usage']=summary_usage
         synthesis = {
             "mode": "llm_tool_loop" if generation_status == "success" else "synthesis_unavailable",
             "provider": provider.name,
@@ -1130,10 +1412,10 @@ async def run_tool_loop(
             "allocation_check": allocation_outcome,
             "evidence_packet": _packet_receipt(checkpoint),
             "token_usage": {
-                **checkpoint["usage"],
-                "total_tokens": checkpoint["usage"]["input_tokens"]
-                + checkpoint["usage"]["output_tokens"],
-                "reported_by_provider": checkpoint["usage"][
+                **execution_usage,
+                "total_tokens": execution_usage["input_tokens"]
+                + execution_usage["output_tokens"],
+                "reported_by_provider": execution_usage[
                     "reported_input_for_all_calls"
                 ],
             },

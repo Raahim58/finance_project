@@ -36,8 +36,8 @@ export type CompanyResearch = {
   instrument: { id:string; symbol:string; name:string; sector?:string|null };
   market: Record<string,unknown>|null;
   market_research: Record<string,unknown>;
-  fundamentals: Array<{taxonomy_key:string;period_type:string;period_end:string;filing_date?:string|null;value:string|number;unit:string;currency?:string|null;document_id?:string|null;page_number?:number|null;provenance:FactProvenance}>;
-  derived_fundamentals: { latest?:Record<string,Record<string,unknown>>; growth?:Record<string,Record<string,unknown>>; ratios?:Record<string,Record<string,unknown>>; valuation?:Record<string,unknown> };
+  fundamentals: Array<{id?:string;taxonomy_key:string;period_type:string;period_start?:string|null;accounting_basis?:string|null;source_label?:string|null;source_url?:string|null;period_end:string;filing_date?:string|null;value:string|number;unit:string;currency?:string|null;document_id?:string|null;page_number?:number|null;classification?:string;provenance:FactProvenance}>;
+  derived_fundamentals: { latest?:Record<string,Record<string,unknown>>; growth?:Record<string,Record<string,unknown>>; ratios?:Record<string,Record<string,unknown>>; unavailable?:Record<string,string>; valuation?:Record<string,unknown> };
   documents: Array<Record<string,unknown>>; events: CompanyEvent[]; portfolio_relevance:Array<Record<string,unknown>>;
   has_synthetic_data: boolean;
   context_contract_version:string;
@@ -362,8 +362,27 @@ export function createLLMKey(provider: string, apiKey: string, defaultModel?: st
   });
 }
 
+export function deleteLLMKey(keyId: string) {
+  return request<void>(`/settings/llm-keys/${encodeURIComponent(keyId)}`, { method: "DELETE" });
+}
+
+export function testLLMKey(provider: string, apiKey: string, defaultModel?: string) {
+  return request<{ provider: string; valid: boolean; message: string }>("/settings/llm-keys/test", {
+    method: "POST",
+    body: JSON.stringify({ provider, api_key: apiKey, default_model: defaultModel || null })
+  });
+}
+
+export function getProfile() {
+  return request<{ id: string; email: string; full_name?: string | null; is_active: boolean }>("/settings/profile");
+}
+
 export function getPortfolios() {
   return request<Portfolio[]>("/portfolios");
+}
+
+export function selectDefaultPortfolio(portfolioId: string) {
+  return request<Portfolio>(`/portfolios/${encodeURIComponent(portfolioId)}/select-default`, { method: "POST" });
 }
 
 export function createPortfolio(name: string, baseCurrency = "PKR") {
@@ -488,6 +507,10 @@ export function createAllocation(portfolioId: string, payload: Record<string, un
   return request<Record<string, unknown>>(`/portfolios/${encodeURIComponent(portfolioId)}/allocations`, { method: "POST", body: JSON.stringify(payload) });
 }
 
+export function renameAllocation(portfolioId: string, allocationId: string, name: string) {
+  return request<AllocationSet>(`/portfolios/${encodeURIComponent(portfolioId)}/allocations/${encodeURIComponent(allocationId)}`, { method: "PATCH", body: JSON.stringify({ name }) });
+}
+
 export function runScenario(portfolioId: string, payload: Record<string, unknown>) {
   return request<ScenarioResult>(`/portfolios/${encodeURIComponent(portfolioId)}/scenario-runs`, { method: "POST", body: JSON.stringify(payload) });
 }
@@ -548,6 +571,10 @@ export function decideRecommendation(recommendationId: string, decision: "accept
   return request<{ id: string; status: string }>(`/recommendations/${encodeURIComponent(recommendationId)}?decision=${decision}`, { method: "PATCH" });
 }
 
+export function runMonitoring(portfolioId: string) {
+  return request<Record<string, unknown>>(`/monitoring/runs/${encodeURIComponent(portfolioId)}`, { method: "POST" });
+}
+
 export function acknowledgeAlert(alertId: string, note?: string) {
   return request<Record<string, unknown>>(`/monitoring/alerts/${encodeURIComponent(alertId)}/acknowledge`, { method: "POST", body: JSON.stringify({ note: note || null }) });
 }
@@ -569,7 +596,7 @@ export function searchInstruments(query = "") {
   return request<Array<{ id: string; symbol: string; name: string; sector?: string | null }>>(`/instruments?query=${encodeURIComponent(query)}`);
 }
 
-export async function getCompanyResearch(symbol:string,options?:{portfolioId?:string;researchPurpose?:"recent_changes"|"outlook"|"risks"|"drivers";question?:string}){const matches=await searchInstruments(symbol);const instrument=matches.find(item=>item.symbol.toUpperCase()===symbol.toUpperCase());if(!instrument)throw new Error("Instrument not found");const params=new URLSearchParams();if(options?.portfolioId)params.set("portfolio_id",options.portfolioId);if(options?.researchPurpose)params.set("research_purpose",options.researchPurpose);if(options?.question)params.set("question",options.question);const query=params.size?`?${params.toString()}`:"";return request<CompanyResearch>(`/companies/${encodeURIComponent(instrument.id)}/overview${query}`);}
+export async function getCompanyResearch(symbol:string,options?:{portfolioId?:string;displayOnly?:boolean;researchPurpose?:"recent_changes"|"outlook"|"risks"|"drivers";question?:string}){const matches=await searchInstruments(symbol);const instrument=matches.find(item=>item.symbol.toUpperCase()===symbol.toUpperCase());if(!instrument)throw new Error("Instrument not found");const params=new URLSearchParams();if(options?.portfolioId)params.set("portfolio_id",options.portfolioId);if(options?.displayOnly)params.set("display_only","true");if(options?.researchPurpose)params.set("research_purpose",options.researchPurpose);if(options?.question)params.set("question",options.question);const query=params.size?`?${params.toString()}`:"";return request<CompanyResearch>(`/companies/${encodeURIComponent(instrument.id)}/overview${query}`);}
 export function getContextRefresh(refreshId:string){return request<{refresh_request_id:string;status:string;needs_rebuild?:boolean;result?:CompanyResearch}>(`/research/context-refreshes/${encodeURIComponent(refreshId)}`);}
 export function deactivateContextRefresh(refreshId:string){return request<{refresh_request_id:string;active:boolean}>(`/research/context-refreshes/${encodeURIComponent(refreshId)}/deactivate`,{method:"POST"});}
 export function getResearchEvents(eventType?:string,limit=30){const params=new URLSearchParams({limit:String(limit)});if(eventType)params.set("event_type",eventType);return request<ResearchEvent[]>(`/research/events?${params.toString()}`);}

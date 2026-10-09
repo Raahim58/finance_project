@@ -229,3 +229,15 @@ Schedule an encrypted off-VM copy of nightly PostgreSQL custom-format dumps and
 for `/srv/psx`. Retain at least two known-good recovery points. A backup is not
 accepted until a dump has restored successfully into a disposable database and
 representative MinIO objects pass their SHA-256 checks.
+
+
+## 9. Deploying while ingestion runs
+
+Deploys do **not** require stopping workers or schedulers. `.github/workflows/deploy-oracle.yml` checks out the commit and runs `ops/oracle-deploy`:
+
+1. Builds `api` and `web` (running containers are untouched).
+2. `python -m app.jobs.check_migrations_additive` refuses pending migrations that drop/rename/alter anything, because old-code workers keep running during the schema change. Override only after coordinating: `ALLOW_BREAKING_MIGRATION=1`. Use expand/contract migrations instead.
+3. `alembic upgrade head`, redeploys `api web research-worker`, waits for `/api/ready`.
+4. Rolls each running worker/scheduler onto the new image **one at a time** (graceful stop up to `DEPLOY_DRAIN_SECONDS`, default 180, then `up -d --no-deps`), consumers before schedulers. Redis queues are never purged and other queues keep consuming; leases in PostgreSQL recover any cut-off task. `DEPLOY_RESTART_WORKERS=0` skips this step, leaving workers on the old image until restarted.
+
+Workers that were not running before the deploy are not started. Assumption: the migration check is a source scan, not a proof of compatibility; reviewing migrations still matters. Remaining unverified: behaviour on the real host (the script is tested against a stubbed `docker` only).

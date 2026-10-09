@@ -1,5 +1,6 @@
 """Observed parser for the standardized tables rendered on DPS company pages."""
 from dataclasses import dataclass
+from calendar import monthrange
 from datetime import date
 from decimal import Decimal, InvalidOperation
 import re
@@ -44,22 +45,24 @@ def _number(value: str) -> Decimal | None:
     return -parsed if negative else parsed
 
 
-def _period(value: str) -> tuple[str, date | None, str] | None:
+def _period(value: str, fiscal_year_end_month: int | None = None) -> tuple[str, date | None, str] | None:
     label = " ".join(value.split()).upper()
     annual = re.fullmatch(r"20\d{2}", label)
-    if annual:
-        year = int(label)
-        return label, date(year, 12, 31), "annual"
     quarter = re.fullmatch(r"Q([1-4])\s+(20\d{2})", label)
-    if quarter:
-        q, year = int(quarter.group(1)), int(quarter.group(2))
-        ends = ((3, 31), (6, 30), (9, 30), (12, 31))
-        month, day = ends[q - 1]
-        return label, date(year, month, day), "quarterly"
-    return None
+    if not annual and not quarter: return None
+    if fiscal_year_end_month is None:
+        return label,None,"annual" if annual else "quarterly"
+    if not 1<=fiscal_year_end_month<=12: raise ValueError("Invalid fiscal year end month")
+    year=int(label) if annual else int(quarter.group(2))
+    if annual: month=fiscal_year_end_month
+    else:
+        # Fiscal year labels identify the year in which that fiscal year ends.
+        end_index=year*12+fiscal_year_end_month-1-(4-int(quarter.group(1)))*3
+        year,zero_month=divmod(end_index,12);month=zero_month+1
+    return label,date(year,month,monthrange(year,month)[1]),"annual" if annual else "quarterly"
 
 
-def parse_company_page(html: str) -> tuple[list[StandardizedFactRow], list[str]]:
+def parse_company_page(html: str, *, fiscal_year_end_month: int | None = None) -> tuple[list[StandardizedFactRow], list[str]]:
     soup = BeautifulSoup(html, "html.parser")
     tables: list[Tag] = []
     for table in soup.find_all("table"):
@@ -74,7 +77,7 @@ def parse_company_page(html: str) -> tuple[list[StandardizedFactRow], list[str]]
         if not rows:
             continue
         headers = [cell.get_text(" ", strip=True) for cell in rows[0].find_all(["th", "td"])]
-        parsed_periods = [_period(value) for value in headers[1:]]
+        parsed_periods = [_period(value, fiscal_year_end_month) for value in headers[1:]]
         if not parsed_periods or all(value is None for value in parsed_periods):
             continue
         for row in rows[1:]:
@@ -103,6 +106,8 @@ def parse_company_page(html: str) -> tuple[list[StandardizedFactRow], list[str]]
                     unit="percent" if is_ratio else "PKR", currency=None if is_ratio else "PKR", source_label=cells[0],
                 ))
                 seen.add(key)
+    if facts and fiscal_year_end_month is None:
+        diagnostics.append("Fiscal calendar is unverified; period labels retained without invented dates.")
     if not facts:
         diagnostics.append("DPS page exposed no recognized standardized financial rows; values remain unavailable.")
     return facts, diagnostics
@@ -110,13 +115,13 @@ def parse_company_page(html: str) -> tuple[list[StandardizedFactRow], list[str]]
 
 class DpsStandardizedFundamentalsProvider:
     source = "dps"
-    parser_version = "dps-company-financials-v1"
+    parser_version = "dps-company-financials-v2"
     base_url = "https://dps.psx.com.pk"
 
-    def fetch(self, symbol: str) -> tuple[bytes, list[StandardizedFactRow], list[str], str]:
+    def fetch(self, symbol: str, *, fiscal_year_end_month: int | None = None) -> tuple[bytes, list[StandardizedFactRow], list[str], str]:
         url = f"{self.base_url}/company/{symbol.strip().upper()}"
         with httpx.Client(timeout=30, follow_redirects=True, headers={"User-Agent": "psx-ai-portfolio-agent/0.1 (personal research; low-rate ingestion)"}) as client:
             response = client.get(url)
             response.raise_for_status()
-        facts, diagnostics = parse_company_page(response.text)
+        facts, diagnostics = parse_company_page(response.text, fiscal_year_end_month=fiscal_year_end_month)
         return response.content, facts, diagnostics, url

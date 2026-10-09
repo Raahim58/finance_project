@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Deploy the CHECKED-OUT commit to Oracle WHILE ingestion workers/schedulers keep running.
+#
+#   1. build api+web                         (running containers are untouched)
+#   2. refuse non-additive migrations        (old-code workers must survive the schema change)
+#   3. migrate, redeploy api/web/research-worker, wait for /ready
+#   4. roll workers/schedulers onto the new image ONE AT A TIME
+#      (Celery finishes its current task; Redis holds the queue; every other queue keeps running;
+#       nothing is stopped as a group, no queue is purged)
+#
+# Env: DEPLOY_RESTART_WORKERS=0 skips step 4 (workers keep old code until restarted);
+#      ALLOW_BREAKING_MIGRATION=1 permits a destructive migration (you own the coordination);
+#      DEPLOY_DRAIN_SECONDS (default 180) bounds each worker's graceful stop.
+set -euo pipefail
+
+# A second rollout must not replace a container while Compose is starting it.
+exec 9>/tmp/psx-oracle-deploy.lock
+flock -n 9 || { echo "Another Oracle deployment is running." >&2; exit 1; }
+
+compose=(docker compose -f compose.oracle.yml --profile ingestion --profile scheduling --profile pipeline --profile research)
+drain_seconds="${DEPLOY_DRAIN_SECONDS:-180}"
+ready_url="${DEPLOY_READY_URL:-http://127.0.0.1:3000/api/ready}"
+
+running_ingestion() {
+  "${compose[@]}" ps --status running --services | grep -E '^(worker-|pipeline-|.*-scheduler$)' || true
+}
+
+echo "== Ingestion services running now (they will keep running) =="
+before="$(running_ingestion)"
+sed 's/^/   /' <<<"$before"
+[[ -n "$before" ]] || echo "   (none)"
+
+echo "== Building API and web =="
+"${compose[@]}" build api web
+
+echo "== Checking pending migrations are safe for running workers =="
+# stdin is the script when invoked over SSH: never let Compose read it.
+"${compose[@]}" run --rm -T --interactive=false -e "ALLOW_BREAKING_MIGRATION=${ALLOW_BREAKING_MIGRATION:-0}" \
+  api python -m app.jobs.check_migrations_additive </dev/null
+
+echo "== Running database migrations =="
+"${compose[@]}" run --rm -T --interactive=false api alembic upgrade head </dev/null
+
+echo "== Redeploying API, web and research worker =="
+"${compose[@]}" up -d api web research-worker
+
+echo "== Waiting for application readiness =="
+curl --fail --retry 20 --retry-all-errors --retry-delay 2 "$ready_url"
+echo
+
+if [[ "${DEPLOY_RESTART_WORKERS:-1}" == "1" && -n "$before" ]]; then
+  echo "== Rolling workers onto the new image, one at a time =="
+  # Consumers first, producers (schedulers) last.
+  ordered="$(grep -v -- '-scheduler$' <<<"$before" || true)"$'\n'"$(grep -- '-scheduler$' <<<"$before" || true)"
+  while read -r svc; do
+    [[ -n "$svc" ]] || continue
+    echo "   restarting $svc"
+    "${compose[@]}" stop -t "$drain_seconds" "$svc"
+    "${compose[@]}" up -d --no-deps "$svc"
+  done <<<"$ordered"
+  after="$(running_ingestion)"
+  missing=0
+  while read -r svc; do
+    [[ -n "$svc" ]] || continue
+    grep -qx "$svc" <<<"$after" || { echo "Not running after roll: $svc" >&2; missing=1; }
+  done <<<"$before"
+  [[ $missing -eq 0 ]] || exit 1
+elif [[ -n "$before" ]]; then
+  echo "== Skipping worker roll: workers keep running the OLD image until restarted =="
+fi
+
+echo "== Deployed services =="
+"${compose[@]}" ps api web research-worker
+echo "DEPLOY SUCCESSFUL"

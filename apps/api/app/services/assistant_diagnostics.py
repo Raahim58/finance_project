@@ -14,6 +14,9 @@ from app.models.llm_invocation import LLMInvocation
 
 execution_id: ContextVar[str | None] = ContextVar("assistant_execution_id", default=None)
 SAFE_FIELDS = {
+    "wire_payload_sha256",
+    "retained_request_sha256",
+    "payload_component_measurement",
     "input_bytes",
     "transmitted_input_bytes",
     "retained_context_estimated_tokens",
@@ -147,6 +150,8 @@ def begin_attempt(
             "estimated_input_tokens": estimated_tokens,
             "input_bytes": len(json.dumps(messages).encode()),
             "transmitted_input_bytes": transmitted_input_bytes,
+            "retained_request_sha256": hashlib.sha256(json.dumps(messages,
+                ensure_ascii=False,separators=(',',':'),default=str).encode()).hexdigest(),
             "retained_context_estimated_tokens": estimated_tokens,
             "projection_version": "phase8-tool-transcript-1",
             "schema_version": schema_version,

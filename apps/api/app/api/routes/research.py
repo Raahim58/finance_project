@@ -10,7 +10,7 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
 from app.models.intelligence_context import ContextRefreshRequest, IntelligenceContextReceiptRecord
-from app.models.workstation import DataSource
+from app.models.workstation import DataSource, Instrument
 from app.schemas.event_intelligence import NormalizedEventResponse
 from app.schemas.intelligence_context import IntelligenceContextRequest, ResearchPurpose
 from app.schemas.research import (
@@ -121,6 +121,7 @@ def overview(
     research_purpose: ResearchPurpose | None = None,
     question: str | None = Query(default=None, min_length=1, max_length=2000),
     active: bool = True,
+    display_only: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -132,8 +133,19 @@ def overview(
         research_purpose=research_purpose,
         question=question,
         active=active,
+        display_only=display_only,
     )
-    return company_research_response(consumed)
+    response = company_research_response(consumed)
+    if display_only and isinstance(response, dict):
+        from app.services.canonical_market_service import latest_price
+        from app.services.company_ratios import display_ratios
+        instrument = db.get(Instrument, instrument_id)
+        quote = latest_price(db, instrument.symbol) if instrument else None
+        shares = (getattr(quote, "capitalization", None) or {}).get("ordinary_shares")
+        derived = dict(response.get("derived_fundamentals") or {})
+        calculated = display_ratios(response.get("fundamentals") or [], getattr(quote, "close", None), shares)
+        response["derived_fundamentals"] = {**derived, **calculated}
+    return response
 
 
 @router.get("/research/context-refreshes/{refresh_id}")

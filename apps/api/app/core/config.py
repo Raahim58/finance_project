@@ -15,8 +15,12 @@ class Settings(BaseSettings):
     app_env: str = "local"
     database_url: str = "sqlite+pysqlite:///./psx_ai_local.db"
     test_database_url: str = "sqlite+pysqlite:///:memory:"
+    # Declared tool limits assume an idle host; the shared 2-vCPU box measured 2-16s for
+    # compliance/quant/search under pipeline load, so every tool limit is scaled by this.
+    tool_timeout_multiplier: float = Field(default=3.0, ge=1.0, le=10.0)
     database_pool_size: int = Field(default=24, ge=1, le=100)
     database_max_overflow: int = Field(default=8, ge=0, le=100)
+    database_max_parallel_workers_per_gather: int = Field(default=0, ge=0, le=8)
     jwt_secret_key: str = "dev-only-change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
@@ -28,6 +32,7 @@ class Settings(BaseSettings):
     encryption_key: str = "dev-only-invalid-key"
     market_data_mode: str = "mock"
     market_data_refresh_seconds: int = 300
+    market_broad_coverage_ratio: float = Field(default=0.8, gt=0, le=1)
     phase2_refill_seconds: int = Field(default=2, ge=1, le=60)
     phase2_max_retries: int = Field(default=3, ge=0, le=10)
     phase2_retry_backoff_seconds: int = Field(default=300, ge=1, le=86400)
@@ -63,9 +68,13 @@ class Settings(BaseSettings):
     retrieval_rrf_k: int = Field(default=60, ge=1, le=1000)
     retrieval_candidate_depth: int = Field(default=50, ge=10, le=500)
     retrieval_min_semantic_score: float = Field(default=0.25, ge=-1, le=1)
+    retrieval_semantic_only_min_score: float = Field(default=0.65, ge=0, le=1)
     retrieval_min_lexical_score: float = Field(default=0.50, ge=0, le=1)
     assistant_max_tool_iterations: int = 12
     assistant_compact_evidence_enabled: bool = True
+    assistant_company_digest_enabled: bool = True
+    # One bounded no-tool call that picks a route LABEL only when the rules are ambiguous.
+    assistant_route_classifier_enabled: bool = True
     assistant_max_retrieved_chunks: int = 8
     assistant_timeout_seconds: int = 30
     assistant_execution_deadline_seconds: int = Field(default=300, ge=1)
@@ -122,6 +131,24 @@ class Settings(BaseSettings):
     auto_create_tables: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    # Restoration is explicitly activated after migration/canary validation.
+    pipeline_dispatch_scope: str = ""
+    pipeline_enabled: bool = False
+    pipeline_enrichment_enabled: bool = False
+    # Operator opt-in: public news/announcement text may be sent to the free
+    # application-owned classifier. Off means the rules classifier is used.
+    pipeline_classification_model_enabled: bool = False
+    pipeline_max_live_articles: int = 300
+    pipeline_max_history_articles: int = Field(default=100, ge=0)
+    pipeline_max_history_pdfs: int = Field(default=25, ge=0)
+    # Zero disables a daily backfill quota; storage checks still apply.
+    pipeline_max_history_mib: int = Field(default=768, ge=0)
+    pipeline_max_vectors: int = 200_000
+    pipeline_data_root: str = "/data"
+    pipeline_raw_budget_gib: int = 48
+    pipeline_database_budget_gib: int = 24
+    pipeline_min_free_gib: int = 20
 
     @field_validator("cors_origins", mode="before")
     @classmethod

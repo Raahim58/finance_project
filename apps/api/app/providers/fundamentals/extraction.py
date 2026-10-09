@@ -10,7 +10,8 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from calendar import monthrange
 from decimal import Decimal, InvalidOperation
 
 
@@ -58,6 +59,7 @@ class ExtractedFact:
     extraction_method: str = "text_layout"
     confidence: Decimal = Decimal("0.900000")
     consolidated: bool = True
+    period_start: date | None = None
 
 
 @dataclass(frozen=True)
@@ -190,12 +192,12 @@ def resolve_report_period(pages: list[object], fallback: date) -> date:
 
 def extract_facts(
     pages: list[object], period_end: date, *, extraction_method: str = "text_layout",
-    confidence: Decimal = Decimal("0.900000"),
+    confidence: Decimal = Decimal("0.900000"), strict: bool = False,
 ) -> tuple[list[ExtractedFact], list[str]]:
     facts, diagnostics = [], []
     seen = {}
     period_end = resolve_report_period(pages, period_end)
-    consolidated = True
+    consolidated = None if strict else True
     notes_scope = False
     for page in pages:
         page_number = int(getattr(page, "page_number", 0))
@@ -321,9 +323,17 @@ def extract_facts(
                 value = amount * (Decimal(1) if per_share else scale)
                 if token.startswith("("):
                     value = -value
+                if strict and consolidated is None:
+                    diagnostics.append(f"Page {page_number}: accounting basis unverified; {taxonomy} not promoted.")
+                    continue
+                duration=report_duration_months(page_text) if strict else None
+                start=period_start_from_duration(fact_period,duration) if duration else None
+                if strict and taxonomy not in {'assets','liabilities','equity','debt'} and start is None:
+                    diagnostics.append(f"Page {page_number}: reporting duration unverified; {taxonomy} not promoted.")
+                    continue
                 fact = ExtractedFact(taxonomy, value, "PKR", "PKR", fact_period,
                     page_number, line[:255], extraction_method=extraction_method,
-                    confidence=confidence, consolidated=consolidated)
+                    confidence=confidence, consolidated=consolidated,period_start=start)
                 if key in seen:
                     facts[seen[key][0]] = fact
                 else:
@@ -360,3 +370,41 @@ def parse_period_end(value: str) -> date | None:
                 continue
     year = re.search(r"\b(20\d{2})\b", value)
     return date(int(year.group(1)), 12, 31) if year else None
+
+
+def report_duration_months(text):
+    """Only explicit statement durations, never fiscal-calendar guesses."""
+    lowered=' '.join(text.lower().split())
+    durations=[]
+    for pattern,months in ((r'\b(?:six months?|half year|half-year)\s+ended\b',6),
+            (r'\bnine months?\s+ended\b',9),(r'\b(?:three months?|quarter)\s+ended\b',3),
+            (r'\b(?:twelve months?|year)\s+ended\b',12)):
+        if re.search(pattern,lowered): durations.append(months)
+    # A statement containing cumulative and standalone quarters is ambiguous
+    # without column-level duration mapping. Preserve it as text for review.
+    return durations[0] if len(set(durations))==1 else None
+
+
+def period_start_from_duration(end,months):
+    # Statement durations represent full calendar months only.
+    if end.day!=monthrange(end.year,end.month)[1]: return None
+    index=end.year*12+end.month-1-months
+    year,zero_month=divmod(index,12);month=zero_month+1
+    return date(year,month,monthrange(year,month)[1])+timedelta(days=1)
+
+
+def explicit_report_period(pages, catalog_label=''):
+    """Resolve a real day/month/year, never a posting date or year-only label."""
+    if re.search(r'\d{1,2}[-/]\d{1,2}[-/]20\d{2}|[A-Za-z]+\s+\d{1,2},?\s+20\d{2}|\d{1,2}\s+[A-Za-z]+\s+20\d{2}',catalog_label):
+        parsed=parse_period_end(catalog_label)
+        if parsed: return parsed
+    dates=[]
+    for page in pages:
+        text=' '.join(page.text.split())
+        for match in re.finditer(r'(?:year|period|quarter|months?)\s+end(?:ed|ing)\s+((?:[A-Za-z]+\s+\d{1,2}|\d{1,2}\s+[A-Za-z]+)[, ]+20\d{2})',text,re.I):
+            value=parse_period_end(match.group(1))
+            if value: dates.append(value)
+    if not dates: return None
+    counts={value:dates.count(value) for value in set(dates)}
+    winners=[value for value,count in counts.items() if count==max(counts.values())]
+    return winners[0] if len(winners)==1 else None

@@ -50,7 +50,7 @@ describe("backend-driven Overview", () => {
   it("does not select an arbitrary portfolio when no default exists", async () => {
     vi.mocked(getPortfolios).mockResolvedValue([{ ...portfolio, is_default: false }]);
     render(<OverviewPage />);
-    await screen.findByRole("option", { name: portfolio.name });
+    await screen.findByText("Select a portfolio to see value and performance.");
     expect(getPortfolioSummary).not.toHaveBeenCalled();
     expect(screen.getByText("Select a portfolio to see value and performance.")).toBeInTheDocument();
   });
@@ -60,7 +60,8 @@ describe("backend-driven Overview", () => {
     vi.mocked(getPortfolioSummary).mockImplementation(id => id === "first" ? new Promise(resolve => { resolveFirst = resolve; }) : Promise.resolve({ ...summary, portfolio: { ...portfolio, id: "second", name: "Second backend portfolio" }, total_value: "987654" }));
     render(<OverviewPage />);
     await waitFor(() => expect(getPortfolioSummary).toHaveBeenCalledWith("first"));
-    fireEvent.change(screen.getByLabelText("Overview portfolio"), { target: { value: "second" } });
+    vi.mocked(getPortfolios).mockResolvedValue([{...portfolio,is_default:false},{...portfolio,id:"second",name:"Second backend portfolio",is_default:true}]);
+    act(()=>window.dispatchEvent(new Event("psx-portfolio-change")));
     await screen.findByText("PKR 987,654");
     await act(async () => resolveFirst(summary));
     expect(screen.queryByText("PKR 123,456")).not.toBeInTheDocument();

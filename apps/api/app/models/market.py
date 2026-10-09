@@ -2,7 +2,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Date, DateTime, ForeignKey, LargeBinary, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -49,6 +49,19 @@ class Company(Base):
     prices: Mapped[list["MarketPrice"]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
     )
+
+
+class CompanyMark(Base):
+    """Small observed website icons, ingested once and served from the database."""
+    __tablename__ = "company_marks"
+    symbol: Mapped[str] = mapped_column(String(30), primary_key=True)
+    website: Mapped[str | None] = mapped_column(String(500))
+    profile_source_url: Mapped[str] = mapped_column(String(500))
+    image_source_url: Mapped[str | None] = mapped_column(String(1000))
+    content: Mapped[bytes | None] = mapped_column(LargeBinary)
+    sha256: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class MarketPrice(Base):

@@ -44,6 +44,7 @@ from app.services.evidence_canary_service import (
     reserve_selection,
 )
 from app.services.ingestion_persistence import store_artifact
+from app.models.workstation import SourceArtifact
 from app.services.rag_service import ParsedPage, create_document_from_pages, parse_pdf
 
 
@@ -229,10 +230,13 @@ def discover_stage(
     priority_class: str = "live",
     cursor_override: dict[str, Any] | None = None,
     request_id: str | None = None,
+    commit: bool = True,
 ) -> DiscoveryStageResult:
+    """Persist discoveries; pipeline callers commit them with the successor outbox."""
     _, config, state = ensure_source_config(db, evidence_source.key)
     if not source_is_allowlisted(evidence_source.key):
-        db.commit()
+        if commit: db.commit()
+        else: db.flush()
         return DiscoveryStageResult((), 0, 0)
     now = datetime.now(UTC)
     state.last_attempted_at = now
@@ -247,7 +251,8 @@ def discover_stage(
                 "next_budget_at": state.next_poll_at.isoformat(),
             }
         )
-        db.commit()
+        if commit: db.commit()
+        else: db.flush()
         return DiscoveryStageResult((), 0, 0)
     try:
         batch = evidence_source.discover_since(cursor, allowed)
@@ -283,7 +288,8 @@ def discover_stage(
                 request.status = "processing" if request.discovered_count else "complete"
                 if not request.discovered_count:
                     request.completed_at = now
-        db.commit()
+        if commit: db.commit()
+        else: db.flush()
         return DiscoveryStageResult(tuple(identifiers), len(batch.candidates), new_count, dict(batch.next_cursor))
     except Exception as exc:
         state.consecutive_failures += 1
@@ -304,7 +310,10 @@ def discover_stage(
                 request.error_class = type(exc).__name__
                 request.error_message = str(exc)[:2000]
                 request.completed_at = now
-        db.commit()
+        # An exception in a pipeline discovery must roll back candidate/cursor
+        # writes with its missing successors. The stage ledger records failure;
+        # legacy direct callers retain their independent source-health commit.
+        if commit: db.commit()
         raise
 
 
@@ -345,7 +354,7 @@ def fetch_stage(
             return FetchStageResult(row.id, 'rejected')
     config = db.get(EvidenceSourceConfig, row.source_config_id)
     cheap_score = score_candidate_metadata(db, candidate)
-    if cheap_score.relevance < 0.18 and config.canary_group != "pass4_official":
+    if cheap_score.relevance < 0.18 and config.canary_group != "pass4_official" and not (settings.pipeline_enabled and config.source_tier=="official"):
         row.relevance_score = Decimal(f"{cheap_score.relevance:.6f}")
         row.scoring_reasons_json = _json(cheap_score.reasons or ("no_substantive_metadata_match",))
         _transition(row, CandidateStatus.REJECTED)
@@ -387,6 +396,14 @@ def fetch_stage(
             _record_request_outcome(db, row, "rejected")
             db.commit()
             return FetchStageResult(row.id, "historical_storage_budget_reached")
+        # Capture raw bytes durably before parsing, selection or embedding.
+        artifact = store_artifact(db, db.get(DataSource, config.data_source_id), raw.content,
+            url=raw.final_url, method="GET", parser_version="raw-capture-v1",
+            content_type=raw.content_type, request_scope={"source_key":config.source_key},lossless=True)
+        artifact.status = "captured"
+        artifact.response_metadata_json = _json({**json.loads(artifact.response_metadata_json or "{}"),
+            "ingestion_mode":json.loads(row.metadata_json or "{}").get("priority_class","live")})
+        row.artifact_id = artifact.id
         raw_path = spool.write_raw(row.id, raw.content)
         row = db.get(DiscoveryCandidate, candidate_id)
         metadata, pipeline = _pipeline_metadata(row)
@@ -520,7 +537,7 @@ def parse_stage(
         row.quality_score = Decimal(f"{parsed.extraction_quality:.6f}")
         row.scoring_reasons_json = _json(score.reasons)
         pipeline["entity_keys"] = list(score.entity_keys)
-        if score.relevance < 0.30:
+        if score.relevance < 0.30 and not (settings.pipeline_enabled and db.get(EvidenceSourceConfig,row.source_config_id).source_tier=="official"):
             _transition(row, CandidateStatus.REJECTED)
             _record_request_outcome(db, row, "rejected")
             spool.cleanup(row.id)
@@ -537,6 +554,16 @@ def parse_stage(
             return ParseStageResult(row.id, "duplicate")
         row.novelty_score = Decimal("1.000000")
         event = _cluster(db, row, parsed, score)
+        if settings.pipeline_enabled and metadata.get('pipeline_revision'):
+            from app.models.workstation import Event
+            revision_key=_hash(f"{event.cluster_key}:revision:{row.id}:{metadata['pipeline_revision']}")
+            revised=db.scalar(select(Event).where(Event.cluster_key==revision_key))
+            if not revised:
+                revised=Event(event_type=event.event_type,title=parsed.title,occurred_at=parsed.published_at or row.discovered_at,
+                    cluster_key=revision_key,details_json=_json({'previous_event_id':metadata.get('previous_event_id'),
+                        'pipeline_revision':metadata['pipeline_revision']}))
+                db.add(revised);db.flush()
+            event=revised
         row.event_id = event.id
         _transition(row, CandidateStatus.CLUSTERED)
         config = db.get(EvidenceSourceConfig, row.source_config_id)
@@ -548,6 +575,7 @@ def parse_stage(
                 EventSource.selection_status.in_(("pending", "selected")),
             )
         )
+        if settings.pipeline_enabled and config.source_tier=="official": occupied=None
         event_source = EventSource(
             event_id=event.id,
             candidate_id=row.id,
@@ -616,31 +644,35 @@ def index_stage(db: Session, candidate_id: str, *, spool: EvidenceSpool | None =
         raw_content = spool.read_raw(row.id)
         data_source = db.get(DataSource, config.data_source_id)
         content_type = str(pipeline.get("content_type") or "application/octet-stream")
-        compressed = gzip.compress(raw_content, compresslevel=6, mtime=0)
-        artifact = store_artifact(
-            db,
-            data_source,
-            compressed,
-            url=parsed.canonical_url,
-            method="GET",
-            parser_version=parsed.parser_method,
-            content_type=f"application/gzip; original={content_type[:80]}",
-            effective_at=parsed.published_at,
-        )
+        artifact = db.get(SourceArtifact, row.artifact_id) if row.artifact_id else None
+        if artifact is None:  # Upgrade/replay compatibility for pre-capture candidates.
+            artifact = store_artifact(db, data_source, raw_content,
+                url=parsed.canonical_url, method="GET", parser_version=parsed.parser_method,
+                content_type=content_type, effective_at=parsed.published_at)
+        artifact.parser_version = parsed.parser_method
+        artifact.status = "parsed"
         symbol = next((str(key) for key in pipeline.get("entity_keys", []) if len(str(key)) <= 30), None)
         document = create_document_from_pages(
             db,
             parse_pdf(raw_content) if raw_content.startswith(b"%PDF-") or "pdf" in content_type.lower() else [ParsedPage(1, parsed.body)],
             title=parsed.title,
-            document_type="announcement" if config.source_key == "psx_announcements" else "news",
+            document_type=classify_document_type(config.source_key, parsed.title, content_type),
             symbol=symbol,
             source_name=row.publisher,
             source_url=parsed.canonical_url,
             published_date=parsed.published_at.date() if parsed.published_at else None,
             visibility="public",
             artifact_id=artifact.id,
+            physical_pages=raw_content.startswith(b"%PDF-") or "pdf" in content_type.lower(),
             commit=False,
         )
+        # A changed publisher URL creates a new immutable revision. Withdraw
+        # the previous text from retrieval while preserving its saved citations.
+        from app.models.document import Document
+        for previous in db.scalars(select(Document).where(Document.source_url==document.source_url,
+                Document.id!=document.id,Document.content_hash!=document.content_hash,
+                Document.visibility=='public',Document.owner_user_id.is_(None),Document.portfolio_id.is_(None))):
+            previous.status='superseded'
         event_source.artifact_id = artifact.id
         from app.models.document import DocumentEvidenceTag
         company_tags=set(db.scalars(select(DocumentEvidenceTag.value).where(
@@ -736,3 +768,16 @@ def operational_counts(db: Session) -> dict[str, int]:
         "duplicates": counts.get("duplicate", 0),
         "rejected": counts.get("rejected", 0),
     }
+
+
+def classify_document_type(source_key, title, content_type):
+    """Official releases remain official; title alone cannot turn a wire into a filing."""
+    lowered=title.lower()
+    if source_key == 'psx_announcements': return 'announcement'
+    if source_key.startswith(('sbp','pbs','imf','world_bank','eia','oecd')):
+        return 'macro_report' if 'pdf' in content_type.lower() else 'policy_document'
+    if source_key.startswith(('psx_financial','issuer_')):
+        if 'annual' in lowered: return 'annual_report'
+        if any(term in lowered for term in ('quarter','interim','half year')): return 'quarterly_report'
+        return 'announcement'
+    return 'news'

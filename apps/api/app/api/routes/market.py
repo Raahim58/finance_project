@@ -2,11 +2,14 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
+from fastapi import HTTPException, Request, Response
+from app.models.market import CompanyMark
 
 from app.db.session import get_db
 from app.schemas.market import (
     CompanyDetailResponse,
     CompanyResponse,
+    IndexCloseResponse,
     MarketFreshnessResponse,
     MarketOverviewResponse,
     MarketPriceResponse,
@@ -16,7 +19,9 @@ from app.schemas.market import (
 from app.services.market_service import (
     get_company_detail,
     get_company_history,
+    get_index_history,
     get_market_freshness,
+    get_market_overview,
     get_market_snapshot,
     get_sectors,
     get_sector_performance,
@@ -27,6 +32,18 @@ from app.services.market_service import (
 )
 
 router = APIRouter()
+
+
+@router.get("/company/{symbol}/logo")
+def company_logo(symbol: str, request: Request, db: Session = Depends(get_db)):
+    mark = db.get(CompanyMark, symbol.upper())
+    if not mark or not mark.content or mark.status != "available":
+        raise HTTPException(404, "No sourced company icon is stored")
+    headers = {"Cache-Control": "public, max-age=86400", "ETag": f'"{mark.sha256}"',
+        "X-Content-Type-Options": "nosniff"}
+    if request.headers.get("if-none-match") == headers["ETag"]:
+        return Response(status_code=304, headers=headers)
+    return Response(mark.content, media_type="image/png", headers=headers)
 
 
 @router.get("/freshness", response_model=MarketFreshnessResponse)
@@ -41,13 +58,7 @@ def snapshot(date_: date | None = Query(default=None, alias="date"), db: Session
 
 @router.get("/overview", response_model=MarketOverviewResponse)
 def overview(date_: date | None = Query(default=None, alias="date"), db: Session = Depends(get_db)):
-    return MarketOverviewResponse(
-        snapshot=get_market_snapshot(db, date_),
-        top_gainers=get_top_gainers(db, date_, limit=5),
-        top_losers=get_top_losers(db, date_, limit=5),
-        top_volume=get_top_volume(db, date_, limit=5),
-        sectors=get_sectors(db, date_),
-    )
+    return get_market_overview(db, date_)
 
 
 @router.get("/top-gainers", response_model=list[MarketPriceResponse])
@@ -92,6 +103,11 @@ def sector_performance(
     return get_sector_performance(db, sector, start_date, end_date)
 
 
+@router.get("/index/{symbol}/history", response_model=list[IndexCloseResponse])
+def index_history(symbol: str, limit: int = Query(default=400, ge=1, le=2000), db: Session = Depends(get_db)):
+    return get_index_history(db, symbol, limit)
+
+
 @router.get("/companies", response_model=list[CompanyResponse])
 def companies(
     q: str | None = None,
@@ -99,6 +115,15 @@ def companies(
     db: Session = Depends(get_db),
 ):
     return search_companies(db, q, limit)
+
+
+@router.get("/trends")
+def trends(symbols: str, db: Session = Depends(get_db)):
+    from app.services.market_trends import recent_closes
+    selected = sorted({part.strip().upper() for part in symbols.split(",") if part.strip()})
+    if len(selected) > 30:
+        raise HTTPException(422, "At most 30 symbols per trend request")
+    return recent_closes(db, selected)
 
 
 @router.get("/company/{symbol}", response_model=CompanyDetailResponse)

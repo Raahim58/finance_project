@@ -155,7 +155,7 @@ test("persistent streaming drawer survives navigation, closure, switching and re
   expect(submissions).toBe(1);
   await page.getByLabel("Message Assistant").fill("Keep this draft");
   await page.getByLabel("Close Assistant").click();
-  await page.getByRole("link", { name: "Portfolios", exact: true }).click();
+  await page.getByRole("link", { name: "Monitoring", exact: true }).click();
   await page.getByLabel("Open Assistant").click();
   await expect(page.getByLabel("Message Assistant")).toHaveValue(
     "Keep this draft",

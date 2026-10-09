@@ -114,3 +114,24 @@ def test_invalid_ohlc_does_not_destroy_a_valid_index_close(tmp_path):
         assert close_series(db,'KSE100')[date(2026,9,2)]==Decimal(103)
         assert len(price_series(db,'KSE100'))==1
         assert db.scalar(select(DataQualityIssue.rule))=='index_ohlc_rejected_close_retained'
+
+
+def test_market_overview_uses_index_closes_and_excludes_index_volume(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.services import market_service
+    with SessionLocal() as db:
+        import_index_month(db,'KSE100',date(2026,9,1),Client(HTML),LocalArtifactStore(tmp_path))
+        db.add(Instrument(symbol='AAA',name='Observed fixture',instrument_type='equity'))
+        db.add(Instrument(symbol='KSE100PR',name='Index fixture',instrument_type='index'))
+        db.flush()
+        rows=[SimpleNamespace(symbol='AAA',volume=7,value=Decimal(70)),
+              SimpleNamespace(symbol='KSE100',volume=9000,value=Decimal(90000)),
+              SimpleNamespace(symbol='KSE100PR',volume=9000,value=Decimal(90000))]
+        monkeypatch.setattr(market_service,'canonical_prices_for_date',lambda *_:rows)
+        snapshot=market_service.get_market_snapshot(db,date(2026,9,2))
+        assert snapshot.index_value==Decimal(103)
+        assert snapshot.index_change==Decimal(2)
+        assert snapshot.total_volume==7 and snapshot.total_value==Decimal(70)
+        assert '1 stored securities' in snapshot.totals_note
+        assert snapshot.source_url.startswith('https://dps.psx.com.pk/historical')
+        assert [r.symbol for r in market_service._prices_for_date(db,date(2026,9,2))]==['AAA']

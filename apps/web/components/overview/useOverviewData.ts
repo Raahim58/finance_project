@@ -50,6 +50,13 @@ export function useOverviewData() {
     return () => { active = false; };
   }, [revision]);
 
+  useEffect(()=>{
+    let active=true;
+    const sync=()=>void getPortfolios().then(rows=>{if(!active)return;const owned=rows.filter(row=>!row.archived_at);setPortfolios({status:"ready",data:owned});setPortfolioId(owned.find(row=>row.is_default)?.id??"");}).catch(()=>{});
+    window.addEventListener("psx-portfolio-change",sync);
+    return()=>{active=false;window.removeEventListener("psx-portfolio-change",sync);};
+  },[]);
+
   useEffect(() => {
     let active = true;
     const initial = { id: portfolioId, summary: empty<PortfolioSummary>(), performance: empty<PortfolioPerformancePoint[]>(),

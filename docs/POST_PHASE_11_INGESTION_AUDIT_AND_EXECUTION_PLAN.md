@@ -215,3 +215,5 @@ curl --fail http://127.0.0.1:3000/api/ready
 These start commands belong after the gates above. Add the new continuous market service and its lifecycle commands during implementation; it does not exist yet. Update `.env.oracle.example`, `ops/ingestion`, `docs/oracle-daily-operations.md` and `docs/data-sources.md` together. Enable official/breadth/macro flags only with the validated source selection, and do not print secret-bearing environment or full Compose configuration into audit logs.
 
 Current verification limits: capacity is a point-in-time reading, not a stress test; backup restoration/OCI entitlement were not checked; exhaustive archive accessibility and topic recall were not measured. Source smokes use tiny samples. Those remaining checks are acceptance work, not facts this audit claims to have established.
+
+random

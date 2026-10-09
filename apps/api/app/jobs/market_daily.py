@@ -113,6 +113,10 @@ def run_once(*, force=False, payouts_backfill=False):
 
 
 def main():
+    from app.core.config import settings
+    if settings.pipeline_enabled:
+        print('{"status":"disabled","reason":"pipeline_scheduler_owns_ingestion"}')
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--once', action='store_true')
     parser.add_argument('--force', action='store_true', help='Explicit revalidation of completed dates')

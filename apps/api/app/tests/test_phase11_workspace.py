@@ -337,15 +337,24 @@ def test_duplicate_evidence_projection_preserves_originals_and_arguments():
 
 
 @pytest.mark.asyncio
-async def test_execution_slot_timeout_has_distinct_durable_outcome(client, monkeypatch):
+async def test_capacity_wait_remains_durable_then_runs_without_increasing_slots(client, monkeypatch):
     _, _, identifier, _ = accepted(client)
     monkeypatch.setattr(assistant_execution, '_slots', asyncio.Semaphore(0))
     monkeypatch.setattr(settings, 'assistant_queue_timeout_seconds', .01)
-    await assistant_execution.execute(identifier)
+    claimed=[]
+    async def execute_claimed(value): claimed.append(value)
+    monkeypatch.setattr(assistant_execution, '_execute_claimed', execute_claimed)
+    task=asyncio.create_task(assistant_execution.execute(identifier))
+    await asyncio.sleep(.03)
     with SessionLocal() as db:
         row = db.get(AssistantExecution, identifier)
-        assert row.status == 'timeout' and row.error_code == 'execution_queue_timeout'
-        assert assistant_events.replay(db, identifier)[-1]['payload']['status'] == 'timeout'
+        assert row.status == 'queued' and row.started_at is None
+        assert row.error_code is None
+    assert not claimed
+    assistant_execution._slots.release()
+    await task
+    assert claimed == [identifier]
+    assert assistant_execution._slots._value == 1
 
 
 @pytest.mark.asyncio

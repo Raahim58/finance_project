@@ -131,8 +131,16 @@ def ensure_source_config(db: Session, source_key: str) -> tuple[DataSource, Evid
     from app.ingestion.news_selection import MATERIAL_NEWS_SOURCES
     if settings.evidence_material_news_enabled and source_key in MATERIAL_NEWS_SOURCES:
         spec = replace(spec, daily_discovery_budget=300, daily_fetch_budget=40, daily_selected_budget=20)
+    if settings.pipeline_enabled:
+        # Global ledger quotas enforce total throughput. Tiny legacy per-source
+        # canary quotas must not silently reduce a restored source to 5 stories.
+        spec = replace(spec, daily_discovery_budget=1000, daily_fetch_budget=300,
+            daily_selected_budget=300, daily_storage_budget_bytes=256*1024*1024)
     selected = source_is_allowlisted(source_key)
     enabled = spec.enabled and selected
+    if settings.pipeline_enabled and source_key=="tavily":
+        from app.models.pipeline import SourceTarget
+        enabled=selected and bool(db.scalar(select(SourceTarget.id).where(SourceTarget.adapter_key=="tavily",SourceTarget.enabled.is_(True))))
     data_source = db.scalar(select(DataSource).where(DataSource.name == spec.name))
     if data_source is None:
         data_source = DataSource(
@@ -236,6 +244,27 @@ def persist_candidate(db: Session, config: EvidenceSourceConfig, candidate: Cand
     row = db.scalar(select(DiscoveryCandidate).where(or_(*filters)))
     if row is not None:
         row.last_seen_at = candidate.discovered_at
+        if row.source_config_id!=config.id:
+            return row,False  # A discovery feed must not rewrite another publisher's metadata.
+        if settings.pipeline_enabled and row.status==CandidateStatus.SELECTED.value:
+            old=json.loads(row.metadata_json or '{}')
+            changed=(row.headline!=candidate.headline[:500] or
+                old.get('summary')!=candidate.metadata.get('summary') or
+                old.get('updated_at')!=candidate.metadata.get('updated_at'))
+            elapsed=(candidate.discovered_at-(row.fetched_at.replace(tzinfo=UTC) if row.fetched_at and row.fetched_at.tzinfo is None else row.fetched_at)).total_seconds() if row.fetched_at else 0
+            recent=bool(row.published_at and row.published_at.date()>=(candidate.discovered_at-timedelta(days=7)).date())
+            if changed or (recent and elapsed>=86400):
+                # Only terminal candidates can be revised. An in-flight fetch
+                # keeps its original revision until its stage is complete.
+                previous_source=db.scalar(select(EventSource).where(EventSource.candidate_id==row.id))
+                if previous_source: previous_source.candidate_id=None
+                revision=int(old.get('pipeline_revision',0))+1
+                row.metadata_json=_json({**dict(candidate.metadata),'pipeline_revision':revision,
+                    'previous_artifact_id':row.artifact_id,'previous_event_id':row.event_id})
+                row.headline=candidate.headline[:500];row.status=CandidateStatus.FETCH_READY.value
+                row.event_id=None;row.body_sha256=None;row.simhash=None;row.parser_version=None
+                row.retry_count=0;row.next_attempt_at=None;row.lease_expires_at=None
+                return row,True
         # Revisit only never-fetched metadata rejections whose classification
         # changes under the repaired gate. Preserve the original decision and
         # never reopen body-quality, duplicate, selected or historical rows.

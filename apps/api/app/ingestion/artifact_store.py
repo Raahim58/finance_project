@@ -26,6 +26,8 @@ class ArtifactStore(Protocol):
 
     def check(self) -> None: ...
 
+    def delete(self, storage_path: str) -> None: ...
+
 
 class LocalArtifactStore:
     """Content-addressed immutable raw storage; paths are never derived from source input."""
@@ -49,6 +51,11 @@ class LocalArtifactStore:
 
     def exists(self, storage_path: str) -> bool:
         return Path(storage_path).is_file()
+
+    def delete(self, storage_path: str) -> None:
+        path=Path(storage_path).resolve()
+        if not path.is_relative_to(self.root): raise ValueError("Artifact is outside configured storage root")
+        path.unlink(missing_ok=True)
 
     def check(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -120,6 +127,9 @@ class S3ArtifactStore:
             if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
                 return False
             raise
+
+    def delete(self, storage_path: str) -> None:
+        self.client.delete_object(Bucket=self.bucket,Key=self._key(storage_path))
 
     def check(self) -> None:
         self.client.head_bucket(Bucket=self.bucket)

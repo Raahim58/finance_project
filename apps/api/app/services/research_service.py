@@ -25,6 +25,7 @@ from app.models.workstation import (
 )
 from app.schemas.research import InstrumentResponse
 from app.services.portfolio_service import get_portfolio_summary
+from app.services.financial_evidence_eligibility import public_primary_financials, secondary_financial_gap
 from app.services.canonical_market_service import latest_price, price_series
 from app.services.company_event_service import sourced_company_events
 from app.services.event_intelligence_service import list_normalized_events
@@ -305,7 +306,7 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
     instrument = db.get(Instrument, instrument_id)
     if instrument is None: raise HTTPException(status_code=404, detail="Instrument not found")
     latest = latest_price(db, instrument.symbol)
-    all_facts = list(db.scalars(select(FinancialFact).where(FinancialFact.instrument_id == instrument.id,
+    all_facts = list(db.scalars(select(FinancialFact).where(FinancialFact.instrument_id == instrument.id,public_primary_financials(),
         or_(FinancialFact.confidence.is_(None), FinancialFact.confidence > 0)).order_by(FinancialFact.period_end.desc(), FinancialFact.version.desc()).limit(200)))
     all_provenance = _document_provenance(db, {fact.document_id for fact in all_facts if fact.document_id})
     observed_facts = [
@@ -365,9 +366,8 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
         "instrument": serialize_instrument(instrument).model_dump(),
         "market": None if latest is None else {"date": latest.trade_date, "close": latest.close, "volume": latest.volume, "change_percent": latest.change_percent, "source": latest.source, "source_url": latest.source_url, "artifact_id": latest.artifact_id, "artifact_sha256": latest.artifact_sha256, "quality_status": latest.quality_status, "adjustment_state": latest.adjustment_state},
         "market_research": market_research,
-        "fundamentals": [
-            *[{"taxonomy_key": fact.taxonomy_key, "period_type": fact.period_type, "period_start": fact.period_start, "accounting_basis": "consolidated" if fact.consolidated else "standalone", "period_end": fact.period_end, "filing_date": fact.filing_date, "value": fact.value, "unit": fact.unit, "currency": fact.currency, "document_id": fact.document_id, "page_number": fact.page_number, "classification": "filing_extracted", "source_url": provenance.get(fact.document_id or "", {}).get("source_url"), "provenance": _fact_provenance(provenance, fact.document_id)} for fact in facts],
-            *[
+        "fundamentals": [{"taxonomy_key": fact.taxonomy_key, "period_type": fact.period_type, "period_start": fact.period_start, "accounting_basis": "consolidated" if fact.consolidated else "standalone", "period_end": fact.period_end, "filing_date": fact.filing_date, "value": fact.value, "unit": fact.unit, "currency": fact.currency, "document_id": fact.document_id, "page_number": fact.page_number, "classification": "filing_extracted", "source_url": provenance.get(fact.document_id or "", {}).get("source_url"), "provenance": _fact_provenance(provenance, fact.document_id)} for fact in facts],
+        "unverified_secondary_observations": [
                 {
                     "taxonomy_key": fact.metric,
                     "period_type": fact.period_type,
@@ -378,7 +378,10 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
                     "currency": fact.currency,
                     "document_id": None,
                     "page_number": None,
-                    "classification": fact.classification,
+                    "classification": "unverified_secondary_observation",
+                    "original_classification": fact.classification,
+                    "accounting_basis": None,
+                    "eligible_for_calculation": False,
                     "source_url": fact.source_url,
                     "provenance": {
                         "source_name": fact.source.upper(),
@@ -395,8 +398,8 @@ def company_overview(db: Session, user: User, instrument_id: str, *, include_por
                     and existing.period_end == fact.period_end
                     for existing in facts
                 )
-            ],
         ],
+        "financial_evidence_gaps": [gap] if (gap:=secondary_financial_gap(db,instrument.id)) else [],
         "derived_fundamentals": _derived_fundamentals(facts, provenance),
         "documents": [{"id": document.id, "title": document.title, "document_type": document.document_type, "published_date": document.published_date, "source_url": document.source_url, "is_synthetic": document.document_type == "synthetic_demo_facts"} for document in documents],
         "events": [

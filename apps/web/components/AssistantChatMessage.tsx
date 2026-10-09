@@ -1,7 +1,7 @@
 "use client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { ChatMessage } from "@/lib/assistant-workspace";
+import { tokenUsageOf, type ChatMessage, type TokenUsage } from "@/lib/assistant-workspace";
 export function outcomeLabel(status: string, error?: string | null) {
   const providerErrors: Record<string, string> = {
     provider_overloaded: "Z.ai reports temporary overload (1305). Try again later.",
@@ -43,10 +43,24 @@ export function Markdown({ text }: { text: string }) {
     </div>
   );
 }
+const number = new Intl.NumberFormat("en-US");
+export function TokenLine({ usage }: { usage: TokenUsage }) {
+  const calls = usage.model_calls ?? 0;
+  const callText = `${calls} model call${calls === 1 ? "" : "s"}`;
+  if (usage.reported_by_provider === false)
+    return <p className="assistant-tokens">Token usage not fully reported by the provider · {callText}</p>;
+  const cached = usage.cache_read_tokens ? ` (${number.format(usage.cache_read_tokens)} cached)` : "";
+  return (
+    <p className="assistant-tokens" data-testid="token-usage">
+      Input {number.format(usage.input_tokens)}{cached} · Output {number.format(usage.output_tokens)} · {callText}
+    </p>
+  );
+}
 export function ChatMessageView({ message }: { message: ChatMessage }) {
   const context = message.context;
   const sources = message.evidence?.sources ?? [];
   const warnings = essentialWarnings(message.evidence?.synthesis);
+  const usage = tokenUsageOf(message);
   return (
     <article
       className={`assistant-message ${message.role === "user" ? "assistant-user" : "assistant-answer"}`}
@@ -97,6 +111,7 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
           ))}
         </details>
       ) : null}
+      {usage ? <TokenLine usage={usage} /> : null}
     </article>
   );
 }

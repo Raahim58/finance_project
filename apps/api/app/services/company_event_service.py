@@ -132,6 +132,10 @@ def sourced_company_events(db: Session, instrument: Instrument) -> list[SourcedC
     )
     sources_by_event: dict[str, list[EventSource]] = {}
     document_events: dict[str, set[str]] = {}
+    # Chunk text is only read to validate legacy news links; announcements and
+    # already-rebuilt links never use it, and loading every chunk of every linked
+    # report made this call time out for companies with many filings.
+    needs_text = {event.id for event in events if event.event_type == "news" and event.id not in rebuilt_event_ids}
     source_rows = db.scalars(
         select(EventSource)
         .where(
@@ -143,7 +147,7 @@ def sourced_company_events(db: Session, instrument: Instrument) -> list[SourcedC
     )
     for source in source_rows:
         sources_by_event.setdefault(source.event_id, []).append(source)
-        if source.document_id:
+        if source.document_id and source.event_id in needs_text:
             document_events.setdefault(source.document_id, set()).add(source.event_id)
 
     text_by_event = {event.id: event.title for event in events}

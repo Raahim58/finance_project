@@ -13,6 +13,9 @@ from app.services.evidence_scheduler_service import run_evidence_scheduler_once
 
 
 def run_once() -> None:
+    if settings.pipeline_enabled:
+        print('{"status":"disabled","reason":"pipeline_scheduler_owns_ingestion"}', flush=True)
+        return
     if not settings.evidence_enabled:
         print('{"status":"disabled","setting":"EVIDENCE_ENABLED"}', flush=True)
         return

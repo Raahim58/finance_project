@@ -1,4 +1,7 @@
+import hashlib
 import json
+from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -14,8 +17,56 @@ class PortfolioInput(BaseModel):
     portfolio_id: str
 
 
+class PortfolioEventExposureInput(PortfolioInput):
+    limit: int = Field(default=8, ge=1, le=15)
+
+
 class PortfolioPerformanceInput(PortfolioInput):
     limit: int = Field(default=365, ge=2, le=5000)
+    # 'summary' (default) returns computed statistics plus a bounded sample of the
+    # ledger series; 'full' returns every point (can be thousands of tokens).
+    view: Literal['summary', 'full'] = 'summary'
+
+
+SUMMARY_SAMPLE_POINTS = 24
+
+
+def summarize_performance(points: list[dict]) -> dict:
+    """Deterministic statistics and an evenly spaced sample from stored ledger points."""
+    def number(value):
+        return None if value is None else Decimal(str(value))
+    twr = [(row['value_date'], number(row.get('cumulative_twr_percent'))) for row in points
+           if row.get('cumulative_twr_percent') is not None]
+    def day(item):
+        return None if item is None else {'date': item[0], 'percent': str(item[1])}
+    peak, drawdown, worst = None, Decimal('0'), None
+    for date_, value in twr:   # drawdown on the cash-flow-adjusted index, not raw value
+        index = Decimal('1') + value / Decimal('100')
+        peak = index if peak is None or index > peak else peak
+        if peak:
+            change = (index - peak) / peak * Decimal('100')
+            if change < drawdown:
+                drawdown, worst = change, date_
+    daily = [(row['value_date'], number(row.get('day_change_percent'))) for row in points
+             if row.get('day_change_percent') is not None]
+    step = max(1, -(-len(points) // SUMMARY_SAMPLE_POINTS))
+    sample = points[::step]
+    if points and sample[-1] is not points[-1]:
+        sample.append(points[-1])
+    return {
+        'point_count': len(points), 'first_date': points[0]['value_date'] if points else None,
+        'last_date': points[-1]['value_date'] if points else None,
+        'start_value': points[0]['total_value'] if points else None,
+        'end_value': points[-1]['total_value'] if points else None,
+        'net_external_cash_flow': str(sum((number(row['external_cash_flow']) or Decimal('0') for row in points), Decimal('0'))),
+        'cumulative_twr_percent': str(twr[-1][1]) if twr else None,
+        'max_drawdown_percent': str(drawdown.quantize(Decimal('0.0001'))) if twr else None,
+        'max_drawdown_trough_date': worst,
+        'best_day': day(max(daily, key=lambda item: item[1], default=None)),
+        'worst_day': day(min(daily, key=lambda item: item[1], default=None)),
+        'method': 'computed from stored ledger points; drawdown is on the cumulative TWR index',
+        'sampled_points': sample, 'sample_step_days': step,
+    }
 
 
 def portfolio_source(portfolio_id, data, method):
@@ -49,14 +100,55 @@ def _summary(db, user, payload: PortfolioInput):
 
 def _performance(db, user, payload: PortfolioPerformanceInput):
     points = get_portfolio_performance(db, user, payload.portfolio_id, payload.limit)
-    data = {
-        "portfolio_id": payload.portfolio_id,
-        "points": [point.model_dump(mode="json") for point in points],
-    }
+    rows = [point.model_dump(mode="json") for point in points]
+    data = {"portfolio_id": payload.portfolio_id}
+    if payload.view == 'full':
+        data["points"] = rows
+    else:
+        data["summary"] = summarize_performance(rows)
     data["data_cutoff"] = points[-1].value_date if points else None
     return tool_result("ok" if points else "missing", data,
                        sources=[portfolio_source(payload.portfolio_id, data, "ledger_time_weighted_return")],
                        returned=len(points), remaining=0)
+
+
+EXCERPT_CHARS = 260
+
+
+def _event_exposure(db, user, payload: PortfolioEventExposureInput):
+    """Recent stored events mapped onto the selected portfolio's holdings, weighted from SQL.
+
+    Compact by design: top events only, at most two short original excerpts each.
+    Direction and size of impact are not calculated anywhere, and this says so.
+    """
+    from app.services.research_intelligence_service import portfolio_intelligence
+
+    result = portfolio_intelligence(db, user, payload.portfolio_id, payload.limit)
+    sources, events = {}, []
+    for row in result["events"]:
+        event = row["event"]
+        refs = []
+        excerpts = []
+        for item in (event.get("evidence") or event.get("sources") or [])[:2]:
+            ref = "evt-" + hashlib.sha256(json.dumps([item.get("source_url"), item.get("document_id"), item.get("title") or item.get("source_name")], default=str).encode()).hexdigest()[:20]
+            sources[ref] = {"id": ref, "source_name": item.get("source_name") or item.get("title") or "Event source",
+                            "source_url": item.get("source_url"), "document_id": item.get("document_id"),
+                            "published_at": item.get("published_at")}
+            refs.append(ref)
+            if item.get("text"):
+                excerpts.append({"source_ref": ref, "text": str(item["text"])[:EXCERPT_CHARS]})
+        events.append({
+            "title": event.get("title"), "occurred_at": event.get("occurred_at"), "event_type": event.get("event_type"),
+            "materiality": event.get("materiality"), "freshness": event.get("freshness_status"),
+            "affected_holdings": [{"symbol": c["symbol"], "relationship": c["relationship_kind"],
+                                   "portfolio_weight": c.get("current_portfolio_weight")} for c in row["companies"]],
+            "potentially_affected_weight": row.get("potentially_affected_weight"),
+            "impact": "not_calculated", "evidence": excerpts, "source_refs": refs,
+        })
+    data = {"events": events, "coverage": result.get("coverage"), "valuation_complete": result.get("valuation_complete"),
+            "window": "90 days; classified medium/high materiality events with indexed original evidence",
+            "note": "Exposure is the share of the portfolio in affected holdings; impact direction and size are not calculated."}
+    return tool_result("ok" if events else "missing", data, sources=list(sources.values()), returned=len(events), remaining=0)
 
 
 def _ips(db, user, payload: PortfolioInput):
@@ -129,6 +221,19 @@ def register_portfolio_tools(registry: ToolRegistry) -> None:
             False,
             10,
             _performance,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            "portfolio.event_exposure",
+            "1.0",
+            "Recent stored market and company events mapped to the selected portfolio's holdings with portfolio weights and original evidence excerpts; no impact forecast",
+            PortfolioEventExposureInput,
+            "portfolio:read",
+            True,
+            False,
+            12,
+            _event_exposure,
         )
     )
     registry.register(

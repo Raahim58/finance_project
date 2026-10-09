@@ -39,6 +39,9 @@ def report_coverage(db, symbol):
         {
             "document_id": r.id,
             "title": r.title,
+            "source_url": r.source_url,
+            "source_name": r.source_name,
+            "document_type": r.document_type,
             "published_date": r.published_date,
             "artifact_id": r.artifact_id,
             "content_hash": r.content_hash,
@@ -82,7 +85,8 @@ def prepare_report(db, document_id):
     document = db.scalar(select(Document).where(Document.id == document_id).with_for_update())
     if document is None or document.visibility != "public" or document.data_status != "observed":
         raise ValueError("Public observed report not found")
-    if index_current(db, document_id):
+    lexical_ready = settings.pipeline_enabled and bool(db.scalar(select(func.count()).select_from(DocumentChunk).where(DocumentChunk.document_id==document_id)))
+    if index_current(db, document_id) or lexical_ready:
         return {"document_id": document_id, "status": "cached"}
     artifact = db.get(SourceArtifact, document.artifact_id) if document.artifact_id else None
     if not artifact or not artifact.storage_path:

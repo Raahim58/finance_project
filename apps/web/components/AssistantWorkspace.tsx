@@ -8,6 +8,10 @@ import {
   useRef,
   useState,
 } from "react";
+import Link from "next/link";
+import { formatDate } from "@/lib/overview";
+import { PortfolioContextPicker } from "./PortfolioContextPicker";
+import { AssistantEvidenceContext } from "./AssistantEvidenceContext";
 import { usePathname } from "next/navigation";
 import { AssistantProviderSwitch } from "@/components/AssistantProviderSwitch";
 import {
@@ -35,6 +39,7 @@ import {
   type Conversation,
   type History,
   type MessageContext,
+  sumTokenUsage,
   type RunEvent,
 } from "@/lib/assistant-workspace";
 
@@ -45,7 +50,11 @@ type LiveRun = ChatRun & {
   sequence: number;
   warning?: string;
 };
-type WorkspaceAction = { open: (question?: string) => void };
+type WorkspaceAction = {
+  open: (question?: string) => void; setCompanyPortfolioScope: (id: string | null) => void; setPortfolioScope: (id: string | null) => void; close: () => void; opened: boolean;
+  chats: Conversation[]; selected: string | null; selectChat: (id: string) => void;
+  newChat: () => Promise<string | null>; moreChats: () => void; hasMoreChats: boolean;
+};
 const Workspace = createContext<WorkspaceAction | null>(null);
 export function useAssistantWorkspace() {
   return useContext(Workspace);
@@ -89,6 +98,20 @@ export function AssistantWorkspaceProvider({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const fullPage = pathname === "/assistant";
+  const [assistantCompany,setAssistantCompany] = useState<{id:string;symbol:string;name:string}|null>(null);
+  const [companyChoices,setCompanyChoices] = useState<Array<{id:string;symbol:string;name:string}>>([]);
+  useEffect(()=>{if(!fullPage)return;let active=true;void searchInstruments().then(rows=>{if(active)setCompanyChoices(rows)}).catch(()=>{if(active)setCompanyChoices([])});return()=>{active=false};},[fullPage]);
+  const [scopeRevision, setScopeRevision] = useState(0);
+  const [companyPortfolioScope, setCompanyPortfolioScopeState] = useState<{path:string;id:string|null}|null>(null);
+  const setCompanyPortfolioScope = useCallback((id:string|null) => {
+    setCompanyPortfolioScopeState(old => old?.path===pathname&&old.id===id?old:{path:pathname,id});
+  },[pathname]);
+  useEffect(() => {
+    const changed = () => setScopeRevision(value => value + 1);
+    window.addEventListener("psx-portfolio-change", changed);
+    return () => window.removeEventListener("psx-portfolio-change", changed);
+  }, []);
   const [account, setAccount] = useState<string | null>(null);
   const [opened, setOpened] = useState(false),
     [expanded, setExpanded] = useState(false),
@@ -320,6 +343,7 @@ export function AssistantWorkspaceProvider({
     setError(null);
     setProvider(null);
     setProviderSaving(false);
+    setAssistantCompany(null);
     if (account)
       void refreshChats()
         .then((rows) => {
@@ -335,11 +359,13 @@ export function AssistantWorkspaceProvider({
       try {
         const portfolios = await getPortfolios();
         const portfolioId = pathname.match(/^\/portfolios\/([^/]+)/)?.[1];
-        const portfolio = portfolioId
-          ? portfolios.find((p) => p.id === portfolioId)
-          : portfolios.find((p) => p.is_default && !p.archived_at);
+        const explicitCompanyScope = companyPortfolioScope?.path===pathname;
+        const requestedPortfolioId = portfolioId ?? (explicitCompanyScope ? companyPortfolioScope?.id : undefined);
+        const portfolio = requestedPortfolioId
+          ? portfolios.find((p) => p.id === requestedPortfolioId && !p.archived_at)
+          : explicitCompanyScope ? undefined : portfolios.find((p) => p.is_default && !p.archived_at);
         const symbol = pathname.match(/^\/companies\/([^/]+)/)?.[1];
-        const company = symbol
+        const company = fullPage && assistantCompany ? assistantCompany : symbol
           ? (await searchInstruments(decodeURIComponent(symbol))).find(
               (c) =>
                 c.symbol.toUpperCase() ===
@@ -348,14 +374,15 @@ export function AssistantWorkspaceProvider({
           : null;
         if (valid) {
           setContext({
-            page: portfolioId ? "portfolio" : symbol ? "company" : "workspace",
+            page: portfolioId ? "portfolio" : company ? "company" : "workspace",
             portfolio_id: portfolio?.id,
             portfolio_name: portfolio?.name,
             instrument_id: company?.id,
             symbol: company?.symbol,
             company_name: company?.name,
+            explicit_scope: !symbol && (fullPage || explicitCompanyScope || Boolean(portfolioId)),
           });
-          setContextReady(!portfolioId || !!portfolio);
+          setContextReady(!requestedPortfolioId || !!portfolio);
           if (symbol && !company) setContextReady(false);
         }
       } catch {
@@ -365,7 +392,7 @@ export function AssistantWorkspaceProvider({
     return () => {
       valid = false;
     };
-  }, [pathname, account, opened]);
+  }, [pathname, account, opened, scopeRevision, companyPortfolioScope, assistantCompany, fullPage]);
   useEffect(() => {
     if (selected)
       void loadHistory(selected)
@@ -384,7 +411,7 @@ export function AssistantWorkspaceProvider({
         .catch((e) => setError(e.message));
   }, [selected, loadHistory, observe]);
   useEffect(() => {
-    if (!opened) return;
+    if (!opened || fullPage) return;
     const previous = document.activeElement as HTMLElement | null;
     composer.current?.focus();
     const key = (event: KeyboardEvent) => {
@@ -413,15 +440,15 @@ export function AssistantWorkspaceProvider({
       document.removeEventListener("keydown", key);
       previous?.focus();
     };
-  }, [opened]);
+  }, [opened, fullPage]);
   useEffect(() => {
-    if (!opened) return;
+    if (!opened && !fullPage) return;
     if (nearBottom.current) {
       const element = scroller.current;
       if (element) element.scrollTop = element.scrollHeight;
       setNewMessages(false);
     } else setNewMessages(true);
-  }, [histories, runs, opened, selected]);
+  }, [histories, runs, opened, selected, fullPage]);
   const open = useCallback((question?: string) => {
     setOpened(true);
     if (question) {
@@ -482,46 +509,58 @@ export function AssistantWorkspaceProvider({
     }
   };
   const history = selected ? histories[selected] : null,
+    conversationTokens = sumTokenUsage(history?.items ?? []),
     live = Object.values(runs).filter((r) => r.conversationId === selected),
     running = live.find((r) => active(r.status)),
     draft = drafts[selected ?? "new"] ?? "";
-  const action = useRef<WorkspaceAction>({ open });
+  const marketWorkspace = !fullPage;
+  const action: WorkspaceAction = { open, setCompanyPortfolioScope, setPortfolioScope:setCompanyPortfolioScope, close: () => setOpened(false), opened, chats, selected,
+    selectChat: id => { setSelected(id); setOpened(true); setShowChats(false); nearBottom.current = true; },
+    newChat, moreChats: () => { if (chatCursor) void refreshChats(chatCursor); }, hasMoreChats: !!chatCursor };
   return (
-    <Workspace.Provider value={action.current}>
+    <Workspace.Provider value={action}>
       {children}
-      <button
+      {!fullPage?<button
         ref={trigger}
         className="assistant-launcher"
         type="button"
         aria-label="Open Assistant"
         aria-expanded={opened}
-        onClick={() => setOpened(true)}
+        onClick={() => setOpened(!opened)}
       >
-        Assistant
+        <span aria-hidden="true">✦</span> Ask
         {Object.values(runs).some((r) => active(r.status)) ? (
           <span className="assistant-running-dot" />
         ) : null}
-      </button>
-      {opened ? (
+      </button>:null}
+      {opened || fullPage ? (
         <section
           ref={dialog}
-          role="dialog"
-          aria-modal="true"
+          role={fullPage?"region":"dialog"}
+          aria-modal={fullPage?undefined:true}
           aria-label="Assistant"
-          className={`assistant-drawer${expanded ? " assistant-expanded" : ""}`}
+          className={`assistant-drawer${expanded && !fullPage ? " assistant-expanded" : ""}${marketWorkspace ? " assistant-market-overlay" : ""}${fullPage ? " assistant-full-page" : ""}`}
         >
+          {fullPage?<aside className="assistant-conversation-list" aria-label="Conversations">
+            <div><h1>Chats</h1><button type="button" onClick={()=>void newChat()}>＋ New chat</button></div>
+            <nav aria-label="Saved chat threads">{chats.map(chat=><button key={chat.id} aria-current={selected===chat.id?"true":undefined} onClick={()=>{setSelected(chat.id);nearBottom.current=true;}}><strong>{chat.title}</strong><span>{chat.latest_activity?formatDate(chat.latest_activity):"—"}{chat.active_run?" · Generating":""}</span></button>)}</nav>
+            {!chats.length?<p>No saved chats yet.</p>:null}{chatCursor?<button type="button" onClick={()=>void refreshChats(chatCursor)}>More chats</button>:null}
+          </aside>:null}
+          <div className="assistant-conversation-column">
+          {fullPage?<div className="assistant-scope-bar"><label>Company <select aria-label="Assistant company context" value={assistantCompany?.id??""} onChange={event=>setAssistantCompany(companyChoices.find(row=>row.id===event.target.value)??null)}><option value="">All companies</option>{companyChoices.map(row=><option key={row.id} value={row.id}>{row.symbol} · {row.name}</option>)}</select></label></div>:null}
           <header className="assistant-header">
             <div>
               <strong>Assistant</strong>
               <p>Research with your financial context</p>
             </div>
             <div className="flex gap-2">
-              <button
-                className="icon-btn"
+              {!fullPage?<><button
+                className="icon-btn assistant-history-button"
+                aria-expanded={showChats}
                 aria-label="Saved chats"
                 onClick={() => setShowChats(!showChats)}
               >
-                Chats
+                Previous chats ⌄
               </button>
               <button
                 className="icon-btn"
@@ -541,13 +580,13 @@ export function AssistantWorkspaceProvider({
                 }}
               >
                 ×
-              </button>
+              </button></>:<Link href="/dashboard">Back to workspace ↗</Link>}
             </div>
           </header>
           <AssistantProviderSwitch key={account} onProviderChange={setProvider} onSavingChange={setProviderSaving} />
-          {showChats ? (
+          {showChats && !fullPage ? (
             <nav
-              className="assistant-chat-list"
+              className="assistant-chat-list assistant-chat-dropdown"
               aria-label="Saved conversations"
             >
               <button
@@ -577,12 +616,12 @@ export function AssistantWorkspaceProvider({
               ) : null}
             </nav>
           ) : null}
-          <div className="assistant-toolbar">
+          {!fullPage?<div className="assistant-toolbar">
             <span>
               {chats.find((c) => c.id === selected)?.title ?? "New chat"}
             </span>
             <button onClick={() => void newChat()}>New chat</button>
-          </div>
+          </div>:null}
           <div
             className="assistant-messages"
             ref={scroller}
@@ -616,6 +655,13 @@ export function AssistantWorkspaceProvider({
             {history?.items.map((message) => (
               <ChatMessageView key={message.id} message={message} />
             ))}
+            {conversationTokens.answers ? (
+              <p className="assistant-tokens assistant-tokens-total" data-testid="conversation-tokens">
+                Conversation so far: Input {conversationTokens.input.toLocaleString("en-US")} · Output{" "}
+                {conversationTokens.output.toLocaleString("en-US")} · {conversationTokens.calls} model calls
+                {conversationTokens.unreported ? ` · ${conversationTokens.unreported} answer(s) not fully reported` : ""}
+              </p>
+            ) : null}
             {live
               .filter(
                 (r) =>
@@ -630,7 +676,7 @@ export function AssistantWorkspaceProvider({
                   key={run.execution_id}
                   className="assistant-message assistant-answer"
                 >
-                  <strong>Assistant</strong>
+                  <strong>Ask</strong>
                   <small className="assistant-status">
                     {" "}
                     · Provisional answer
@@ -763,6 +809,8 @@ export function AssistantWorkspaceProvider({
               )}
             </div>
           </form>
+          </div>
+          {fullPage?<AssistantEvidenceContext context={context} sources={history?.items.slice().reverse().find(message=>message.role==="assistant")?.evidence?.sources??[]}/>:null}
         </section>
       ) : null}
     </Workspace.Provider>

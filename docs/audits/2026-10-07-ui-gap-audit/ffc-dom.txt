@@ -1,0 +1,49 @@
+- complementary "Primary navigation":
+  - link "PX PSX Workstation Portfolio intelligence":
+    - /url: /dashboard
+    - generic: PX
+    - strong: PSX Workstation
+    - generic: Portfolio intelligence
+  - paragraph: Workspace
+  - link "Overview":
+    - /url: /dashboard
+    - generic: Overview
+  - paragraph: Investment
+  - link "Portfolios":
+    - /url: /portfolios
+    - generic: Portfolios
+  - link "Markets":
+    - /url: /markets
+    - generic: Markets
+  - link "Research":
+    - /url: /research
+    - generic: Research
+  - paragraph: Oversight
+  - link "Recommendations":
+    - /url: /recommendations
+    - generic: Recommendations
+  - link "Monitoring":
+    - /url: /monitoring
+    - generic: Monitoring
+  - link "Activity":
+    - /url: /activity
+    - generic: Activity
+  - paragraph: System
+  - link "Settings":
+    - /url: /settings
+    - generic: Settings
+  - strong: Decision support only
+  - text: No broker connection or trade execution
+- banner:
+  - generic: Security research
+  - generic: Source and freshness labels active
+  - link "Search evidence":
+    - /url: /research
+  - link "Open monitoring":
+    - /url: /monitoring
+  - link "Investor desk":
+    - /url: /settings
+- main:
+  - text: The service could not complete this request. Please try again.
+- button "Open Assistant": Assistant
+- alert

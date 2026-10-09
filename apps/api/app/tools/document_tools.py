@@ -156,7 +156,9 @@ def _discover(db, user, payload: DocumentDiscoveryInput):
             ),
         )
         try:
-            semantic = cosine_similarity(query_vector, json.loads(chunk.embedding_json))
+            stored = chunk.embedding_vector
+            if stored is None or isinstance(stored,str): stored=json.loads(chunk.embedding_json)
+            semantic = cosine_similarity(query_vector, stored)
         except (TypeError, ValueError, json.JSONDecodeError):
             semantic = -1.0
         if score <= 0 and semantic < settings.retrieval_min_semantic_score:

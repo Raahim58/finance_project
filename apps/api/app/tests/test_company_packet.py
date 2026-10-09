@@ -99,6 +99,33 @@ def test_projection_is_smaller_for_repeated_evidence_and_preserves_sources():
     assert packet['sources']['E1']['source_url'] == 'https://source.test/oil'
 
 
+def test_action_projection_keeps_values_and_date_gaps_but_drops_repeated_raw_quotes():
+    packet = new_packet({})
+    original = {'type': 'cash_dividend_announced', 'source_backed': True,
+                'details': {'payout_percent': '250', 'cash_per_share': None,
+                            'payment_date_status': 'not_supplied', 'quote': 'Original source '*100,
+                            'evidence': [{'quote': 'Original source '*100}]}}
+    merge_result(packet, call('research.company_digest'), tool_result('ok', {'corporate_actions': [original]}))
+    projected = expand_model_data(model_packet(packet))['financials'][0]['data']['corporate_actions'][0]
+    assert projected['details']['payout_percent'] == '250'
+    assert projected['details']['cash_per_share'] is None
+    assert projected['details']['payment_date_status'] == 'not_supplied'
+    assert 'quote' not in projected['details'] and 'evidence' not in projected['details']
+    assert packet['sections'][next(iter(packet['sections']))]['data']['corporate_actions'][0] == original
+
+
+def test_repeated_financial_quote_is_interned_without_losing_qualification():
+    packet = new_packet({})
+    quote = 'Original reporting units and source-row context. '*10+'However, this result is unaudited.'
+    facts(packet, [fact('100', '2024-07-01', '2025-06-30', source_quote=quote),
+                   fact('150', '2025-07-01', '2026-06-30', source_quote=quote)])
+    projected = expand_model_data(model_packet(packet))
+    rows = projected['financials'][0]['data']['sections'][0]['data']['fundamentals']
+    assert [row['value'] for row in rows] == ['100', '150']
+    assert projected['source_quotes'][rows[0]['source_quote_ref']] == quote
+    assert rows[0]['source_quote_ref'] == rows[1]['source_quote_ref']
+
+
 def test_first_pass_recovery_reuses_saved_plan_and_reservation(monkeypatch):
     import asyncio
     from types import SimpleNamespace
@@ -135,6 +162,8 @@ def test_first_pass_recovery_reuses_saved_plan_and_reservation(monkeypatch):
 
 
 def test_actual_loop_has_evidence_before_first_model_call_and_no_summary_call(client, monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "assistant_company_digest_enabled", False)
     from app.tests.test_phase8_phase2_tool_loop import _auth_with_anthropic, _mock_market
     from app.ai.providers.http_placeholders import AnthropicProvider
     from app.ai.tool_loop import ToolExecution
@@ -157,7 +186,8 @@ def test_actual_loop_has_evidence_before_first_model_call_and_no_summary_call(cl
         assert packet['identity']['explicit_instrument']['instrument_id'] == instrument.id
         from app.ai.company_packet import PACKET_SECTIONS
         assert sum(len(packet[key]) for key in PACKET_SECTIONS) == 6
-        assert packet['sources']['E1']['source_url'] == 'https://source.test/fixture'
+        # Document metadata is interned once; each reference keeps its own location.
+        assert packet['source_documents'][packet['sources']['E1']['document_ref']]['source_url'] == 'https://source.test/fixture'
         return {'model': 'claude-test', 'stop_reason': 'end_turn', 'content': [{'type': 'text', 'text': 'Stored fact [[E1]].'}], 'usage': {'input_tokens': 200, 'output_tokens': 10}}
     monkeypatch.setattr(provider, '_post', fake_post)
     monkeypatch.setattr('app.ai.tool_loop.get_provider', lambda _: provider)
@@ -243,6 +273,8 @@ def test_company_cache_is_reusable_but_basis_corrections_invalidate_it():
 
 
 def test_offline_legacy_and_compact_loop_comparison(client, monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "assistant_company_digest_enabled", False)
     """Same fixture, real adapters, mocked transport; measure no network latency."""
     import time
     from app.tests.test_phase8_phase2_tool_loop import _auth_with_anthropic, _mock_market

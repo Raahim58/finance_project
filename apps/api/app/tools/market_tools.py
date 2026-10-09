@@ -45,6 +45,9 @@ class MarketUniverseInput(BaseModel):
         "score", "sector_percentile", "completeness", "screenable", "growth_flag",
         "income_growth", "pat_growth", "eps_growth", "net_margin", "liquidity",
     ]] = Field(default_factory=list, max_length=10)
+    # Screening mode: highest stored screening score first, screenable instruments only.
+    rank_by: Literal["score"] | None = None
+    exclude_instrument_ids: list[str] = Field(default_factory=list, max_length=50)
 
 
 class MarketOverviewInput(BaseModel):
@@ -113,6 +116,8 @@ def _latest(db, _user, payload: MarketLatestInput):
     return tool_result("ok", {
         "instrument_id": instrument.id, "symbol": instrument.symbol,
         "date": row.trade_date, "close": row.close, "observed_at": row.observed_at,
+        "frequency":row.frequency,"price_kind":"current_quote" if row.frequency=="intraday" else "daily_close",
+        "timestamp_basis":"retrieved_at" if row.frequency=="intraday" else "source_observation",
         "capitalization": row.capitalization,
         "source_ref": "market_latest",
     }, sources=[{
@@ -188,10 +193,22 @@ def _universe(db, _user, payload: MarketUniverseInput):
     )
     if payload.sector:
         statement = statement.where(func.lower(Company.sector) == payload.sector.lower())
+    if payload.exclude_instrument_ids:
+        statement = statement.where(Instrument.id.not_in(payload.exclude_instrument_ids))
+    ordering = (Instrument.symbol, Instrument.id)
+    if payload.rank_by == "score":
+        latest = select(
+            CompanyScreeningSnapshot.instrument_id,
+            func.max(CompanyScreeningSnapshot.as_of_date).label("as_of_date"),
+        ).group_by(CompanyScreeningSnapshot.instrument_id).subquery()
+        statement = statement.join(latest, latest.c.instrument_id == Instrument.id).join(
+            CompanyScreeningSnapshot,
+            (CompanyScreeningSnapshot.instrument_id == latest.c.instrument_id)
+            & (CompanyScreeningSnapshot.as_of_date == latest.c.as_of_date),
+        ).where(CompanyScreeningSnapshot.screenable.is_(True), CompanyScreeningSnapshot.score.is_not(None))
+        ordering = (CompanyScreeningSnapshot.score.desc(), Instrument.symbol)
     total = db.scalar(select(func.count()).select_from(statement.subquery())) or 0
-    rows = db.execute(
-        statement.order_by(Instrument.symbol, Instrument.id).offset(offset).limit(payload.limit)
-    ).all()
+    rows = db.execute(statement.order_by(*ordering).offset(offset).limit(payload.limit)).all()
     data = {
         "columns": [
             "instrument_id",

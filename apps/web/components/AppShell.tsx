@@ -1,20 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { AssistantWorkspaceProvider } from "@/components/AssistantWorkspace";
+import { AssistantWorkspaceProvider, useAssistantWorkspace } from "@/components/AssistantWorkspace";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Icon, IconName } from "@/components/Icon";
-import overviewStyles from "@/components/overview/overview.module.css";
+import { getPortfolios } from "@/lib/api";
+import { PortfolioContextPicker } from "@/components/PortfolioContextPicker";
+import { CompanyQuickSearch } from "./CompanyQuickSearch";
+import { NotificationBell } from "@/components/NotificationBell";
+import { PortfolioTabs, portfolioRoute } from "@/components/PortfolioTabs";
 
 type NavEntry = [string, string, IconName];
 
 const groups: Array<{ label: string; items: NavEntry[] }> = [
-  { label: "Workspace", items: [["Overview", "/dashboard", "grid"]] },
+  { label: "Workspace", items: [["Today", "/dashboard", "grid"]] },
   { label: "Investment", items: [
-    ["Portfolios", "/portfolios", "briefcase"],
     ["Markets", "/markets", "market"],
-    ["Research", "/research", "search"],
+    ["Portfolios", "/portfolios", "briefcase"],
+    ["Research", "/research", "document"],
   ] },
   { label: "Oversight", items: [
     ["Recommendations", "/recommendations", "lightbulb"],
@@ -30,19 +34,26 @@ function isActive(pathname: string, href: string) {
     || (href === "/markets" && (pathname.startsWith("/market") || pathname.startsWith("/companies")));
 }
 
-function NavItem({ item, pathname }: { item: NavEntry; pathname: string }) {
+function NavItem({ item, pathname, selectedPortfolioId }: { item: NavEntry; pathname: string; selectedPortfolioId?:string }) {
   const [label, href, icon] = item;
   const active = isActive(pathname, href);
   return (
-    <Link href={href as never} aria-current={active ? "page" : undefined} title={label} className="nav-item">
-      <Icon name={icon} size={17} />
+    <Link href={(label==="Portfolios"&&selectedPortfolioId?`/portfolios/${selectedPortfolioId}/overview`:href) as never} aria-current={active ? "page" : undefined} title={label} className="nav-item">
+      <span className="rail-icon"><Icon name={icon} size={20} /></span>
       <span className="sidebar-label">{label}</span>
     </Link>
   );
 }
 
+function ChatNavigation() {
+  const pathname=usePathname();
+  return <Link href="/assistant" className="nav-item" aria-current={pathname==="/assistant"?"page":undefined}><span className="rail-icon"><Icon name="assistant" size={20}/></span><span className="sidebar-label">Chat</span></Link>;
+}
+
 function currentScope(pathname: string) {
-  if (pathname.startsWith("/portfolios/")) return "Portfolio workspace";
+  if(pathname === "/assistant")return "Chat";
+  if (pathname === "/portfolios/manage") return "Portfolios";
+  if (portfolioRoute(pathname)) return "Portfolio";
   if (pathname.startsWith("/companies/")) return "Security research";
   for (const group of groups) {
     const match = group.items.find(([, href]) => isActive(pathname, href));
@@ -99,37 +110,31 @@ function MobileNavDrawer({ pathname, onClose }: { pathname: string; onClose: () 
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const overview = pathname === "/dashboard";
-  const navigationGroups = overview ? groups.map(group => group.label === "Investment" ? { ...group, items: [group.items[1], group.items[0], group.items[2]] } : group) : groups;
   const publicRoute = pathname === "/" || pathname === "/login" || pathname === "/signup" || pathname === "/onboarding";
   const [menuOpen, setMenuOpen] = useState(false);
+  const [selectedPortfolioId,setSelectedPortfolioId]=useState<string|undefined>();
+  useEffect(()=>{let active=true;const refresh=()=>void getPortfolios().then(rows=>{if(active)setSelectedPortfolioId(rows.find(row=>row.is_default&&!row.archived_at)?.id)}).catch(()=>{if(active)setSelectedPortfolioId(undefined)});refresh();window.addEventListener("psx-portfolio-change",refresh);window.addEventListener("psx-auth-change",refresh);return()=>{active=false;window.removeEventListener("psx-portfolio-change",refresh);window.removeEventListener("psx-auth-change",refresh)}},[]);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => { setMenuOpen(false); }, [pathname]);
   const closeMenu = () => { setMenuOpen(false); menuTriggerRef.current?.focus(); };
   if (publicRoute) return <>{children}</>;
 
   return (
-    <AssistantWorkspaceProvider><div className={`app-shell ${overview ? overviewStyles.overviewShell : ""}`}>
+    <AssistantWorkspaceProvider><div className="app-shell workstation-shell" data-workspace={pathname === "/market" || pathname === "/markets" ? "markets" : pathname.startsWith("/portfolios") ? "portfolio" : "default"}>
       <aside className="app-sidebar" aria-label="Primary navigation">
-        <Link href="/dashboard" className="flex h-[76px] w-full items-center gap-3 px-5 max-lg:justify-center max-lg:px-0">
-          {overview ? <span className={overviewStyles.wordmark}>RAAHIM</span> : <><span className="brand-mark">PX</span>
-          <span className="sidebar-wordmark min-w-0">
-            <strong className="block text-[13px] font-semibold tracking-[-.01em]">PSX Workstation</strong>
-            <span className="block text-[11px] text-muted">Portfolio intelligence</span>
-          </span></>}
-        </Link>
-        <div className="flex-1 overflow-y-auto pb-5 max-md:flex max-md:items-center max-md:overflow-x-auto max-md:pb-0">
-          {navigationGroups.map(group => (
+        <Link href="/dashboard" className="workstation-brand" aria-label="RAAHIM home">R</Link>
+        <nav className="rail-navigation" aria-label="Workspace navigation">
+          {groups.filter(group => group.label !== "System").map(group => (
             <div key={group.label}>
-              <p className="nav-section sidebar-section">{group.label}</p>
-              {group.items.map(item => <NavItem key={item[1]} item={item} pathname={pathname} />)}
+              {group.items.filter(([label]) => !["Recommendations", "Activity"].includes(label)).map(item => <NavItem key={item[1]} item={item} pathname={pathname} selectedPortfolioId={selectedPortfolioId} />)}
             </div>
           ))}
-        </div>
-        <div className="sidebar-footer-copy mx-4 mb-4 rounded-lg bg-surface p-3 text-[11px] leading-5 text-muted">
-          <strong className="block font-semibold text-ink">Decision support only</strong>
-          No broker connection or trade execution
-        </div>
+          <ChatNavigation />
+          <details className="rail-more"><summary className="nav-item"><span className="rail-icon"><Icon name="more" size={20} /></span><span className="sidebar-label">More</span></summary><nav aria-label="More workspace pages" className="rail-more-menu">
+            {groups.flatMap(group => group.items).filter(([label]) => ["Recommendations", "Activity"].includes(label)).map(item => <NavItem key={item[1]} item={item} pathname={pathname} selectedPortfolioId={selectedPortfolioId} />)}
+          </nav></details>
+        </nav>
+
       </aside>
       <div className="app-main">
         <header className="app-topbar">
@@ -137,17 +142,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <button type="button" ref={menuTriggerRef} className="mobile-menu-btn icon-btn" aria-label="Open primary navigation" aria-haspopup="dialog" aria-expanded={menuOpen} aria-controls="mobile-nav-drawer" onClick={() => setMenuOpen(true)}>
               <Icon name="menu" />
             </button>
-            <span className="truncate text-[12px] font-semibold text-ink">{currentScope(pathname)}</span>
-            <span className="desktop-only h-4 w-px bg-line" />
-            <span className="desktop-only flex items-center gap-2 text-[11px] text-muted">
-              <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-              Source and freshness labels active
-            </span>
+            <div id="workspace-header-content" data-portfolio-id={portfolioRoute(pathname)?.id} className="workspace-header-content"><div className="workspace-header-fallback"><h1>{currentScope(pathname)}</h1>{portfolioRoute(pathname)?<PortfolioTabs/>:null}</div></div>
           </div>
           <div className="flex items-center gap-1">
-            <Link className="icon-btn" title="Search evidence" aria-label="Search evidence" href={"/research" as never}><Icon name="search" /></Link>
-            <Link className="icon-btn" title="Open monitoring" aria-label="Open monitoring" href={"/monitoring" as never}><Icon name="bell" /></Link>
-            <Link className="ml-1 hidden h-8 items-center border-l border-line pl-4 text-[12px] font-semibold sm:flex" href={"/settings" as never}>Investor desk</Link>
+            <CompanyQuickSearch />
+            <PortfolioContextPicker />
+            <NotificationBell />
+            <Link className="icon-btn" aria-label="Account settings" href={"/settings" as never}><Icon name="settings" /></Link>
           </div>
         </header>
         <main>{children}</main>

@@ -1,9 +1,12 @@
 import hashlib
 import json
+import re
 from datetime import date, datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
+from app.core.config import settings
 
 from app.schemas.rag import RagSearchRequest
 from app.models.workstation import Instrument
@@ -31,6 +34,16 @@ class ResearchInput(BaseModel):
     cursor: str | None = Field(default=None, max_length=6000)
     limit: int = Field(default=5, ge=1, le=10)
 
+    @field_validator('symbols','sectors','topics','document_types',mode='before')
+    @classmethod
+    def singleton_filters(cls,value):
+        # A single issuer/category string has an unambiguous list equivalent.
+        # Keep the filter: never silently discard malformed model arguments.
+        if isinstance(value,str):
+            if not value.strip(): raise ValueError('Filter must not be empty')
+            return [value.strip()]
+        return value
+
     @model_validator(mode='after')
     def check_dates(self):
         if self.date_from and self.date_to and self.date_from>self.date_to:
@@ -57,6 +70,8 @@ class CompanySectionsInput(BaseModel):
 class EventInput(BaseModel):
     query: str | None = Field(default=None, min_length=1, max_length=120)
     entity_key: str | None = None
+    event_types: list[Literal['earnings','guidance','dividend','corporate_action','financing','expansion','disruption',
+        'regulatory','governance','ownership','macro','geopolitics']] | None = Field(default=None, max_length=12)
     period_start: date | None = None
     period_end: date | None = None
     cursor: str | None = Field(default=None, pattern=r"^[0-9]+$")
@@ -76,18 +91,19 @@ class InstrumentSearchInput(BaseModel):
     limit: int = Field(default=10, ge=1, le=20)
 
 
-def _search(db, user, payload: ResearchInput):
+def _search(db, user, payload: ResearchInput, *, public_only=False):
     from app.services.news_retrieval import search_research_evidence
     from app.models.document import Document
-    chosen,citations,coverage=search_research_evidence(db,user,payload)
+    chosen,citations,coverage=search_research_evidence(db,user,payload,public_only=public_only)
     sources=[item.model_dump(mode='json') for item in citations]
     dates={row.id:row.published_date for row in db.scalars(select(Document).where(Document.id.in_([c.document_id for _,c in chosen])))}
-    chunks=[{'id':c.id,'document_id':c.document_id,'group':name,'title':c.citation.title,
+    chunks=[{'id':c.id,'document_id':c.document_id,'group':name.split(':')[0],
+        'scope_symbol':name.split(':',1)[1] if name.startswith('company:') else None,'title':c.citation.title,
         'published_date':str(dates[c.document_id]) if dates.get(c.document_id) else None,
-        'text':c.chunk_text,'source_ref':c.citation.id,
-        'evidence_kind':c.metadata.get('evidence_kind','reporting')} for name,c in chosen]
+        'text':c.chunk_text,'source_ref':c.citation.id,'document_type':c.document_type,
+        'evidence_kind':c.metadata.get('evidence_kind', 'reporting' if c.document_type == 'news' else c.document_type)} for name,c in chosen]
     return tool_result(
-        "ok" if chunks else "missing", {"chunks":chunks, "coverage":coverage},
+        "ok" if chunks and coverage.get('primary_evidence') != 'missing' else "missing", {"chunks":chunks, "coverage":coverage},
         sources=sources,
         returned=len(chunks),
         remaining=None,
@@ -268,10 +284,19 @@ def _events(db, user, payload: EventInput):
         from app.services.research_intelligence_service import company_event_page, resolve_company
         instrument = resolve_company(db, payload.entity_key)
         page = company_event_page(db, user, instrument, start=payload.period_start,
-            end=payload.period_end, offset=offset, limit=payload.limit)
+            end=payload.period_end, offset=offset, limit=payload.limit, event_types=payload.event_types)
         fetched = page["events"]
         coverage = page["coverage"]
         has_more = coverage["has_more"]
+    elif payload.event_types and not payload.query:
+        # Typed questions read classified event records directly, ranked once.
+        from app.services.pipeline.event_reads import RANK_BASIS, event_records
+        fetched = event_records(db, event_types=payload.event_types, start=payload.period_start,
+            end=payload.period_end, min_materiality=None, offset=offset, limit=payload.limit + 1)
+        has_more = len(fetched) > payload.limit
+        fetched = fetched[:payload.limit]
+        coverage = {"event_types": payload.event_types, "period_start": payload.period_start,
+                    "period_end": payload.period_end, "scope": "classified_event_records", "ranking": RANK_BASIS}
     else:
         # Broad market/geopolitical retrieval has no three-factor or issuer gate.
         arguments = {"entity_key": None, "occurred_start": payload.period_start,
@@ -308,7 +333,174 @@ def _instruments(db, _user, payload: InstrumentSearchInput):
     )
 
 
+class CompanyDigestInput(BaseModel):
+    instrument_id: str
+    sections: list[Literal['financial_performance','earnings_drivers','expansion','dividends',
+        'material_developments','sector_macro','risks','unresolved_questions']] | None = Field(default=None,min_length=1,max_length=8)
+
+
+def _company_digest(db,user,payload):
+    from app.services.company_digest_service import read_digest
+    from app.services.research_generation_service import brief_projection
+    instrument = db.get(Instrument,payload.instrument_id)
+    if instrument is None:
+        return tool_result('missing',error={'code':'instrument_not_found'})
+    saved = read_digest(db,user,instrument,active=False)
+    # Rebuild deterministic public sections from retained SQL/source evidence on
+    # a cache miss/correction. This performs no acquisition or model generation
+    # and does not change the ingestion cohort or source targets.
+    if settings.pipeline_enabled and (not saved.get('prepared_intelligence') or
+            any(section.get('state')=='stale' for section in saved['prepared_intelligence'])):
+        from app.services.pipeline.intelligence import refresh,read
+        db.scalar(select(Instrument).where(Instrument.id==instrument.id).with_for_update())
+        current_prepared=read(db,instrument.id)
+        if not current_prepared or any(section.get('state')=='stale' for section in current_prepared):
+            refresh(db,instrument.id)
+        db.flush()
+        saved['prepared_intelligence']=read(db,instrument.id)
+    from app.services.pipeline.briefing import read as read_extra_analysis
+    extra=read_extra_analysis(db,symbols=[instrument.symbol],sectors=[instrument.sector] if instrument.sector else None,limit=2)
+    snapshot = saved['snapshot']
+    snapshot_current=bool(snapshot and snapshot.get('input_hash')==saved['input_hash'])
+    if saved.get('prepared_intelligence') and (settings.pipeline_enabled or not snapshot_current):
+        import copy
+        all_prepared=saved['prepared_intelligence']
+        available=[section['section'] for section in all_prepared if section.get('state')=='source_grounded'
+            and section.get('content',{}).get('evidence')]
+        selected=set(payload.sections) if payload.sections else {section['section'] for section in all_prepared}
+        prepared=copy.deepcopy([section for section in all_prepared if section['section'] in selected])
+        payout_only = payload.sections == ['dividends']
+        if payout_only:
+            from app.domain.evidence_query import shareholder_payout_passage
+            for section in prepared:
+                rows = section.get('content', {}).get('evidence', [])
+                section['content']['evidence'] = [row for row in rows if shareholder_payout_passage(row.get('text', ''))
+                    and re.search(r'\b(?:per share|interim dividend|final dividend|declared|proposed|recommended|announced)\b', row.get('text', ''), re.I)]
+                kept_ids = {row.get('statement_id') for row in section['content']['evidence']}
+                section['sources'] = [source for source in section.get('sources', []) if source.get('statement_id') in kept_ids]
+        dividend_facts = []
+        dividend_sources = []
+        if 'dividends' in selected and 'financial_performance' not in selected:
+            for section in all_prepared:
+                if section['section'] != 'financial_performance' or section.get('state') != 'source_grounded': continue
+                dividend_facts = copy.deepcopy([row for row in section.get('content', {}).get('evidence', [])
+                                                if row.get('metric') == 'dividend_per_share'])
+                fact_ids = {row.get('id') for row in dividend_facts}
+                dividend_sources = [source for source in section.get('sources', []) if source.get('fact_id') in fact_ids]
+            for row in dividend_facts:
+                row['evidence_refs'] = [row.pop('id')]
+                for field in ('source_name','source_url','document_id','page_number','version'): row.pop(field, None)
+        sources=[]
+        sources.extend({'id': source['fact_id'], **source} for source in dividend_sources)
+        actions=[]
+        if 'dividends' in selected:
+            from app.models.workstation import CorporateAction,SourceArtifact,DataSource
+            for action in db.scalars(select(CorporateAction).where(
+                    CorporateAction.instrument_id==instrument.id,
+                    CorporateAction.effective_date<=date.today())
+                    .order_by(CorporateAction.effective_date.desc(),CorporateAction.id).limit(10)):
+                artifact=db.get(SourceArtifact,action.artifact_id) if action.artifact_id else None
+                publisher=db.get(DataSource,artifact.data_source_id) if artifact else None
+                ref='corporate-action:'+action.id
+                actions.append({'type':action.action_type,'effective_date':str(action.effective_date),
+                    'ex_date':str(action.ex_date) if action.ex_date else None,
+                    'payment_date':str(action.payment_date) if action.payment_date else None,
+                    'details':json.loads(action.details_json),'source_backed':bool(artifact),
+                    'evidence_refs':[ref]})
+                sources.append({'id':ref,'underlying_id':ref,
+                    'source_name':publisher.name if publisher else None,
+                    'source_url':artifact.source_url if artifact else None,'artifact_id':action.artifact_id,
+                    'as_of':str(action.effective_date)})
+        for section in prepared:
+            section['source_refs']=[]
+            for row in section.get('content',{}).get('evidence',[]):
+                identifier=row.get('id') or row.get('statement_id')
+                if identifier: row['evidence_refs']=[identifier]
+                if section.get('section')=='financial_performance' and row.get('source_name'):
+                    row['source_quote']=row['source_name']
+                for field in ('id','statement_id','document_id','source_name','source_url','page_number','version'):
+                    row.pop(field,None)
+            if section.get('section')=='financial_performance':
+                evidence=section.get('content',{}).pop('evidence',[])
+                groups={}
+                for row in evidence: groups.setdefault(row.get('accounting_basis') or 'unverified',[]).append(row)
+                section['content']['reporting_bases']=[{'basis':basis,'facts':facts} for basis,facts in groups.items()]
+            for source in section.pop('sources',[]):
+                ref=source.get('fact_id') or source.get('statement_id')
+                section['source_refs'].append(ref)
+                sources.append({'id':ref,**source})
+        for row in extra:
+            if selected & {'sector_macro','material_developments'}:
+                sources.append({k:row[k] for k in ('id','source_name','source_url','title','published_date')})
+        analysis=[{'text':row['text'],'classification':'interpretation','source_ref':row['id'],'published_date':row['published_date']} for row in extra] if selected & {'sector_macro','material_developments'} else []
+        usable=bool(dividend_facts) or any(section.get('state')=='source_grounded' and
+            (section.get('content',{}).get('reporting_bases') or section.get('content',{}).get('evidence'))
+            for section in prepared)
+        return tool_result('ok' if usable or actions or dividend_facts else 'missing',{'prepared_intelligence':prepared,'extra_analysis':analysis,
+            'dividend_financials': dividend_facts,
+            'corporate_actions':actions,
+            'corporate_action_qualification':'Stored announcement dates are not payment dates. Percentage of par is not dividend yield; missing cash-per-share/par value remains unknown. Unbacked observations are unverified.',
+            'brief_is_current':False,'status':'source_grounded' if usable else 'stored_observations' if actions else 'missing',
+            'available_sections':available,'omitted_available_sections':[section for section in available if section not in selected],
+            'unavailable_sections':[{'section':section['section'],'state':section['state'],'gaps':section.get('gaps',[])}
+                for section in all_prepared if section['section'] not in available],
+            'detail_tools':['research.company_sections','research.search','market.latest'],
+            'missing_data':[{'section':section['section'],'state':section['state'],'gaps':section.get('gaps',[])}
+                for section in prepared if section.get('state')=='stale']},sources=sources,returned=len(prepared))
+    if not snapshot or not snapshot_current:
+        return tool_result('missing',{'status':'stale' if snapshot else saved['status'],
+            'detail':'Saved company evidence is missing or its dependencies changed. Read company_sections/market.latest/search for current evidence.',
+            'detail_tools':['research.company_sections','market.latest','research.search']},returned=0)
+    # Map snapshot-local refs to unique execution evidence IDs before packet fusion.
+    from app.services.digest_projection import select_digest_evidence
+    snapshot = select_digest_evidence(snapshot, payload.sections)
+    prefix = 'digest-'+saved['input_hash'][:12]+'-'
+    def refs(value):
+        if isinstance(value,dict):
+            return {k:refs(v) for k,v in value.items()}
+        if isinstance(value,list): return [refs(v) for v in value]
+        if isinstance(value,str) and value in snapshot['sources']: return prefix+value
+        return value
+    data = refs(brief_projection(snapshot))
+    data['citation_locations'] = data.pop('sources',None)
+    # The brief belongs to its own input version, which can differ during a refresh.
+    data['brief'] = None
+    data['brief_validation_status'] = saved.get('brief_validation_status','reference_only')
+    data['interpretation_gap'] = 'Saved AI narrative has not passed source entailment review; answer from supplied facts and excerpts.'
+    data['brief_is_current'] = saved['brief_is_current']
+    data['snapshot_is_current'] = snapshot.get('input_hash') == saved['input_hash']
+    if not data['snapshot_is_current']:
+        data.setdefault('missing_data',[]).append({'code':'snapshot_inputs_changed','detail':'Saved snapshot is historical. Read company_sections/market.latest/search for current evidence.'})
+    usable = bool(snapshot.get('financials') or snapshot.get('news') or snapshot.get('corporate_actions')
+                  or any((snapshot.get(key) or {}).get('data') for key in ('risk','sector','macro','disclosures')))
+    if payload.sections and not usable:
+        data.setdefault('missing_data', []).append({'code': 'requested_digest_evidence_missing', 'sections': payload.sections})
+    return tool_result('ok' if usable or payload.sections is None else 'missing',data,sources=[{'id':prefix+ref,**source,'instrument_id':instrument.id,'symbol':instrument.symbol}
+                                        for ref,source in snapshot['sources'].items()],returned=1)
+
+
+class MorningBriefInput(BaseModel):
+    symbols: list[str] | None = Field(default=None,max_length=8)
+    sectors: list[str] | None = Field(default=None,max_length=8)
+    limit: int = Field(default=8,ge=1,le=12)
+
+
+def _morning_brief(db,_user,payload):
+    from app.services.pipeline.briefing import read
+    rows=read(db,symbols=payload.symbols,sectors=payload.sectors,limit=payload.limit)
+    sources=[{k:r[k] for k in ('id','source_name','source_url','title','published_date')} for r in rows]
+    data=[{k:v for k,v in row.items() if k not in ('source_name','source_url','title')}|{'source_ref':row['id']} for row in rows]
+    return tool_result('ok' if rows else 'missing',{'extra_analysis':data,
+        'qualification':'Analyst commentary, not verified financial or macro observations. Original news articles are retrieved independently.'},sources=sources,returned=len(rows))
+
+
 def register_research_tools(registry: ToolRegistry) -> None:
+    registry.register(ToolDefinition('research.morning_brief','1.0',
+        'Dated extra sector/company interpretation from the public morning research feed. Optional issuer/sector filters. Numerical claims require separate original-source or SQL verification.',
+        MorningBriefInput,'research:read',True,False,10,_morning_brief))
+    registry.register(ToolDefinition('research.company_digest','1.0',
+        'Saved compact company snapshot and cited AI thesis; dates, periods, reporting bases and missing data retained. Use company_sections/search for omitted older or detailed evidence. No portfolio or IPS.',
+        CompanyDigestInput,'research:read',True,False,12,_company_digest))
     registry.register(ToolDefinition("research.event_relevance", "1.0",
         "Issuer-scoped direct events and three-factor AI-proposed indirect relationships with original evidence; no impact forecast",
         EventRelevanceInput, "research:read", True, False, 12, _event_relevance))
@@ -342,7 +534,7 @@ def register_research_tools(registry: ToolRegistry) -> None:
         ToolDefinition(
             "research.events",
             "1.0",
-            "Stored events with citations and pagination: company symbol includes direct/stored indirect relevance; omit symbol for broader geopolitical/macro news and optional headline query",
+            "Stored events with citations and pagination: company symbol includes direct/stored indirect relevance; omit symbol for broader geopolitical/macro news and optional headline query; optional event_types filters classified event records",
             EventInput,
             "research:read",
             True,

@@ -71,6 +71,14 @@ def digest_prompt_payload(payload):
 
 
 def generation_request(kind, payload):
+    if kind == "company_brief":
+        from app.schemas.research_intelligence import CompanyBriefOutput
+        schema = CompanyBriefOutput.model_json_schema()
+        messages = [{"role":"system","content":(PROMPTS / "company_brief.md").read_text()},
+            {"role":"user","content":"INPUT_JSON\n"+canonical(brief_projection(payload))+"\nOUTPUT_SCHEMA\n"+canonical(schema)}]
+        if len(canonical(messages).encode()) > 40000:
+            raise ValueError("research_input_budget_exceeded")
+        return messages, schema
     schema = ProfileOutput if kind == "profile" else DigestOutput
     output_schema = schema.model_json_schema()
     quotes = profile_quote_options(payload) if kind == "profile" else {}
@@ -114,6 +122,19 @@ def evidence_map(payload):
 
 
 def validate_output(kind, content, payload):
+    if kind == "company_brief":
+        from app.schemas.research_intelligence import CompanyBriefOutput
+        result = CompanyBriefOutput.model_validate_json(content)
+        allowed = set(payload['sources']) | {f['id'] for f in payload['financials']} | {e['id'] for e in payload['news']} | {a['id'] for a in payload.get('corporate_actions',[])}
+        output = result.model_dump(mode='json')
+        for name, claims in output.items():
+            if name == 'unresolved_questions': continue
+            for claim in claims:
+                if set(claim['refs']) - allowed:
+                    raise ValueError('unknown_claim_reference')
+        if sum(len(c['text'].split()) for k,v in output.items() if k != 'unresolved_questions' for c in v) > 650:
+            raise ValueError('brief_word_budget_exceeded')
+        return output
     schema = ProfileOutput if kind == "profile" else DigestOutput
     result = schema.model_validate_json(content)
     evidence = evidence_map(payload)
@@ -229,6 +250,14 @@ def cached_event_keys(db, user, instrument, payload, provider=None, model=None):
 
 
 def save_output(db, user, instrument, kind, payload, output, provider, model):
+    if kind == "company_brief":
+        from app.services.company_digest_service import store_snapshot
+        row = store_snapshot(db,user,instrument,payload,{'provider':provider,'model':model})
+        row.brief_json = canonical(output)
+        from datetime import datetime, UTC
+        row.generated_at = datetime.now(UTC)
+        db.flush()
+        return
     key = fingerprint(payload)
     evidence = list(evidence_map(payload).values())
     if kind == "profile":
@@ -274,3 +303,44 @@ def save_output(db, user, instrument, kind, payload, output, provider, model):
                 )
             )
     db.flush()
+
+
+def brief_projection(payload):
+    """Exact facts plus compact citation locations; full provenance stays saved."""
+    from app.tools.registry import compact_model_data
+    projected = {k:compact_model_data(v) if k in ('financials','changes') else v
+                 for k,v in payload.items() if k not in ('size','input_hash')}
+    documents, locations, seen = {}, {}, {}
+    for ref, source in payload.get('sources', {}).items():
+        # URL and database IDs resolve on the server. Titles/dates occur once per
+        # document; exact page and source-row quotes remain beside citation IDs.
+        identity = source.get('document_id') or source.get('source_url') or canonical(source)
+        if identity not in seen:
+            seen[identity] = f'D{len(seen)+1}'
+            documents[seen[identity]] = {k:source[k] for k in ('title','published_at') if source.get(k) is not None}
+            if not source.get('document_id') and source.get('source_name'):
+                documents[seen[identity]]['source_name'] = source['source_name']
+        location = {'document':seen[identity]}
+        if source.get('page_number') is not None: location['page_number'] = source['page_number']
+        if source.get('document_id') and source.get('source_name'): location['source_quote'] = source['source_name']
+        locations[ref] = location
+    projected['sources'] = compact_model_data([{'ref':ref, **location} for ref,location in locations.items()])
+    projected['source_documents'] = documents
+
+    def without_provenance(value):
+        if isinstance(value, dict):
+            return {k:without_provenance(v) for k,v in value.items()
+                    if k not in ('artifact_id','artifact_sha256','document_id','source_url')}
+        if isinstance(value, list): return [without_provenance(v) for v in value]
+        return value
+    for key in ('market','macro','corporate_actions'):
+        if key in projected: projected[key] = without_provenance(projected[key])
+    if 'coverage' in projected:
+        coverage = {**projected['coverage']}
+        news = coverage.get('news')
+        if isinstance(news,dict):
+            coverage['news'] = {k:v for k,v in news.items() if k != 'next_cursor'}
+        projected['coverage'] = coverage
+    # The same shared-column encoding applies to repeated disclosure/news/action
+    # fields, not just financial rows. Values and qualification text are unchanged.
+    return compact_model_data(projected)

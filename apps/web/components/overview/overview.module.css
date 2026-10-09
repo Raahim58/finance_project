@@ -173,3 +173,4 @@
   .sectionHead > a { white-space: normal; }
   .footer { padding-bottom: 64px; }
 }
+.sessionLine { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding:4px 0 16px; margin-bottom:8px; border-bottom:1px solid var(--line); font-size:11px; color:var(--muted); }.sessionLine span:first-child { color:var(--ink); font-size:13px; }

@@ -28,7 +28,7 @@ def _table(metric: str = "Sales") -> str:
 
 
 def test_dps_standardized_parser_preserves_secondary_scale_and_sector_label():
-    facts, diagnostics = parse_company_page(_table("Total Income"))
+    facts, diagnostics = parse_company_page(_table("Total Income"), fiscal_year_end_month=12)
     assert diagnostics == []
     assert any(row.metric == "total_income" and row.period_key == "2025" and row.value == Decimal("1200000") for row in facts)
     assert any(row.metric == "earnings_per_share" and row.value == Decimal("4.2") for row in facts)

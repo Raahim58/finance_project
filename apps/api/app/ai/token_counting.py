@@ -81,3 +81,43 @@ async def preflight_count(provider, api_key, payload, *, input_limit, remaining_
             metadata["input_count_error"] = type(exc).__name__
     metadata["input_count_latency_ms"] = round((time.perf_counter() - started) * 1000, 3)
     return count, metadata
+
+
+def payload_breakdown(provider: str, payload: dict) -> dict:
+    """Count-only diagnostic of the actual request; no source/user text escapes.
+
+    Component estimates are independent (token boundaries/templates differ),
+    never asserted to sum to provider usage. Wire bytes are measured exactly.
+    """
+    parts={}
+    for field in ('system','tools','messages','contents','generationConfig',
+                  'input','system_instruction','generation_config'):
+        if field in payload:
+            encoded=json.dumps(payload[field],ensure_ascii=False,separators=(',',':'),default=str)
+            parts[field]={'serialized_bytes':len(encoded.encode()),
+                'independent_text_token_estimate':text_estimate(encoded) or math.ceil(len(encoded.encode())/3)}
+    # Locate packets within the serialized provider request, after every
+    # projection and provider adapter. Do not infer wire size from tool results.
+    from app.ai.company_packet import PACKET_PREFIX
+    packet_parts=[]
+    def walk(value):
+        if isinstance(value,dict):
+            for child in value.values(): walk(child)
+        elif isinstance(value,list):
+            for child in value: walk(child)
+        elif isinstance(value,str) and PACKET_PREFIX in value:
+            raw=value.split(PACKET_PREFIX,1)[1]
+            try: packet=json.JSONDecoder().raw_decode(raw)[0]
+            except (ValueError,TypeError): return
+            sections={}
+            for name,section in packet.items():
+                encoded=json.dumps(section,ensure_ascii=False,separators=(',',':'),default=str)
+                sections[name]={'serialized_bytes':len(encoded.encode()),
+                    'independent_text_token_estimate':text_estimate(encoded) or math.ceil(len(encoded.encode())/3)}
+            packet_parts.append(sections)
+    walk(payload)
+    total,method=local_input_count(provider,payload)
+    return {'components':parts,'evidence_packets':packet_parts,
+        'component_estimates_additive':False,'total_local_input_tokens':total,'count_method':method,
+        'serialized_bytes':len(json.dumps(payload,ensure_ascii=False,separators=(',',':'),default=str).encode()),
+        'ordinary_request_target_tokens':10000,'over_ordinary_target':total>10000}

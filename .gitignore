@@ -14,6 +14,7 @@ dist/
 build/
 !apps/web/app/portfolios/*/build/
 !apps/web/app/portfolios/*/build/page.tsx
+!apps/web/components/portfolio/build/
 coverage/
 htmlcov/
 .playwright-mcp/
@@ -25,3 +26,6 @@ apps/web/playwright-report/
 storage/
 apps/api/storage/
 data/
+images/
+.next-ui-preview/
+.next-*/

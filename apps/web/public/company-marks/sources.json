@@ -1,0 +1,26 @@
+{
+  "FFC": {
+    "asset": "/company-marks/FFC.png",
+    "website": "https://www.ffc.com.pk",
+    "asset_source": "https://www.google.com/s2/favicons?domain=ffc.com.pk&sz=64",
+    "kind": "website_favicon"
+  },
+  "MEBL": {
+    "asset": "/company-marks/MEBL.png",
+    "website": "https://www.meezanbank.com",
+    "asset_source": "https://www.google.com/s2/favicons?domain=meezanbank.com&sz=64",
+    "kind": "website_favicon"
+  },
+  "OGDC": {
+    "asset": "/company-marks/OGDC.png",
+    "website": "https://www.ogdcl.com",
+    "asset_source": "https://www.google.com/s2/favicons?domain=ogdcl.com&sz=64",
+    "kind": "website_favicon"
+  },
+  "SYS": {
+    "asset": "/company-marks/SYS.png",
+    "website": "https://www.systemsltd.com",
+    "asset_source": "https://www.google.com/s2/favicons?domain=systemsltd.com&sz=64",
+    "kind": "website_favicon"
+  }
+}

@@ -334,3 +334,26 @@ def test_sml_contract_uses_decimal_scale_and_reconciles_to_capm_formula(client, 
     for point in body["sml"]:
         assert point["expected_return"] == pytest.approx(body["risk_free_rate"] + point["beta"] * body["market_risk_premium"])
         assert abs(point["expected_return"]) < 5  # decimal annual return, never percentage-point scale
+
+
+def test_risk_free_resolves_canonical_tbill_series_without_metadata_flag(monkeypatch):
+    from datetime import UTC, date, datetime
+    from decimal import Decimal
+    from app.core.config import settings
+    from app.db.session import SessionLocal
+    from app.models.workstation import DataSource, MacroObservation, MacroSeries
+    from app.services.workstation_service import _effective_risk_free_rate
+
+    monkeypatch.setattr(settings, "market_data_mode", "mock")  # observed-source joins are covered elsewhere
+    with SessionLocal() as db:
+        source = DataSource(name="State Bank of Pakistan", source_type="macro")
+        db.add(source); db.flush()
+        series = MacroSeries(key="PK_TBILL_3M", name="3M T-bill", unit="percent", frequency="auction", source_id=source.id, metadata_json='{"canonical": true}')
+        db.add(series); db.flush()
+        db.add(MacroObservation(series_id=series.id, effective_date=date(2026, 4, 29), release_at=datetime(2026, 5, 1, tzinfo=UTC), value=Decimal("11.5154"), revision=1, is_selected=True))
+        db.commit()
+        found = _effective_risk_free_rate(db, date(2026, 10, 8))
+        assert found["series_key"] == "PK_TBILL_3M"
+        assert found["annual_rate"] == pytest.approx(0.115154)
+        assert found["effective_date"] == date(2026, 4, 29)
+        assert _effective_risk_free_rate(db, date(2026, 1, 1)) is None

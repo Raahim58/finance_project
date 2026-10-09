@@ -145,7 +145,15 @@ __all__ = [
 ]
 
 from app.models.assistant_execution import AssistantExecution, AssistantAttempt
+from app.models.routing import RouteDecisionRecord, RouteBudgetLog, RoutingEvalRun
 
 from app.models.research_intelligence import (CompanyExposureProfile, CompanyEventBrief, PortfolioEventSnapshot, ResearchJob, ResearchAttempt)
 
 from app.models.assistant_workspace import ExecutionEvent, ConversationSummary, ProviderQueueEntry
+from app.models.research_intelligence import CompanyDigest
+from app.models.pipeline import (
+    SourceTarget, IngestionStageRun, DocumentSection, DocumentEntityLink,
+    EvidenceStatement, StatementEvidence, EventDocumentLink,
+    CompanyIntelligenceSection, IntelligenceDependency, EnrichmentAttempt,
+    ServiceCredential, ArtifactPin,
+)

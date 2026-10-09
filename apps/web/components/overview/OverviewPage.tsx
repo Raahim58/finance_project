@@ -8,7 +8,7 @@ import { useAssistantWorkspace } from "@/components/AssistantWorkspace";
 import { clearApiCache } from "@/lib/api";
 import { formatDate, formatNumber, formatPercent, humanize, investigationSignals, marketBreadth, numeric, performanceSeries, signalFilters, visibleSignals, type SignalFilter } from "@/lib/overview";
 import { OverviewPerformanceChart } from "./OverviewPerformanceChart";
-import { OverviewToolbar } from "./OverviewToolbar";
+import { WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { useOverviewData, type Resource } from "./useOverviewData";
 import styles from "./overview.module.css";
 
@@ -27,11 +27,8 @@ export function OverviewPage() {
   const fresh = data.freshness.data;
   const hasError = [data.market, data.freshness, data.events, data.regime, data.portfolios, data.summary, data.performance, data.alerts, data.compliance, data.exposure].some(resource => resource.status === "error");
   return <div className={styles.page}>
-    <OverviewToolbar portfolios={data.portfolios.data ?? []} portfolioId={data.portfolioId} onSelect={data.setPortfolioId} user={data.user.data} loading={data.portfolios.status === "loading"} />
-    <header className={styles.heading}>
-      <div><p className={styles.eyebrow}>Overview</p><h1>The market today</h1><p>Market developments and your portfolio, in context.</p></div>
-      <div className={styles.session}><strong>PSX · <span>{fresh ? humanize(fresh.exchange_session_status) : "Session unavailable"}</span></strong><p>Market data as of {formatDate(data.market.data?.snapshot?.snapshot_date ?? fresh?.latest_trade_date)}</p></div>
-    </header>
+    <WorkspaceHeader title="Today"/>
+    <div className={styles.sessionLine}><span>The market today</span><span>PSX · {fresh?humanize(fresh.exchange_session_status):"Session unavailable"} · Data as of {formatDate(data.market.data?.snapshot?.snapshot_date??fresh?.latest_trade_date)}</span></div>
     {fresh?.is_stale || fresh?.market_data_mode === "mock" ? <div className={styles.dataNotice} role="status"><Icon name="warning" size={16} /><span>{fresh.market_data_mode === "mock" ? "Demo market data" : "Market data needs review"}{fresh.stale_warning ? ` · ${fresh.stale_warning}` : ""}</span><Link href="/market">View market context <Arrow /></Link></div> : null}
     {hasError ? <div className={styles.dataNotice} role="status"><span>Some sections could not be loaded. Available data is shown below.</span><button onClick={() => { clearApiCache(); data.reload(); }}>Retry unavailable data <Arrow /></button></div> : null}
     <MarketSnapshot data={data} />
@@ -89,7 +86,7 @@ function PortfolioPulse({ data }: { data: OverviewData }) {
   const currency = summary?.portfolio.base_currency ?? selected?.base_currency;
   return <section className={`${styles.surface} ${styles.portfolio}`} aria-labelledby="portfolio-pulse-heading">
     <div className={styles.sectionHead}><h2 id="portfolio-pulse-heading">Your portfolio</h2><span className={styles.scopeLabel}>{selected?.name ?? "No portfolio selected"}</span></div>
-    {!data.portfolioId ? <div className={styles.empty}><p>{data.portfolios.status === "loading" ? "Loading portfolios…" : data.portfolios.status === "error" ? "Portfolios could not be loaded." : "Select a portfolio to see value and performance."}</p><Link href="/portfolios">Manage portfolios <Arrow /></Link></div> : !summary ? <State resource={data.summary} empty="Portfolio valuation unavailable." /> : <>
+    {!data.portfolioId ? <div className={styles.empty}><p>{data.portfolios.status === "loading" ? "Loading portfolios…" : data.portfolios.status === "error" ? "Portfolios could not be loaded." : "Select a portfolio to see value and performance."}</p><Link href="/portfolios/manage">Manage portfolios <Arrow /></Link></div> : !summary ? <State resource={data.summary} empty="Portfolio valuation unavailable." /> : <>
       <div className={styles.portfolioHeadline}><strong>{currency} {formatNumber(summary.total_value, 0)}</strong><div className={tone(summary.day_change_percent)}><span>{formatPercent(summary.day_change_percent)} today</span><small>{numeric(summary.day_change) != null && Number(summary.day_change) > 0 ? "+" : ""}{currency} {formatNumber(summary.day_change, 0)}</small></div></div>
       {!summary.valuation_complete ? <p className={styles.inlineWarning}>Partial valuation · {summary.valuation_note || `Unpriced holdings: ${summary.unpriced_symbols.join(", ")}`}</p> : null}
       <dl className={styles.portfolioMetrics}><div><dt>Cumulative TWR</dt><dd className={tone(series.at(-1)?.value)}>{formatPercent(series.at(-1)?.value)}</dd></div><div><dt>Holdings</dt><dd>{summary.holdings.length}</dd></div><div><dt>Cash</dt><dd>{formatPercent(cashWeight, false)}</dd></div></dl>

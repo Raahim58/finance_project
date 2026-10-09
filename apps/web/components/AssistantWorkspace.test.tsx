@@ -7,7 +7,9 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AssistantWorkspaceProvider, AskAssistant } from "./AssistantWorkspace";
+import { AssistantWorkspaceProvider, AskAssistant, useAssistantWorkspace } from "./AssistantWorkspace";
+import { useEffect } from "react";
+import { AssistantControls } from "./AssistantControls";
 import type { RunEvent } from "@/lib/assistant-workspace";
 const mocks = vi.hoisted(() => ({
   path: "/companies/OGDC",
@@ -24,16 +26,19 @@ const mocks = vi.hoisted(() => ({
   keys: vi.fn(),
   updatePreferences: vi.fn(),
 }));
-vi.mock("next/navigation", () => ({ usePathname: () => mocks.path }));
+vi.mock("next/navigation", () => ({ usePathname: () => mocks.path, useRouter: () => ({push:vi.fn(),replace:vi.fn()}) }));
 vi.mock("@/lib/api", () => ({
   getToken: () => mocks.token,
   getPortfolios: mocks.portfolios,
+  getPortfolioSummary: vi.fn().mockResolvedValue({holdings:[],data_freshness_date:null,data_source:null}),
+  getIpsCompliance: vi.fn().mockResolvedValue({status:"NOT_EVALUATED"}),
   searchInstruments: mocks.search,
   getPreferences: mocks.preferences,
   getLLMKeys: mocks.keys,
   updatePreferences: mocks.updatePreferences,
 }));
-vi.mock("@/lib/assistant-workspace", () => ({
+vi.mock("@/lib/assistant-workspace", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/assistant-workspace")>(),
   listChats: mocks.list,
   getHistory: mocks.history,
   submitRun: mocks.submit,
@@ -68,7 +73,7 @@ beforeEach(() => {
   mocks.portfolios.mockResolvedValue([
     { id: "p1", name: "Growth", is_default: true },
   ]);
-  mocks.search.mockImplementation((symbol: string) =>
+  mocks.search.mockImplementation((symbol: string = "") =>
     Promise.resolve([{ id: symbol.toLowerCase(), symbol, name: symbol }]),
   );
   mocks.list.mockResolvedValue({
@@ -121,6 +126,37 @@ async function send() {
   await waitFor(() => expect(mocks.observe).toHaveBeenCalledTimes(1));
 }
 describe("persistent Assistant", () => {
+  it("renders the full Assistant workspace with saved chats without generating", async()=>{
+    mocks.path="/assistant";
+    render(tree());
+    await screen.findByRole("region",{name:"Assistant"});
+    await screen.findByRole("navigation",{name:"Saved chat threads"});
+    expect(screen.getByRole("complementary",{name:"Context and evidence"})).toBeInTheDocument();
+    expect(mocks.submit).not.toHaveBeenCalled();
+  });
+  it("keeps an explicit company portfolio scope separate from the global default", async () => {
+    mocks.path = "/companies/FFC";
+    mocks.portfolios.mockResolvedValue([{id:"p1",name:"Growth",is_default:true},{id:"p2",name:"Income",is_default:false}]);
+    function Scope(){const setScope=useAssistantWorkspace()?.setCompanyPortfolioScope;useEffect(()=>{setScope?.("p2")},[setScope]);return <AssistantControls/>}
+    render(<AssistantWorkspaceProvider><Scope/></AssistantWorkspaceProvider>);
+    fireEvent.click(screen.getByLabelText("Open Assistant sidebar"));
+    await screen.findByText(/Next message · FFC · Income/);
+    expect(mocks.submit).not.toHaveBeenCalled();
+  });
+  it("opens a previous chat over the market brief and closes without generating", async () => {
+    mocks.path = "/market";
+    render(<AssistantWorkspaceProvider><div>Market brief</div><AssistantControls /></AssistantWorkspaceProvider>);
+    fireEvent.click(screen.getByLabelText("Previous chats"));
+    fireEvent.click(await screen.findByRole("button", { name: "Other chat" }));
+    expect(screen.getByRole("dialog", { name: "Assistant" })).toHaveClass("assistant-market-overlay");
+    await waitFor(() => expect(mocks.history).toHaveBeenCalledWith("c2", undefined));
+    expect(screen.getByText("Market brief")).toBeInTheDocument();
+    expect(mocks.submit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText("Close Assistant"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Open Assistant sidebar"));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
   it("switches saved providers without generating and snapshots the next submission", async () => {
     render(tree());
     await open();
