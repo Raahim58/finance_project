@@ -18,6 +18,7 @@ export function PortfolioContextPicker() {
     return () => { active = false; };
   }, [path]);
   async function choose(id: string) {
+    if(id==="__new__"){router.push("/portfolios/manage?create=1");return;}
     if(id==="__manage__"){router.push("/portfolios/manage");return;}
     if (!id || id === selected) return;
     setBusy(true); setError("");
@@ -30,8 +31,8 @@ export function PortfolioContextPicker() {
     finally { setBusy(false); }
   }
   return <div className="portfolio-context">
-    <select aria-label="Selected portfolio context" value={selected} disabled={busy || !rows.length} onChange={event => void choose(event.target.value)}>
-      <option value="">{error || "Select portfolio"}</option>{rows.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}<option value="__manage__">Manage portfolios…</option>
+    <select aria-label="Selected portfolio context" value={selected} disabled={busy} onChange={event => void choose(event.target.value)}>
+      <option value="">{error || "Select portfolio"}</option>{rows.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}<option value="__new__">New portfolio…</option><option value="__manage__">Manage portfolios…</option>
     </select>{error && rows.length ? <span role="alert">{error}</span> : null}
   </div>;
 }

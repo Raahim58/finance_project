@@ -39,3 +39,5 @@
 .search li b { font-weight:650; min-width:52px; }
 .search li span { color:var(--muted); overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .content { padding-top:26px; }
+.sidebarChart { margin:14px 0 8px; }.sidebarChart .ranges { margin-top:8px; }.sidebarChart .ranges button { border-radius:0; }.sidebarChart .ranges button[aria-pressed=true] { background:none; box-shadow:none;font-weight:600; }.identity { padding-top:22px; }.right { padding-top:0; }.workspace { min-height:calc(100vh - var(--workspace-header-height)); }
+@media(max-width:720px) { .sidebarChart { display:block; }.sidebarChart .ranges { max-width:none; } }

@@ -1,11 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
-import { getCompanyDetail, getCompanyResearch, getCompanyCompleteness, getPortfolios, getDocuments,
-  getContextRefresh, deactivateContextRefresh, type ApiDocument, type CompanyDetail, type CompanyResearch, type CompanyCompleteness, type Portfolio } from "@/lib/api";
+import { getCompanyDetail, getCompanyHistory, getCompanyResearch, getCompanyCompleteness, getPortfolios, getDocuments,
+  getContextRefresh, deactivateContextRefresh, type ApiDocument, type CompanyDetail, type CompanyResearch, type CompanyCompleteness, type MarketPrice, type Portfolio } from "@/lib/api";
 import { getCompanyIntelligence, type CompanyIntelligence } from "@/lib/api/research";
 
 export function useCompanyData(symbol: string) {
   const [detail,setDetail]=useState<CompanyDetail|null>(null), [research,setResearch]=useState<CompanyResearch|null>(null);
+  const [history,setHistory]=useState<MarketPrice[]>([]);
   const [portfolios,setPortfolios]=useState<Portfolio[]>([]);
   const [portfolioId,setPortfolioId]=useState("");
   const [portfolioContext,setPortfolioContext]=useState<CompanyResearch|null>(null);
@@ -21,6 +22,7 @@ export function useCompanyData(symbol: string) {
       catch(error){if(active)setErrors(old=>({...old,[key]:error instanceof Error?error.message:"Unavailable"}));}
       finally {if(active)setLoaded(old=>({...old,[key]:true}));}
     }
+    void read("history",()=>getCompanyHistory(symbol,2000),setHistory);
     void read("company",()=>getCompanyDetail(symbol),setDetail);
     void read("research",()=>getCompanyResearch(symbol,{displayOnly:true}),setResearch);
     void read("intelligence",()=>getCompanyIntelligence(symbol),setIntelligence);
@@ -51,5 +53,5 @@ export function useCompanyData(symbol: string) {
     }catch{if(active)timer=setTimeout(()=>void poll(),10000);}};
     void poll();return()=>{active=false;if(timer)clearTimeout(timer);void deactivateContextRefresh(id).catch(()=>undefined);};
   },[research?.refresh_request_id]);
-  return {detail,research,portfolios,portfolioId,setPortfolioId,portfolioContext,intelligence,documents,coverage,errors,loaded};
+  return {detail,research,history,portfolios,portfolioId,setPortfolioId,portfolioContext,intelligence,documents,coverage,errors,loaded};
 }

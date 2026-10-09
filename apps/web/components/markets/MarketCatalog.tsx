@@ -11,8 +11,8 @@ const views: Array<[MarketView, string, "market" | "company" | "grid" | "documen
   ["index", "Market digest", "market"], ["stocks", "All stocks", "company"], ["sectors", "Sectors", "grid"], ["events", "Events", "document"],
 ];
 
-export function MarketCatalog({ view, select, market, freshness, companies, chart }: {
-  view: MarketView; select: (view: MarketView) => void; market: MarketOverview | null;
+export function MarketCatalog({ view, select, market, freshness, companies, chart,onCompany }: {
+  onCompany:(symbol:string)=>void; view: MarketView; select: (view: MarketView) => void; market: MarketOverview | null;
   freshness: MarketFreshness | null; companies: Company[]; chart: React.ReactNode;
 }) {
   const snapshot = market?.snapshot;
@@ -22,13 +22,10 @@ export function MarketCatalog({ view, select, market, freshness, companies, char
   return <aside className={styles.catalog} aria-label="Market navigation">
 
     {chart}
-    <h2 className={styles.catalogSubheading}>Market views</h2>
-    <nav className={styles.catalogViews} aria-label="Market views">{views.map(([key, label, icon]) =>
-      <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => select(key)}><Icon name={icon} size={17} /><span>{label}</span><Icon name="chevron" size={13} /></button>)}</nav>
-    <div className={styles.catalogList}><h2>Observed quotes <small>by volume</small></h2>{watched.map(row => <Link key={row.symbol} href={`/companies/${row.symbol}` as never}>
+    <div className={styles.catalogList}><h2>Observed quotes <small>by volume</small></h2>{watched.map(row => <button key={row.symbol} onClick={()=>onCompany(row.symbol)}>
       <CompanyLogo symbol={row.symbol} website={bySymbol.get(row.symbol)?.official_website} size={24} /><strong>{row.symbol}</strong>
       <span className={styles.quotePrice}>{formatNumber(row.close)}</span><span className={Number(row.change_percent) < 0 ? styles.negative : styles.positive}>{formatPercent(row.change_percent)}</span>
-    </Link>)}{!watched.length ? <p className={styles.source}>Volume rankings unavailable.</p> : null}</div>
+    </button>)}{!watched.length ? <p className={styles.source}>Volume rankings unavailable.</p> : null}</div>
     <div className={styles.catalogCoverage}><span>Observed coverage</span><strong>{market?.priced_securities ?? "—"} <small>securities</small></strong>
       <p>{market?.sectors.length ?? "—"} sectors · {market?.price_basis === "intraday" ? "Intraday snapshot" : "Daily prices"}</p>
       <p className={freshness?.is_stale ? styles.negative : styles.muted}>{freshness?.is_stale ? "Data needs refresh" : freshness ? "Dated source observations" : "Freshness unavailable"}</p>

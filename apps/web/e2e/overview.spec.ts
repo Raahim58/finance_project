@@ -11,13 +11,15 @@ const regime = { regime: "mixed", method: "rule_based_v1", method_note: "Classif
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("psx_ai_token", `offline.${btoa(JSON.stringify({ sub: "overview-test-user" }))}.test`));
+  let selectedId=portfolio.id;
   await page.route("**/api/**", async route => {
     const url = new URL(route.request().url());
     const path = url.pathname.replace(/^\/api/, "");
     const current = path.includes(second.id) ? second : portfolio;
     let body: unknown = [];
     if (path === "/auth/me") body = { full_name: "Contract Reader", email: "reader@example.test" };
-    else if (path === "/portfolios") body = [portfolio, second];
+    else if(path.endsWith("/select-default")){selectedId=path.split("/")[2];body={...second,is_default:true};}
+    else if (path === "/portfolios") body = [portfolio, second].map(row=>({...row,is_default:row.id===selectedId}));
     else if (path === "/market/overview") body = market;
     else if (path === "/market/freshness") body = { market_data_mode: "auto", refresh_seconds: 60, is_stale: false, exchange_session_status: "closed", trade_date_status: "current", latest_trade_date: "2026-10-01" };
     else if (path === "/market/companies") body = [{ id: "company-test", symbol: "TEST", name: "Test catalog company", is_active: true }];
@@ -54,12 +56,13 @@ test("overview uses API values and preserves financial context", async ({ page }
 test("portfolio selection, company search and original source page work", async ({ page }) => {
   await page.goto("/dashboard");
   await expect(page.getByText("PKR 1,234,567", { exact: true })).toBeVisible();
-  await page.getByLabel("Overview portfolio").selectOption(second.id);
+  await page.getByLabel("Selected portfolio context").selectOption(second.id);
   await expect(page.getByText("PKR 9,876,543", { exact: true })).toBeVisible();
   await expect(page.getByText("PKR 1,234,567", { exact: true })).toHaveCount(0);
-  await page.getByLabel("Find a company").fill("TEST");
+  await page.getByRole("button",{name:"Find a company",exact:true}).click();
+  await page.getByRole("textbox",{name:"Find a company",exact:true}).fill("TEST");
   await expect(page.getByRole("link", { name: "TEST Test catalog company" })).toHaveAttribute("href", "/companies/TEST");
-  await page.getByLabel("Find a company").press("Escape");
+  await page.getByRole("textbox",{name:"Find a company",exact:true}).press("Escape");
   await page.getByText("View evidence", { exact: false }).first().click();
   await page.getByRole("button", { name: "Read page 2" }).click();
   await expect(page.getByRole("dialog", { name: "Source page" })).toBeVisible();

@@ -442,13 +442,13 @@ export function AssistantWorkspaceProvider({
     };
   }, [opened, fullPage]);
   useEffect(() => {
-    if (!opened) return;
+    if (!opened && !fullPage) return;
     if (nearBottom.current) {
       const element = scroller.current;
       if (element) element.scrollTop = element.scrollHeight;
       setNewMessages(false);
     } else setNewMessages(true);
-  }, [histories, runs, opened, selected]);
+  }, [histories, runs, opened, selected, fullPage]);
   const open = useCallback((question?: string) => {
     setOpened(true);
     if (question) {
@@ -513,7 +513,7 @@ export function AssistantWorkspaceProvider({
     live = Object.values(runs).filter((r) => r.conversationId === selected),
     running = live.find((r) => active(r.status)),
     draft = drafts[selected ?? "new"] ?? "";
-  const marketWorkspace = true;
+  const marketWorkspace = !fullPage;
   const action: WorkspaceAction = { open, setCompanyPortfolioScope, setPortfolioScope:setCompanyPortfolioScope, close: () => setOpened(false), opened, chats, selected,
     selectChat: id => { setSelected(id); setOpened(true); setShowChats(false); nearBottom.current = true; },
     newChat, moreChats: () => { if (chatCursor) void refreshChats(chatCursor); }, hasMoreChats: !!chatCursor };
@@ -539,7 +539,7 @@ export function AssistantWorkspaceProvider({
           role={fullPage?"region":"dialog"}
           aria-modal={fullPage?undefined:true}
           aria-label="Assistant"
-          className={`assistant-drawer${expanded ? " assistant-expanded" : ""}${marketWorkspace ? " assistant-market-overlay" : ""}${fullPage ? " assistant-full-page" : ""}`}
+          className={`assistant-drawer${expanded && !fullPage ? " assistant-expanded" : ""}${marketWorkspace ? " assistant-market-overlay" : ""}${fullPage ? " assistant-full-page" : ""}`}
         >
           {fullPage?<aside className="assistant-conversation-list" aria-label="Conversations">
             <div><h1>Chats</h1><button type="button" onClick={()=>void newChat()}>＋ New chat</button></div>
@@ -550,7 +550,7 @@ export function AssistantWorkspaceProvider({
           {fullPage?<div className="assistant-scope-bar"><label>Company <select aria-label="Assistant company context" value={assistantCompany?.id??""} onChange={event=>setAssistantCompany(companyChoices.find(row=>row.id===event.target.value)??null)}><option value="">All companies</option>{companyChoices.map(row=><option key={row.id} value={row.id}>{row.symbol} · {row.name}</option>)}</select></label></div>:null}
           <header className="assistant-header">
             <div>
-              <strong>Ask</strong>
+              <strong>Assistant</strong>
               <p>Research with your financial context</p>
             </div>
             <div className="flex gap-2">
@@ -616,12 +616,12 @@ export function AssistantWorkspaceProvider({
               ) : null}
             </nav>
           ) : null}
-          <div className="assistant-toolbar">
+          {!fullPage?<div className="assistant-toolbar">
             <span>
               {chats.find((c) => c.id === selected)?.title ?? "New chat"}
             </span>
             <button onClick={() => void newChat()}>New chat</button>
-          </div>
+          </div>:null}
           <div
             className="assistant-messages"
             ref={scroller}

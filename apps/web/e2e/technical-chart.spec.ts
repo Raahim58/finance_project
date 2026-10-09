@@ -51,7 +51,9 @@ test("native ECharts renders candles, overlays and one synchronized lower pane",
   await chart.getByLabel("RSI (14)").check();await expect(chart.getByLabel("MACD (12, 26, 9)")).not.toBeChecked();
   await chart.locator("summary").click();await chart.getByRole("button",{name:"Reset zoom"}).click();
   await expect.poll(()=>historyRequests.length).toBeGreaterThanOrEqual(2);
-  expect(historyRequests.every(url=>new URL(url).searchParams.has("start_date"))).toBe(true);
+  const rangeRequests=historyRequests.filter(url=>new URL(url).searchParams.has("end_date"));
+  expect(rangeRequests.length).toBeGreaterThanOrEqual(2);
+  expect(rangeRequests.every(url=>new URL(url).searchParams.has("start_date"))).toBe(true);
   await chart.getByRole("button",{name:"MAX",exact:true}).click();
   await expect(chart.locator("canvas")).toBeVisible();
   await expect(chart.getByText(/2,000 observations/)).toBeVisible();

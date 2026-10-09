@@ -15,7 +15,6 @@ export function MarketDigest({ market, events, companies, onStocks }: {
   const quotes = Array.from(new Map([...(market?.top_volume ?? []), ...(market?.top_gainers ?? [])].map(row => [row.symbol, row])).values());
   const chips = (rows: MarketPrice[]) => <div className={styles.digestChips}>{rows.map(row => <Link key={row.symbol} href={`/companies/${row.symbol}` as never}><CompanyLogo symbol={row.symbol} size={23} /><span>{row.symbol}</span><b className={Number(row.change_percent) < 0 ? styles.negative : styles.positive}>{formatPercent(row.change_percent)}</b></Link>)}</div>;
   return <div className={styles.digestBody}>
-    <h1>A clearer view of the PSX session</h1>
     <section><h2>The session in view</h2>
       <p>{market?.snapshot ? `KSE-100 ${market.price_basis === "intraday" ? "is observed" : "closed"} ${pct == null ? "with no reported change" : `${pct < 0 ? "down" : pct > 0 ? "up" : "unchanged"}${pct === 0 ? "" : ` ${Math.abs(pct).toFixed(2)}%`}`} on ${formatDate(market.trade_date)}. This view covers ${market.priced_securities ?? "—"} securities across ${market.sectors.length} sectors.` : "A dated session summary will appear when market data is available."}</p>
       <button className={styles.digestAction} onClick={onStocks}>› Explore the full market</button>

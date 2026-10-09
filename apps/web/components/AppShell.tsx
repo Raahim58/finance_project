@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { Icon, IconName } from "@/components/Icon";
 import { getPortfolios } from "@/lib/api";
 import { PortfolioContextPicker } from "@/components/PortfolioContextPicker";
+import { CompanyQuickSearch } from "./CompanyQuickSearch";
 import { NotificationBell } from "@/components/NotificationBell";
 import { PortfolioTabs, portfolioRoute } from "@/components/PortfolioTabs";
 
@@ -50,7 +51,9 @@ function ChatNavigation() {
 }
 
 function currentScope(pathname: string) {
-  if (pathname.startsWith("/portfolios/")) return "Portfolio workspace";
+  if(pathname === "/assistant")return "Chat";
+  if (pathname === "/portfolios/manage") return "Portfolios";
+  if (portfolioRoute(pathname)) return "Portfolio";
   if (pathname.startsWith("/companies/")) return "Security research";
   for (const group of groups) {
     const match = group.items.find(([, href]) => isActive(pathname, href));
@@ -139,9 +142,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <button type="button" ref={menuTriggerRef} className="mobile-menu-btn icon-btn" aria-label="Open primary navigation" aria-haspopup="dialog" aria-expanded={menuOpen} aria-controls="mobile-nav-drawer" onClick={() => setMenuOpen(true)}>
               <Icon name="menu" />
             </button>
-            {portfolioRoute(pathname) ? <PortfolioTabs /> : <span className="truncate text-[12px] font-semibold text-ink">{currentScope(pathname)}</span>}
+            <div id="workspace-header-content" data-portfolio-id={portfolioRoute(pathname)?.id} className="workspace-header-content"><div className="workspace-header-fallback"><h1>{currentScope(pathname)}</h1>{portfolioRoute(pathname)?<PortfolioTabs/>:null}</div></div>
           </div>
           <div className="flex items-center gap-1">
+            <CompanyQuickSearch />
             <PortfolioContextPicker />
             <NotificationBell />
             <Link className="icon-btn" aria-label="Account settings" href={"/settings" as never}><Icon name="settings" /></Link>

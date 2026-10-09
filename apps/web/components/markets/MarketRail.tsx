@@ -9,7 +9,7 @@ import { timeAgo } from "@/lib/markets";
 import { CompanyLogo } from "./CompanyLogo";
 import styles from "./markets.module.css";
 
-export function MarketRail({ market, events, loading }: { market: MarketOverview | null; events: ResearchEventView[]; loading: boolean }) {
+export function MarketRail({ market, events, loading,onSector }: {onSector?:(sector:string)=>void; market: MarketOverview | null; events: ResearchEventView[]; loading: boolean }) {
   const assistant = useAssistantWorkspace();
   const percent = numeric(market?.snapshot?.index_change_percent);
   const breadth = market?.sectors.reduce((total, row) => ({ up: total.up + row.advancers, down: total.down + row.decliners, flat: total.flat + row.unchanged }), { up: 0, down: 0, flat: 0 });
@@ -28,7 +28,7 @@ export function MarketRail({ market, events, loading }: { market: MarketOverview
       {breadth ? <div className={styles.breadth}><span><b className={styles.positive}>{breadth.up}</b> advancing</span><span><b className={styles.negative}>{breadth.down}</b> declining</span><span><b>{breadth.flat}</b> unchanged</span></div> : null}
       {(market?.top_gainers ?? []).slice(0, 3).length ? <div className={styles.tickerChips}>{market!.top_gainers.slice(0, 3).map(row => <Link href={`/companies/${row.symbol}` as never} key={row.symbol}><CompanyLogo symbol={row.symbol} size={18} /><span>{row.symbol}</span><b className={styles.positive}>{formatPercent(row.change_percent)}</b></Link>)}</div> : null}
     </section>
-    {leader ? <section className={styles.railSection}><h3>Sector in focus</h3><p>{leader.sector}</p><strong className={Number(leader.average_change_percent) < 0 ? styles.negative : styles.positive}>{formatPercent(leader.average_change_percent)} <small>average quoted move</small></strong><p className={styles.source}>A simple average of observed stocks in the sector.</p></section> : null}
+    {leader ? <section className={styles.railSection}><h3>Sector in focus</h3><p>{onSector?<button onClick={()=>onSector(leader.sector)}>{leader.sector} ›</button>:leader.sector}</p><strong className={Number(leader.average_change_percent) < 0 ? styles.negative : styles.positive}>{formatPercent(leader.average_change_percent)} <small>average quoted move</small></strong><p className={styles.source}>A simple average of observed stocks in the sector.</p></section> : null}
     <section className={styles.railSection}><div className={styles.railHead}><h3>Research evidence</h3><Link href="/research">View all <span aria-hidden="true">↗</span></Link></div>
       {evidence.map(event => <article className={styles.evidenceItem} key={event.event_key}>
         <span>{humanize(event.event_type)} · {formatDate(event.occurred_at)}</span><h4>{event.evidence[0]?.title || event.title}</h4>{event.evidence[0]?.title && event.evidence[0].title!==event.title ? <blockquote className={styles.excerpt}>{event.title}</blockquote>:null}

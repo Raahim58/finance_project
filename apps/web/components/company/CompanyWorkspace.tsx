@@ -6,6 +6,9 @@ import { CompanyDigestPanel } from "@/components/CompanyDigest";
 import { CompanyIntelligencePanel, CompanyPurposeEvidence } from "@/components/ResearchIntelligence";
 import { Icon, type IconName } from "@/components/Icon";
 import { CompanyLogo } from "@/components/markets/CompanyLogo";
+import { WorkspaceHeader } from "@/components/WorkspaceHeader";
+import { IndexChart } from "@/components/markets/IndexChart";
+import { chartRanges,closePoints,sliceRange,type ChartRange } from "@/lib/markets";
 import { TechnicalChart } from "./technical-chart/TechnicalChart";
 import { formatDate, formatNumber, formatPercent, humanize, numeric } from "@/lib/overview";
 import { companyFacts, factGroup, factValue, ratioDefinitions, ratioValue, type CompanyFact } from "@/lib/company";
@@ -19,12 +22,13 @@ const views:Array<[View,string,IconName]>=[["overview","Overview","document"],["
 type Data=ReturnType<typeof useCompanyData>;
 export function CompanyWorkspace({symbol}:{symbol:string}) {
   const data=useCompanyData(symbol), assistant=useAssistantWorkspace();
-  const [view,setView]=useState<View>("overview");
+  const [view,setView]=useState<View>("overview"),[range,setRange]=useState<ChartRange>("1M");
   const [statement,setStatement]=useState("ratios"),[period,setPeriod]=useState("latest"),[basis,setBasis]=useState("");
   const [metric,setMetric]=useState("cash_ratio"),[selectedFact,setSelectedFact]=useState<CompanyFact|null>(null);
   const setAssistantScope=assistant?.setCompanyPortfolioScope;
   useEffect(()=>{if(data.loaded.portfolios)setAssistantScope?.(data.portfolioId||null);},[data.loaded.portfolios,data.portfolioId,setAssistantScope]);
   const latest=data.detail?.latest_price, company=data.detail?.company;
+  const shown=useMemo(()=>sliceRange(closePoints(data.history),range),[data.history,range]);
   const facts=useMemo(()=>companyFacts(data.research),[data.research]);
   const periods=Array.from(new Set(facts.map(row=>row.period_end).filter(Boolean))).sort().reverse();
   const bases=Array.from(new Set(facts.map(row=>row.accounting_basis).filter(Boolean))) as string[];
@@ -49,13 +53,15 @@ export function CompanyWorkspace({symbol}:{symbol:string}) {
   const reportTable=(compact=false)=><div className={styles.tableScroll}><table className={styles.table}><thead><tr><th>Filing</th><th>Type</th><th>Published</th><th>Evidence</th></tr></thead><tbody>{(compact?reports.slice(0,3):reports).map(report=><tr key={report.document_id}><td>{report.title}</td><td>{humanize(report.document_type??"retained_report")}</td><td>{formatDate(report.published_date)}</td><td>{report.source_url?<a href={report.source_url} target="_blank" rel="noreferrer">Open report ↗</a>:<span>Source link unavailable</span>}<small>{report.indexed?`${report.pages} pages indexed`:"Narrative not indexed"}</small></td></tr>)}</tbody></table>{!reports.length?<p className={styles.empty}>{data.loaded.intelligence&&data.loaded.documents?data.errors.intelligence??"No eligible retained reports were returned.":"Loading retained reports…"}</p>:null}{!compact?<CompanyPurposeEvidence symbol={symbol}/>:null}</div>;
   const ask=(question:string)=>assistant?.open(question);
   return <div className={styles.workspace}>
+    <WorkspaceHeader title={symbol}><nav className="workspace-header-tabs" aria-label="Company sections">{views.map(([key,label])=><button key={key} aria-current={view===key?"page":undefined} onClick={()=>setView(key)}>{label}</button>)}</nav></WorkspaceHeader>
     <aside className={styles.identity} aria-label="Company navigation">
       <div className={styles.companyHeading}><CompanyLogo symbol={symbol} size={48}/><div><strong>{symbol}</strong><span>{company?.name??"Loading company…"}</span></div><CompanySearch/></div>
       <p className={styles.sector}>{company?.sector??"Sector unavailable"}</p>
       {data.errors.company?<p className={styles.error} role="alert">{data.errors.company}</p>:null}
       <div className={styles.quote}><strong>PKR {formatNumber(latest?.close)}</strong><p className={Number(latest?.change_percent)<0?styles.negative:styles.positive}>{formatPercent(latest?.change_percent)} <span>{formatDate(latest?.trade_date)}</span></p></div>
+      <div className={styles.sidebarChart} aria-label={`${symbol} sidebar price history`}>{data.errors.history?<p className={styles.empty}>{data.errors.history}</p>:<IndexChart points={shown} name={symbol} height={165} compactAxis={false}/>}<div className={styles.ranges} role="group" aria-label="Company sidebar chart range">{chartRanges.map(([key])=><button key={key} aria-pressed={range===key} onClick={()=>setRange(key)}>{key}</button>)}</div><p className={styles.caption}>Stored daily closes</p></div>
       <p className={styles.caption}>{latest?.source??"Price source unavailable"}{latest?.source_url?<> · <a href={latest.source_url} target="_blank" rel="noreferrer">Source ↗</a></>:null}</p>
-      <nav className={styles.companyNav}>{views.map(([key,label,icon])=><button key={key} aria-current={view===key?"page":undefined} onClick={()=>setView(key)}><Icon name={icon} size={19}/><span>{label}</span><Icon name="chevron" size={13}/></button>)}</nav>
+
       <section className={styles.held}><h3>In your selected portfolio</h3><p>{selectedPortfolio?.name??"No portfolio selected"}</p><strong>{data.portfolioId?holding&&valuationComplete&&numeric(holding.weight)!=null?`${formatNumber(Number(holding.weight)*100)}%`:data.portfolioContext?"Not held":"Loading exposure…":"Select a portfolio"}</strong></section>
       <details className={styles.coverage}><summary>Data coverage</summary>{data.coverage?Object.entries(data.coverage).filter(([,row])=>typeof row==="object"&&row!==null&&"available" in row).map(([key,row])=><p key={key}>{humanize(key)} <span>{typeof row==="object"&&row!==null&&"available" in row&&row.available?"Available":"Missing"}</span></p>):<p>{data.errors.coverage??"Loading coverage…"}</p>}</details>
     </aside>
@@ -76,7 +82,7 @@ export function CompanyWorkspace({symbol}:{symbol:string}) {
           <section className={styles.section}><div className={styles.sectionHead}><h2>Recent reports</h2><button className={styles.textAction} onClick={()=>setView("reports")}>See all reports →</button></div>{reportTable(true)}</section>
         </>:null}
         {view==="fundamentals"?<>
-          <h1>Fundamentals</h1><div className={styles.filters}><label>Period <select value={period} onChange={e=>{setPeriod(e.target.value);setSelectedFact(null)}}><option value="latest">Latest stored period</option><option value="all">All stored periods</option>{periods.map(value=><option key={value}>{value}</option>)}</select></label><label>Basis <select value={basis} onChange={e=>{setBasis(e.target.value);setSelectedFact(null)}}><option value="">All reported bases</option>{bases.map(value=><option key={value} value={value}>{humanize(value)}</option>)}</select></label></div>
+          <div className={styles.filters}><label>Period <select value={period} onChange={e=>{setPeriod(e.target.value);setSelectedFact(null)}}><option value="latest">Latest stored period</option><option value="all">All stored periods</option>{periods.map(value=><option key={value}>{value}</option>)}</select></label><label>Basis <select value={basis} onChange={e=>{setBasis(e.target.value);setSelectedFact(null)}}><option value="">All reported bases</option>{bases.map(value=><option key={value} value={value}>{humanize(value)}</option>)}</select></label></div>
           <nav className={styles.statementTabs} aria-label="Financial statements">{[["income","Income"],["balance","Balance sheet"],["cash","Cash flow"],["ratios","Ratios"]].map(([key,label])=><button key={key} aria-current={statement===key?"page":undefined} onClick={()=>{setStatement(key);setSelectedFact(null)}}>{label}</button>)}</nav>
           <div className={styles.tableScroll}><table className={styles.table}><thead><tr><th>Metric</th><th>Value</th><th>Reporting period</th><th>Input status / basis</th></tr></thead><tbody>
             {statement==="ratios"?ratioDefinitions.map((row,index)=>{const result=scopedRatio(row.key);return <Rows key={row.key} group={index===0||row.group!==ratioDefinitions[index-1].group?row.group:undefined}><tr aria-selected={!selectedFact&&metric===row.key}><td><button onClick={()=>{setMetric(row.key);setSelectedFact(null)}}>{row.label}</button></td><td>{result&&numeric(result.value)!=null?factValue(result.value,row.unit):"Needs eligible inputs"}</td><td>{result?.period_end?String(result.period_end):"—"}</td><td>{result?String(result.warning??"Calculated from stored facts"):data.research?.derived_fundamentals.unavailable?.[row.key]??"Not calculated"}</td></tr></Rows>}):filtered.filter(row=>factGroup(row.taxonomy_key)===statement).map((row,index)=><tr key={row.id??`${row.taxonomy_key}-${index}`} aria-selected={selectedFact?.id===row.id&&!!selectedFact}><td><button onClick={()=>setSelectedFact(row)}>{humanize(row.taxonomy_key)}</button></td><td>{factValue(row.value,row.unit,row.currency)}</td><td>{row.period_start?`${formatDate(row.period_start)} – `:""}{formatDate(row.period_end)}<small>{humanize(row.period_type)}</small></td><td>{humanize(row.accounting_basis??"basis_unavailable")}<small>Extracted · source review</small></td></tr>)}
@@ -85,9 +91,9 @@ export function CompanyWorkspace({symbol}:{symbol:string}) {
           <p className={styles.caption}>{facts.length} returned facts · all matching rows are displayed. Extracted amounts retain their reported units; source review is distinct from calculation eligibility.</p>
           <section className={styles.section}><h2>Source reconciliation</h2>{reportTable(true)}</section>
         </>:null}
-        {view==="events"?<><h1>Company events</h1><CompanyIntelligencePanel symbol={symbol} portfolioId={data.portfolioId||undefined}/></>:null}
-        {view==="reports"?<><h1>Reports and evidence</h1>{reportTable()}<CompanyDigestPanel symbol={symbol} compact/></>:null}
-        {view==="fit"?<><h1>Portfolio fit</h1><p className={styles.description}>Evaluate this company against an explicitly selected portfolio and its confirmed IPS.</p><DecisionWorkbench symbol={symbol} instrumentId={data.research?.instrument.id} portfolios={data.portfolios} selectedPortfolioId={data.portfolioId}/></>:null}
+        {view==="events"?<><CompanyIntelligencePanel symbol={symbol} portfolioId={data.portfolioId||undefined}/></>:null}
+        {view==="reports"?<>{reportTable()}<CompanyDigestPanel symbol={symbol} compact/></>:null}
+        {view==="fit"?<><p className={styles.description}>Evaluate this company against an explicitly selected portfolio and its confirmed IPS.</p><DecisionWorkbench symbol={symbol} instrumentId={data.research?.instrument.id} portfolios={data.portfolios} selectedPortfolioId={data.portfolioId}/></>:null}
       </div>
     </div>
     <aside className={styles.right} aria-label="Company context">

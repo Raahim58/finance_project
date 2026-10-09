@@ -14,8 +14,8 @@
 .type { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 12px 14px; border: 0; border-bottom: 1px solid #eceef1; background: transparent; color: #141619; font-size: 13px; text-align: left; cursor: pointer; }
 .type:last-child { border-bottom: 0; }
 .type:hover { background: #f6f7f8; }
-.type[aria-current="true"] { background: #f6f7f8; font-weight: 600; }
-.type[aria-current="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: #141619; }
+.type[aria-current="true"] { background: transparent; font-weight: 600; }
+.type[aria-current="true"]::before { display:none; }
 .tag { flex-shrink: 0; padding: 2px 6px; border-radius: 3px; background: #fef3e2; color: #7a5a14; font-size: 10px; font-weight: 500; }
 .badge { display: inline-block; padding: 3px 8px; border: 1px solid #eceef1; border-radius: 3px; background: #f6f7f8; color: #555d69; font-size: 11px; white-space: nowrap; }
 .params { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid #eceef1; }
@@ -64,7 +64,7 @@
 .historyList { margin-top: 14px; border-top: 1px solid #eceef1; }
 .run { display: block; width: 100%; padding: 14px 6px 14px 12px; border: 0; border-bottom: 1px solid #eceef1; background: transparent; text-align: left; color: inherit; cursor: pointer; }
 .run:hover { background: #f6f7f8; }
-.run[aria-current="true"] { box-shadow: inset 3px 0 0 #141619; background: #f6f7f8; }
+.run[aria-current="true"] { box-shadow:none; background:transparent; font-weight:600; }
 .runTop { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .runTop strong { font-size: 13.5px; font-weight: 600; }
 .runDate { margin-top: 3px; color: #70757d; font-size: 11.5px; }
