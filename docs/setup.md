@@ -217,7 +217,7 @@ npm run build
 npm run dev
 ```
 
-`generate:api` expects the API at `http://localhost:8000` and checks `lib/generated/api.d.ts` into the repository. Main portfolio routes are `overview`, `build`, `quant`, `risk`, `scenarios`, `research`, `activity`, and `ips`; legacy `stress` and `settings` wrappers remain compatible.
+`generate:api` expects the API at `http://localhost:8000` and checks `lib/generated/api.d.ts` into the repository. Main portfolio routes are `overview`, `build`, `quant`, `risk`, `scenarios`, `research`, `activity`, and `ips`.
 
 Browser requests default to the same-origin `/api` path. Next.js proxies that path to
 `API_INTERNAL_BASE_URL` (default `http://127.0.0.1:8000`), so an HTTPS development
@@ -254,6 +254,12 @@ Provider parser tests use bounded fixtures and never hit live services. Live con
 The API-level pytest bootstrap forces an in-memory SQLite database, test bcrypt cost, disabled demo access, mock market mode, and disabled scheduled ingestion before the application package is imported. A developer `.env` therefore cannot silently redirect the test suite to local Postgres or enable source traffic. Global Evidence Pass 0 contains contracts and schema only; it has no live smoke test or provider setup command.
 
 ## Documents and RAG
+
+Manual uploads are available in Research (`/research`) under **Upload document**.
+The supported market route is `/market`; `/markets`, `/documents`, `/portfolio`,
+and the portfolio `stress` and `settings` aliases have been removed. Use
+`/portfolios/{id}/scenarios` and `/portfolios/{id}/ips` respectively.
+This UI cleanup requires no migration or new seed data.
 
 ```bash
 cd apps/api
