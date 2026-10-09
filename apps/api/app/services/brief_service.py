@@ -4,7 +4,7 @@ Facts come only from database queries. Page reads never call the model: a brief 
 until its input hash changes (new trading day, market close, a new classified event, changed holdings),
 and then one background generation is started for that hash. Failed hashes are not retried automatically.
 """
-import asyncio, json, logging
+import asyncio, json, logging, re
 from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -14,17 +14,25 @@ from app.models.research_intelligence import AIBrief
 from app.services.research_job_service import generation_config
 
 log = logging.getLogger(__name__)
-VERSION = 'brief.v1'
+VERSION = 'brief.v2'
 RUNNING_TTL = timedelta(minutes=5)
 _inflight: set[str] = set()
 
 SYSTEM = (
-    "You write a short brief for a Pakistan Stock Exchange investor from FACTS only. Never use outside knowledge, "
-    "never invent numbers, causes or forecasts, and give no trade instructions. Every bullet must cite the fact ids it "
-    "relies on. If facts are thin, say what is missing. Return JSON: {\"headline\": str (<=110 chars), "
-    "\"summary\": str (2-3 sentences), \"points\": [{\"text\": str, \"fact_ids\": [str]}] (3-6 items), "
-    "\"watch\": [str] (0-3 items: missing data or things to check)}."
+    "You write a market-news style brief for a Pakistan Stock Exchange investor from FACTS only. Never use outside "
+    "knowledge, never invent numbers, causes, forecasts or dates, and give no trade instructions. Return JSON: "
+    "{\"headline\": str (<=110 chars, one punchy sentence naming the dominant theme), "
+    "\"summary\": str (2 short sentences: a modest overview of the whole market, no more than 45 words), "
+    "\"sections\": [{\"title\": str (2-5 words), \"body\": str (2-3 sentences explaining what happened and why it "
+    "matters to a trader, grounded in the cited facts), \"question\": str (one natural follow-up question a reader would "
+    "ask), \"tickers\": [str] (0-4 ticker symbols that appear in the cited facts), \"fact_ids\": [str]}] (exactly 3), "
+    "\"events\": [str] (0-3 items, only upcoming or scheduled things that a FACT explicitly states; otherwise [])}. "
+    "Each section must cover a DIFFERENT theme (for example index and breadth, leaders and laggards, sectors, events). "
+    "Never repeat a number or sentence across sections or the summary. Every section must cite the fact ids it relies on."
 )
+PORTFOLIO_SYSTEM = SYSTEM.replace("Pakistan Stock Exchange investor", "Pakistan Stock Exchange investor about their own portfolio").replace(
+    "(for example index and breadth, leaders and laggards, sectors, events)", "(for example overall performance, biggest movers among holdings, concentration or sector exposure, events affecting holdings)").replace(
+    "a modest overview of the whole market", "a modest overview of the portfolio")
 
 
 def _pct(v):
@@ -124,15 +132,22 @@ def read(db, user, scope, key="", *, schedule, retry=False):
     return {"status": status, "current": False, "error_code": current.error_code if current else None, **out}
 
 
-def _valid(raw, ids):
+def _valid(raw, ids, symbols=frozenset()):
     data = json.loads(raw)
-    points = [{"text": str(p["text"]).strip(), "fact_ids": [i for i in p.get("fact_ids", []) if i in ids]}
-              for p in data.get("points", []) if isinstance(p, dict) and p.get("text")]
-    points = [p for p in points if p["fact_ids"]]
-    if not data.get("headline") or not data.get("summary") or not points:
+    sections = []
+    for sec in data.get("sections", []):
+        if not isinstance(sec, dict) or not sec.get("body"):
+            continue
+        fact_ids = [i for i in sec.get("fact_ids", []) if i in ids]
+        if not fact_ids:
+            continue
+        sections.append({"title": str(sec.get("title", "")).strip()[:60], "body": str(sec["body"]).strip(),
+                         "question": str(sec.get("question", "")).strip()[:160], "fact_ids": fact_ids,
+                         "tickers": [t for t in dict.fromkeys(str(t).upper() for t in sec.get("tickers", [])) if t in symbols][:4]})
+    if not data.get("headline") or not sections:
         raise ValueError("invalid_model_output")
-    return {"headline": str(data["headline"])[:160], "summary": str(data["summary"]),
-            "points": points[:6], "watch": [str(w) for w in data.get("watch", [])][:3]}
+    return {"headline": str(data["headline"])[:160], "summary": str(data.get("summary", "")).strip(),
+            "sections": sections[:4], "events": [str(e) for e in data.get("events", [])][:3]}
 
 
 async def generate(user_id, scope, key, h):
@@ -152,12 +167,13 @@ async def generate(user_id, scope, key, h):
                 return
             try:
                 facts, _ = await asyncio.to_thread(lambda: _gather_sync(user_id, scope, key))
-                messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "FACTS\n" + canonical(facts)}]
+                messages = [{"role": "system", "content": PORTFOLIO_SYSTEM if scope == 'portfolio' else SYSTEM}, {"role": "user", "content": "FACTS\n" + canonical(facts)}]
                 api_key, _rec = get_decrypted_key_for_call(db, user, row.provider)
                 result = await get_provider(row.provider).chat_with_options(api_key, messages, row.model,
                     options=ProviderCallOptions(json_mode=True, max_output_tokens=1200, deadline_seconds=60))
                 api_key = None
-                brief = _valid(result.content, {f["id"] for f in facts})
+                symbols = set(re.findall(r'\b[A-Z][A-Z0-9]{1,9}\b', ' '.join(f['text'] for f in facts)))
+                brief = _valid(result.content, {f["id"] for f in facts}, symbols)
                 row.brief_json, row.facts_json, row.status = json.dumps(brief), json.dumps(facts), 'ready'
                 row.generated_at = datetime.now(UTC)
             except Exception as exc:

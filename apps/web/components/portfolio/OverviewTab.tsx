@@ -12,7 +12,7 @@ import { formatDate, formatNumber, formatPercent, humanize, numeric } from "@/li
 import { activityLine, briefHeadline, holdingRows, movers, overviewRanges, rangeSlice, valuePoints, type HoldingRow, type OverviewRange } from "@/lib/portfolio-overview";
 import { useOverviewExtras } from "./overview/useOverviewExtras";
 import { useAssistantWorkspace } from "@/components/AssistantWorkspace";
-import { AIBriefCard } from "@/components/AIBriefCard";
+import { AIBriefCard, useBrief } from "@/components/AIBriefCard";
 import { getPortfolioBrief } from "@/lib/api/research";
 import styles from "./overview/overview.module.css";
 
@@ -31,6 +31,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
   const assistant = useAssistantWorkspace();
   const quotes = useMemo(() => Object.fromEntries(rows.map(row => [row.symbol, row.dayPercent])), [rows]);
   const loadBrief = useCallback((retry: boolean) => getPortfolioBrief(portfolioId, retry), [portfolioId]);
+  const briefState = useBrief(loadBrief);
   if (!summary) return <p className={styles.empty}>Portfolio summary unavailable. The API did not return a database valuation.</p>;
 
   const total = numeric(summary.total_value), cash = numeric(summary.cash_balance), dayChange = numeric(summary.day_change), dayPercent = numeric(summary.day_change_percent);
@@ -90,7 +91,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
     </div>
 
     <aside data-portfolio-panel="context" className={styles.rail} aria-label="Portfolio brief">
-      <AIBriefCard title="Portfolio brief" load={loadBrief} quotes={quotes} lead={<span>{benchmark?.percent != null ? `${benchmark.name} as of ${formatDate(benchmark.date)}` : extras.index.failed ? "Benchmark comparison unavailable" : `As of ${formatDate(summary.data_freshness_date)}`}</span>} fallback={brief ? { headline: brief.title, summary: brief.text } : null} question="How does this affect my portfolio?" onAsk={text => assistant?.open(text)} />
+      <AIBriefCard title="Portfolio brief" state={briefState} quotes={quotes} fallback={brief ? { headline: brief.title, summary: brief.text } : null} onAsk={text => assistant?.open(text)} />
       <section><h3>Top contributors</h3><Movers rows={contributors} websites={extras.websites} empty="No holdings with a positive stored day change." /></section>
       <section><h3>Top detractors</h3><Movers rows={detractors} websites={extras.websites} empty="No holdings with a negative stored day change." /></section>
       <section>

@@ -24,3 +24,4 @@
 .note { margin:8px 0 0; color:var(--muted); font-size:13px; }
 .note button { margin-left:10px; border:1px solid var(--line); background:var(--paper); border-radius:7px; padding:5px 10px; color:var(--ink); font-size:13px; cursor:pointer; }
 .note button:hover { background:var(--surface); }
+.point h3{margin:0 0 8px;font-size:16px;font-weight:600;letter-spacing:-.01em;line-height:1.35}.watch li{font-size:14px;line-height:1.6;color:var(--ink-2)}

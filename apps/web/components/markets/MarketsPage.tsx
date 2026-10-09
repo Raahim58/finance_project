@@ -17,6 +17,8 @@ import { MarketDigest } from "./MarketDigest";
 import { WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { MarketDetailRail,type MarketSelection } from "./MarketDetailRail";
 import { MarketRail } from "./MarketRail";
+import { useBrief } from "@/components/AIBriefCard";
+import { getMarketBrief } from "@/lib/api/research";
 import styles from "./markets.module.css";
 
 type Data = ReturnType<typeof useMarketsData>;
@@ -31,6 +33,7 @@ function Note({ resource, empty }: { resource: Resource<unknown>; empty: string 
 
 export function MarketsPage() {
   const data = useMarketsData();
+  const brief = useBrief(getMarketBrief);
   const [view, setView] = useState<MarketView>("index");
   const [query, setQuery] = useState("");
   const [selection,setSelection]=useState<MarketSelection|null>(null);
@@ -63,10 +66,10 @@ export function MarketsPage() {
         <span>{fresh.market_data_mode === "mock" ? "Demo market data" : "Market data needs review"}{[fresh.provider_mode_warning, fresh.ingestion_staleness_warning, fresh.stale_warning].filter(Boolean).slice(0, 1).map(text => ` · ${text}`)}</span></div> : null}
       {failed ? <div className={styles.notice} role="status"><span>Some sections could not be loaded. Available data is shown below.</span><button onClick={() => { clearApiCache(); data.reload(); }}>Retry</button></div> : null}
       {view === "stocks" ? <MoversPanels data={data} bySymbol={bySymbol} query={query} setQuery={setQuery} onCompany={openCompany}/> : null}
-      {view === "index" ? <MarketDigest market={session ?? null} events={data.events.data ?? []} companies={bySymbol} onStocks={() => setView("stocks")} /> : view === "stocks" ? <StocksPanel companies={data.companies} query={query} setQuery={setQuery} changes={changeBySymbol} prices={prices} onCompany={openCompany} onSector={openSector} selected={selection?.kind==="company"?selection.symbol:undefined}/> : view === "sectors" ? <SectorsPanel resource={data.market} onSector={openSector}/> : <section className={styles.eventList}><h2>Recent market events</h2>{(data.events.data ?? []).map(event => <article key={event.event_key}><small>{formatDate(event.occurred_at)}</small><h3>{event.title}</h3><a href={event.evidence[0]?.source_url ?? "/research"}>{event.evidence[0]?.source_name ?? "View evidence"} ↗</a></article>)}{!data.events.data?.length ? <Note resource={data.events} empty="No selected market event evidence is available." /> : null}</section>}
+      {view === "index" ? <MarketDigest brief={brief} market={session ?? null} events={data.events.data ?? []} companies={bySymbol} onStocks={() => setView("stocks")} /> : view === "stocks" ? <StocksPanel companies={data.companies} query={query} setQuery={setQuery} changes={changeBySymbol} prices={prices} onCompany={openCompany} onSector={openSector} selected={selection?.kind==="company"?selection.symbol:undefined}/> : view === "sectors" ? <SectorsPanel resource={data.market} onSector={openSector}/> : <section className={styles.eventList}><h2>Recent market events</h2>{(data.events.data ?? []).map(event => <article key={event.event_key}><small>{formatDate(event.occurred_at)}</small><h3>{event.title}</h3><a href={event.evidence[0]?.source_url ?? "/research"}>{event.evidence[0]?.source_name ?? "View evidence"} ↗</a></article>)}{!data.events.data?.length ? <Note resource={data.events} empty="No selected market event evidence is available." /> : null}</section>}
       <p className={styles.source}>{fresh?.latest_used_provider ?? fresh?.latest_source ?? snapshot?.source ?? "Source unavailable"} · prices as of {formatDate(session?.trade_date ?? fresh?.latest_trade_date ?? snapshot?.snapshot_date)} · refreshes hourly</p>
     </div>
-    {selection?<MarketDetailRail key={selection.kind=== "company"?`company:${selection.symbol}`:`sector:${selection.sector}`} selection={selection} companies={data.companies.data??[]} market={session??null} onClose={()=>setSelection(null)} onCompany={openCompany} onSector={openSector}/>:<MarketRail market={session ?? null} events={data.events.data ?? []} loading={data.events.status === "loading"} onSector={openSector}/> }
+    {selection?<MarketDetailRail key={selection.kind=== "company"?`company:${selection.symbol}`:`sector:${selection.sector}`} selection={selection} companies={data.companies.data??[]} market={session??null} onClose={()=>setSelection(null)} onCompany={openCompany} onSector={openSector}/>:<MarketRail brief={brief} market={session ?? null} events={data.events.data ?? []} loading={data.events.status === "loading"} onSector={openSector}/> }
   </div>;
 }
 
