@@ -5,7 +5,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from app.db.session import SessionLocal
@@ -37,6 +37,7 @@ def ips_fixture(db, monkeypatch):
     return user, portfolio, version
 
 
+@pytest.mark.usefixtures("database")
 def test_optional_sql_failure_preserves_cash_weight_checks_and_transaction(monkeypatch):
     with SessionLocal() as db:
         user, portfolio, _ = ips_fixture(db, monkeypatch)
@@ -53,6 +54,7 @@ def test_optional_sql_failure_preserves_cash_weight_checks_and_transaction(monke
         assert 'unavailable_optional_risk_source' not in json.dumps(result)
 
 
+@pytest.mark.usefixtures("database")
 def test_disk_full_is_not_retried_and_is_reported_without_private_sql(monkeypatch):
     class DiskFull(Exception):
         sqlstate = '53100'
@@ -69,6 +71,7 @@ def test_disk_full_is_not_retried_and_is_reported_without_private_sql(monkeypatc
         assert 'private SQL' not in json.dumps(result, default=str)
 
 
+@pytest.mark.usefixtures("database")
 def test_draft_ips_is_not_evaluated_and_other_owner_is_denied(monkeypatch):
     with SessionLocal() as db:
         user, portfolio, version = ips_fixture(db, monkeypatch)
@@ -120,6 +123,7 @@ def event_fixture(db, monkeypatch):
     return user,a,b
 
 
+@pytest.mark.usefixtures("database")
 def test_matching_before_pagination_is_shared_across_all_three_assistant_tools(monkeypatch):
     with SessionLocal() as db:
         user,a,b=event_fixture(db,monkeypatch)
@@ -151,6 +155,7 @@ def test_matching_before_pagination_is_shared_across_all_three_assistant_tools(m
         assert all('relevance_reason' not in r for r in company_events(db,user,a))
 
 
+@pytest.mark.usefixtures("database")
 def test_broader_geopolitical_search_has_no_company_or_three_factor_gate(monkeypatch):
     with SessionLocal() as db:
         user=User(email='broad-scope@test.invalid',password_hash='fixture');db.add(user);db.flush()
@@ -165,6 +170,7 @@ def test_broader_geopolitical_search_has_no_company_or_three_factor_gate(monkeyp
         assert result['sources'][0]['source_url']=='https://example.test/news'
 
 
+@pytest.mark.usefixtures("database")
 def test_legacy_direct_sources_survive_case_insensitive_matching_and_paginate_once(monkeypatch):
     with SessionLocal() as db:
         user=User(email='legacy-scope@test.invalid',password_hash='fixture')

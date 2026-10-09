@@ -12,7 +12,7 @@ from app.models.assistant_workspace import ConversationSummary
 from app.models.workstation import Conversation
 from app.services import assistant_memory
 from app.services.assistant_policy import selected_policy
-from app.tests.test_phase11_workspace import accepted
+from app.tests.support.assistant import accepted
 
 
 def summary_case(client, monkeypatch, **overrides):

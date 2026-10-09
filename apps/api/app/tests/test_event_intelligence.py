@@ -13,7 +13,6 @@ from app.models.workstation import (
     EventEntityLink,
     EventSource,
     Instrument,
-    NormalizedEvent,
     NormalizedEventEvidence,
     NormalizedEventSubject,
 )
@@ -26,7 +25,9 @@ from app.services.market_ingestion import generate_mock_market_data
 
 
 NOW = datetime.now(UTC).replace(microsecond=0)
-CLASSIFICATION_CASES = Path(__file__).resolve().parents[1] / "evaluation" / "phase6_event_classification.json"
+CLASSIFICATION_CASES = (
+    Path(__file__).resolve().parents[1] / "evaluation" / "phase6_event_classification.json"
+)
 
 
 def _seed_market() -> None:
@@ -54,21 +55,25 @@ def _raw_event(
         )
         db.add(event)
         db.flush()
-        db.add(EventSource(
-            event_id=event.id,
-            source_url=source_url or f"https://example.test/{event.id}",
-            source_name=source_name,
-            published_at=occurred_at,
-            selection_status="selected",
-        ))
-        if symbol:
-            db.add(EventEntityLink(
+        db.add(
+            EventSource(
                 event_id=event.id,
-                entity_type="instrument",
-                entity_key=symbol,
-                link_method="exact_alias",
-                confidence=Decimal("1"),
-            ))
+                source_url=source_url or f"https://example.test/{event.id}",
+                source_name=source_name,
+                published_at=occurred_at,
+                selection_status="selected",
+            )
+        )
+        if symbol:
+            db.add(
+                EventEntityLink(
+                    event_id=event.id,
+                    entity_type="instrument",
+                    entity_key=symbol,
+                    link_method="exact_alias",
+                    confidence=Decimal("1"),
+                )
+            )
         db.commit()
         return event.id
 
@@ -90,7 +95,12 @@ def test_deterministic_rules_classify_rates_and_materiality_without_llm():
     assert detection.magnitude.value == Decimal("100")
     assert detection.magnitude.unit == "bps"
     assert detection.magnitude.direction == "increase"
-    assert event_materiality(detection, "policy rate raised 100 basis points", has_direct_subject=False) == "high"
+    assert (
+        event_materiality(
+            detection, "policy rate raised 100 basis points", has_direct_subject=False
+        )
+        == "high"
+    )
 
 
 @pytest.mark.parametrize(
@@ -130,6 +140,7 @@ def test_real_title_classification_acceptance_set():
     assert failures == []
 
 
+@pytest.mark.usefixtures("database")
 def test_normalization_preserves_raw_evidence_and_direct_issuer_subject():
     _seed_market()
     raw_id = _raw_event(
@@ -139,12 +150,16 @@ def test_normalization_preserves_raw_evidence_and_direct_issuer_subject():
     )
     with SessionLocal() as db:
         normalized = normalize_raw_event(db, raw_id)
-        subjects = list(db.scalars(select(NormalizedEventSubject).where(
-            NormalizedEventSubject.normalized_event_id == normalized.id
-        )))
-        link = db.scalar(select(NormalizedEventEvidence).where(
-            NormalizedEventEvidence.raw_event_id == raw_id
-        ))
+        subjects = list(
+            db.scalars(
+                select(NormalizedEventSubject).where(
+                    NormalizedEventSubject.normalized_event_id == normalized.id
+                )
+            )
+        )
+        link = db.scalar(
+            select(NormalizedEventEvidence).where(NormalizedEventEvidence.raw_event_id == raw_id)
+        )
 
         assert normalized.event_type == "dividend"
         assert normalized.materiality == "high"
@@ -163,6 +178,7 @@ def test_normalization_preserves_raw_evidence_and_direct_issuer_subject():
         assert db.get(Event, raw_id).event_type == "announcement"
 
 
+@pytest.mark.usefixtures("database")
 def test_duplicate_coverage_clusters_and_preserves_both_sources():
     _seed_market()
     first_id = _raw_event(
@@ -181,9 +197,11 @@ def test_duplicate_coverage_clusters_and_preserves_both_sources():
     with SessionLocal() as db:
         first = normalize_raw_event(db, first_id)
         second = normalize_raw_event(db, second_id)
-        evidence_count = db.scalar(select(func.count()).select_from(NormalizedEventEvidence).where(
-            NormalizedEventEvidence.normalized_event_id == first.id
-        ))
+        evidence_count = db.scalar(
+            select(func.count())
+            .select_from(NormalizedEventEvidence)
+            .where(NormalizedEventEvidence.normalized_event_id == first.id)
+        )
         assert second.id == first.id
         assert evidence_count == 2
         assert db.scalar(select(func.count()).select_from(EventSource)) == 2
@@ -192,6 +210,7 @@ def test_duplicate_coverage_clusters_and_preserves_both_sources():
         assert roles == {"primary", "corroborating"}
 
 
+@pytest.mark.usefixtures("database")
 def test_unsupported_item_remains_unclassified_and_does_not_invent_impact():
     raw_id = _raw_event(title="Read More", symbol=None)
     with SessionLocal() as db:
@@ -203,6 +222,7 @@ def test_unsupported_item_remains_unclassified_and_does_not_invent_impact():
         assert '"impact_interpretation": "not_calculated"' in details
 
 
+@pytest.mark.usefixtures("database")
 def test_prototype_similarity_cannot_publish_an_event(monkeypatch):
     raw_id = _raw_event(title="Read More")
     monkeypatch.setattr(
@@ -215,6 +235,7 @@ def test_prototype_similarity_cannot_publish_an_event(monkeypatch):
         assert normalized.event_type == "unclassified"
 
 
+@pytest.mark.usefixtures("database")
 def test_synthetic_event_is_not_normalized_as_observed():
     with SessionLocal() as db:
         event = Event(
@@ -225,11 +246,13 @@ def test_synthetic_event_is_not_normalized_as_observed():
         )
         db.add(event)
         db.flush()
-        db.add(EventSource(
-            event_id=event.id,
-            source_url="demo://event/1",
-            source_name="Deterministic Demo Seed",
-        ))
+        db.add(
+            EventSource(
+                event_id=event.id,
+                source_url="demo://event/1",
+                source_name="Deterministic Demo Seed",
+            )
+        )
         db.commit()
         event_id = event.id
     with SessionLocal() as db, pytest.raises(ValueError, match="Synthetic/demo"):
@@ -244,11 +267,21 @@ def test_company_and_portfolio_apis_surface_only_direct_subjects_with_exact_weig
         source_url="https://dps.psx.com.pk/notice/80",
     )
     with SessionLocal() as db:
-        from app.services.rag_service import create_document_from_pages,ParsedPage
-        document=create_document_from_pages(db,[ParsedPage(1,'Meezan Bank Limited declares 80 percent interim cash dividend.')],
-            title='MEBL dividend notice',document_type='announcement',symbol='MEBL',source_name='Pakistan Stock Exchange',
-            source_url='https://dps.psx.com.pk/notice/80',published_date=date.today(),commit=False)
-        source=db.scalar(select(EventSource).where(EventSource.event_id==raw_id));source.document_id=document.id
+        from app.services.rag_service import create_document_from_pages, ParsedPage
+
+        document = create_document_from_pages(
+            db,
+            [ParsedPage(1, "Meezan Bank Limited declares 80 percent interim cash dividend.")],
+            title="MEBL dividend notice",
+            document_type="announcement",
+            symbol="MEBL",
+            source_name="Pakistan Stock Exchange",
+            source_url="https://dps.psx.com.pk/notice/80",
+            published_date=date.today(),
+            commit=False,
+        )
+        source = db.scalar(select(EventSource).where(EventSource.event_id == raw_id))
+        source.document_id = document.id
         db.commit()
         normalize_raw_event(db, raw_id)
         instrument = db.scalar(select(Instrument).where(Instrument.symbol == "MEBL"))
@@ -256,14 +289,14 @@ def test_company_and_portfolio_apis_surface_only_direct_subjects_with_exact_weig
         instrument_id = instrument.id
 
     headers = _auth(client)
-    company = client.get(
-        f"/companies/{instrument_id}/intelligence-events", headers=headers
-    )
+    company = client.get(f"/companies/{instrument_id}/intelligence-events", headers=headers)
     assert company.status_code == 200
     assert [row["event_type"] for row in company.json()] == ["dividend"]
     assert company.json()[0]["impact"]["status"] == "not_calculated"
 
-    portfolio_id = client.post("/portfolios", headers=headers, json={"name": "Event portfolio"}).json()["id"]
+    portfolio_id = client.post(
+        "/portfolios", headers=headers, json={"name": "Event portfolio"}
+    ).json()["id"]
     holding = client.post(
         f"/portfolios/{portfolio_id}/holdings",
         headers=headers,
@@ -274,9 +307,7 @@ def test_company_and_portfolio_apis_surface_only_direct_subjects_with_exact_weig
     assert response.status_code == 200
     body = response.json()
     assert len(body["events"]) == 1
-    assert body["events"][0]["holdings"] == [
-        {"symbol": "MEBL", "current_portfolio_weight": 1.0}
-    ]
+    assert body["events"][0]["holdings"] == [{"symbol": "MEBL", "current_portfolio_weight": 1.0}]
     assert body["events"][0]["affected_portfolio_weight"] == 1.0
     assert body["events"][0]["impact_direction"] is None
     assert "not_implemented" in body["events"][0]["impact_calculation"]
@@ -287,25 +318,26 @@ def test_sector_subject_alone_never_becomes_direct_company_event(client):
     raw_id = _raw_event(title="Oil price rises 5 percent", raw_type="news")
     with SessionLocal() as db:
         normalized = normalize_raw_event(db, raw_id)
-        db.add(NormalizedEventSubject(
-            normalized_event_id=normalized.id,
-            subject_type="sector",
-            subject_key="Commercial Banks",
-            link_method="factor_sector_mapping",
-            confidence=Decimal("0.7"),
-            is_direct=False,
-        ))
+        db.add(
+            NormalizedEventSubject(
+                normalized_event_id=normalized.id,
+                subject_type="sector",
+                subject_key="Commercial Banks",
+                link_method="factor_sector_mapping",
+                confidence=Decimal("0.7"),
+                is_direct=False,
+            )
+        )
         instrument = db.scalar(select(Instrument).where(Instrument.symbol == "MEBL"))
         db.commit()
         instrument_id = instrument.id
 
-    response = client.get(
-        f"/companies/{instrument_id}/intelligence-events", headers=_auth(client)
-    )
+    response = client.get(f"/companies/{instrument_id}/intelligence-events", headers=_auth(client))
     assert response.status_code == 200
     assert response.json() == []
 
 
+@pytest.mark.usefixtures("database")
 def test_views_keep_low_materiality_company_intelligence_without_flooding_material_feed():
     _seed_market()
     raw_id = _raw_event(title="Appointment of Director", symbol="MEBL")
@@ -323,6 +355,7 @@ def test_views_keep_low_materiality_company_intelligence_without_flooding_materi
         assert [row["event_type"] for row in company_rows] == ["governance"]
 
 
+@pytest.mark.usefixtures("database")
 def test_unresolved_view_is_explicit_and_rebuild_preserves_raw_evidence():
     raw_id = _raw_event(title="Read More")
     with SessionLocal() as db:

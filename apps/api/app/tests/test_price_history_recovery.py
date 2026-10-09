@@ -39,6 +39,7 @@ def test_catalog_first_seen_is_not_an_ipo_date():
     assert history_start(instrument,date(2021,10,1)) == date(2021,10,1)
 
 
+@pytest.mark.usefixtures("database")
 def test_enqueue_is_idempotent_and_public_payload_contains_no_portfolio_context():
     from app.db.session import SessionLocal
     from app.jobs.price_history_recovery import queue_batch
@@ -53,6 +54,7 @@ def test_enqueue_is_idempotent_and_public_payload_contains_no_portfolio_context(
         assert run.input=={'symbol':'TEST','year':2026,'month':9}
 
 
+@pytest.mark.usefixtures("database")
 def test_finished_source_gap_does_not_trap_all_later_batches():
     from app.db.session import SessionLocal
     from app.jobs.price_history_recovery import queue_batch,choose_batch
@@ -69,6 +71,7 @@ def test_finished_source_gap_does_not_trap_all_later_batches():
         assert pending==0 and gaps==1
 
 
+@pytest.mark.usefixtures("database")
 def test_historical_price_dispatch_precedes_other_historical_processing():
     from app.db.session import SessionLocal
     from app.services.pipeline.runs import enqueue,dispatch
@@ -80,6 +83,7 @@ def test_historical_price_dispatch_precedes_other_historical_processing():
         assert published==[(price.id,'history_prices')]
 
 
+@pytest.mark.usefixtures("database")
 def test_price_only_share_does_not_dispatch_document_or_live_market_work():
     from app.db.session import SessionLocal
     from app.services.pipeline.runs import enqueue,dispatch

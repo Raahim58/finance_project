@@ -3,6 +3,7 @@ import json
 from app.ai.company_packet import PACKET_PREFIX, initial_calls, merge_result, model_packet, new_packet, project_turns
 from app.ai.providers.base import ContentBlock, ProviderTurn
 from app.tools.registry import expand_model_data, tool_result
+import pytest
 
 
 def call(name='research.company_sections', **args):
@@ -164,7 +165,7 @@ def test_first_pass_recovery_reuses_saved_plan_and_reservation(monkeypatch):
 def test_actual_loop_has_evidence_before_first_model_call_and_no_summary_call(client, monkeypatch):
     from app.core.config import settings
     monkeypatch.setattr(settings, "assistant_company_digest_enabled", False)
-    from app.tests.test_phase8_phase2_tool_loop import _auth_with_anthropic, _mock_market
+    from app.tests.support.assistant import _auth_with_anthropic, _mock_market
     from app.ai.providers.http_placeholders import AnthropicProvider
     from app.ai.tool_loop import ToolExecution
     from app.core.security import decrypt_secret
@@ -240,9 +241,10 @@ def test_initial_quant_projection_preserves_original_and_followup_can_expand():
     assert packet['sections'][next(iter(packet['sections']))]['data']['covariance'] == raw['covariance']
 
 
+@pytest.mark.usefixtures("database")
 def test_company_cache_is_reusable_but_basis_corrections_invalidate_it():
     from datetime import date
-    from app.tests.test_phase7a_canonical_context import _seed_user_and_market, _company_request
+    from app.tests.support.context import _seed_user_and_market, _company_request
     from app.db.session import SessionLocal
     from app.models.user import User
     from app.models.workstation import FinancialFact
@@ -277,7 +279,7 @@ def test_offline_legacy_and_compact_loop_comparison(client, monkeypatch):
     monkeypatch.setattr(settings, "assistant_company_digest_enabled", False)
     """Same fixture, real adapters, mocked transport; measure no network latency."""
     import time
-    from app.tests.test_phase8_phase2_tool_loop import _auth_with_anthropic, _mock_market
+    from app.tests.support.assistant import _auth_with_anthropic, _mock_market
     from app.ai.providers.http_placeholders import AnthropicProvider, wire_tool_name
     from app.ai.tool_loop import ToolExecution
     from app.core.config import settings

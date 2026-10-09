@@ -1,3 +1,4 @@
+from app.tests.support.portfolios import signup, seeded_portfolio
 from datetime import date
 
 import pytest
@@ -5,24 +6,14 @@ import pytest
 from app.db.session import SessionLocal
 from app.models.market import MarketPrice
 from app.models.workstation import Instrument
-from app.services.market_ingestion import generate_mock_market_data
 from app.services import workstation_service
 from app.services import decision_analytics_service
 
-
-def signup(client, email="workstation@example.com"):
-    token = client.post("/auth/signup", json={"email": email, "password": "password123"}).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+pytestmark = pytest.mark.usefixtures("database")
 
 
-def seeded_portfolio(client, headers):
-    with SessionLocal() as db:
-        generate_mock_market_data(db, days=90, end_date=date(2026, 8, 7))
-    portfolio_id = client.post("/portfolios", headers=headers, json={"name": "Quant"}).json()["id"]
-    for symbol, quantity in [("MEBL", "10"), ("SYS", "5")]:
-        response = client.post(f"/portfolios/{portfolio_id}/holdings", headers=headers, json={"symbol": symbol, "quantity": quantity, "average_cost": "100"})
-        assert response.status_code == 201
-    return portfolio_id
+
+
 
 
 def test_aligned_market_inputs_are_reused_across_analytics_endpoints(client, monkeypatch):
@@ -337,7 +328,7 @@ def test_sml_contract_uses_decimal_scale_and_reconciles_to_capm_formula(client, 
 
 
 def test_risk_free_resolves_canonical_tbill_series_without_metadata_flag(monkeypatch):
-    from datetime import UTC, date, datetime
+    from datetime import UTC, datetime
     from decimal import Decimal
     from app.core.config import settings
     from app.db.session import SessionLocal

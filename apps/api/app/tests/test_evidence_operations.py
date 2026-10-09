@@ -22,31 +22,50 @@ from app.services.evidence_scheduler_service import (
     create_deep_historical_requests,
     run_evidence_scheduler_once,
 )
+from app.tests.support.users import signup_user as _auth
 
 
 NOW = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
 
 
+@pytest.mark.usefixtures("database")
 def test_disabled_publisher_backlog_does_not_block_or_get_scheduled(monkeypatch, tmp_path):
-    monkeypatch.setattr(settings, 'evidence_source_allowlist', 'dawn')
-    monkeypatch.setattr(settings, 'evidence_fetch_queue_target', 1)
-    monkeypatch.setattr(settings, 'evidence_spool_root', str(tmp_path))
+    monkeypatch.setattr(settings, "evidence_source_allowlist", "dawn")
+    monkeypatch.setattr(settings, "evidence_fetch_queue_target", 1)
+    monkeypatch.setattr(settings, "evidence_spool_root", str(tmp_path))
     published = []
     from app.jobs import evidence_tasks
-    for task in (evidence_tasks.discover, evidence_tasks.fetch, evidence_tasks.parse,
-                 evidence_tasks.pdf, evidence_tasks.index, evidence_tasks.historical_hydrate,
-                 evidence_tasks.targeted_refresh):
-        monkeypatch.setattr(task, 'apply_async', lambda **kwargs: published.append(kwargs))
+
+    for task in (
+        evidence_tasks.discover,
+        evidence_tasks.fetch,
+        evidence_tasks.parse,
+        evidence_tasks.pdf,
+        evidence_tasks.index,
+        evidence_tasks.historical_hydrate,
+        evidence_tasks.targeted_refresh,
+    ):
+        monkeypatch.setattr(task, "apply_async", lambda **kwargs: published.append(kwargs))
     with SessionLocal() as db:
-        _, config, _ = ensure_source_config(db, 'mof_pakistan')
+        _, config, _ = ensure_source_config(db, "mof_pakistan")
         for i in range(3):
-            persist_candidate(db, config, Candidate('mof_pakistan', f'https://www.finance.gov.pk/{i}',
-                'Fiscal budget', 'MOF', datetime.now(UTC), 'listing'))
+            persist_candidate(
+                db,
+                config,
+                Candidate(
+                    "mof_pakistan",
+                    f"https://www.finance.gov.pk/{i}",
+                    "Fiscal budget",
+                    "MOF",
+                    datetime.now(UTC),
+                    "listing",
+                ),
+            )
         db.commit()
         result = run_evidence_scheduler_once(db)
         assert result.discovery_queued == 1
         assert result.fetch_queued == 0
-        assert published[0]['args'][0] == 'dawn'
+        assert published[0]["args"][0] == "dawn"
 
 
 class StagedDawnSource:
@@ -69,7 +88,7 @@ class StagedDawnSource:
         return DiscoveryBatch((candidate,)[:limit], {"last_id": candidate.external_id})
 
     def fetch(self, candidate):
-        html = b'''<html><script type="application/ld+json">{"@type":"NewsArticle","headline":"MEBL outlook amid Pakistan inflation and SBP policy rates","datePublished":"2026-08-14T10:00:00Z","articleBody":"Meezan Bank Limited and MEBL are assessing Pakistan inflation and the SBP policy rate outlook."}</script></html>'''
+        html = b"""<html><script type="application/ld+json">{"@type":"NewsArticle","headline":"MEBL outlook amid Pakistan inflation and SBP policy rates","datePublished":"2026-08-14T10:00:00Z","articleBody":"Meezan Bank Limited and MEBL are assessing Pakistan inflation and the SBP policy rate outlook."}</script></html>"""
         return RawContent(candidate, html, "text/html", NOW, candidate.observed_url)
 
     def normalize(self, raw):
@@ -78,6 +97,7 @@ class StagedDawnSource:
         return extract_article(raw)
 
 
+@pytest.mark.usefixtures("database")
 def test_staged_pipeline_spools_then_indexes_selected_evidence(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "source_artifact_root", str(tmp_path / "artifacts"))
     spool = EvidenceSpool(tmp_path)
@@ -112,6 +132,7 @@ class BrokenDawnSource(StagedDawnSource):
         raise RuntimeError("fixture source unavailable")
 
 
+@pytest.mark.usefixtures("database")
 def test_source_circuit_opens_after_configured_failures(monkeypatch):
     monkeypatch.setattr(settings, "evidence_circuit_failure_threshold", 2)
     with SessionLocal() as db:
@@ -125,6 +146,7 @@ def test_source_circuit_opens_after_configured_failures(monkeypatch):
         assert diagnostics["circuit_open_until"] is not None
 
 
+@pytest.mark.usefixtures("database")
 def test_scheduler_reconstructs_live_before_historical_from_postgres(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "source_artifact_root", str(tmp_path / "artifacts"))
     monkeypatch.setattr(settings, "evidence_fetch_queue_target", 10)
@@ -175,6 +197,7 @@ def test_scheduler_reconstructs_live_before_historical_from_postgres(tmp_path, m
         assert all(db.get(DiscoveryCandidate, row.id).lease_expires_at for row in candidates)
 
 
+@pytest.mark.usefixtures("database")
 def test_deferred_fetch_backlog_does_not_suppress_due_discovery(monkeypatch):
     """Tomorrow's budget-deferred work must not make today's scheduler idle."""
 
@@ -223,11 +246,6 @@ def test_deferred_fetch_backlog_does_not_suppress_due_discovery(monkeypatch):
         assert any(queue == "evidence_discovery" for _, queue, _ in published)
 
 
-def _auth(client, email):
-    token = client.post(
-        "/auth/signup", json={"email": email, "password": "password123"}
-    ).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
 
 
 def test_targeted_refresh_request_is_bounded_owned_and_reconstructable(client, monkeypatch):
@@ -258,6 +276,7 @@ def test_targeted_refresh_request_is_bounded_owned_and_reconstructable(client, m
         assert "Habib Bank Limited" in row.query_text
 
 
+@pytest.mark.usefixtures("database")
 def test_old_nonterminal_candidate_expires_before_scheduler_dispatch(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "source_artifact_root", str(tmp_path / "artifacts"))
     monkeypatch.setattr(settings, "evidence_candidate_retention_days", 1)
@@ -289,6 +308,7 @@ def test_old_nonterminal_candidate_expires_before_scheduler_dispatch(tmp_path, m
         assert published == []
 
 
+@pytest.mark.usefixtures("database")
 def test_deep_company_historical_request_is_bounded_and_idempotent():
     with SessionLocal() as db:
         instrument = Instrument(

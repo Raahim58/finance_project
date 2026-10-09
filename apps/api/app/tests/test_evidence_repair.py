@@ -10,6 +10,9 @@ from app.services.evidence_repair_service import (
     repair_pass4_relative_rss_urls,
     repair_psx_role_slot_collisions,
 )
+import pytest
+
+pytestmark = pytest.mark.usefixtures("database")
 
 
 def test_psx_role_slot_repair_is_narrow_and_requeues_for_refetch():

@@ -7,8 +7,10 @@ from app.db.session import SessionLocal
 from app.jobs import scheduler
 from app.models.market import Company, MarketIngestionRun, MarketPrice, MarketSnapshot, SectorDailyStats
 from app.services.market_ingestion import generate_mock_market_data, run_market_data_cycle
+import pytest
 
 
+@pytest.mark.usefixtures("database")
 def test_generate_mock_market_data_creates_companies_prices_and_stats():
     with SessionLocal() as db:
         result = generate_mock_market_data(db, days=5, end_date=date(2026, 6, 30))
@@ -28,6 +30,7 @@ def test_generate_mock_market_data_creates_companies_prices_and_stats():
     assert latest_date == date(2026, 6, 30)
 
 
+@pytest.mark.usefixtures("database")
 def test_scheduler_cycle_records_successful_ingestion_run():
     with SessionLocal() as db:
         run = run_market_data_cycle(db, mode="mock")
@@ -41,6 +44,7 @@ def test_scheduler_cycle_records_successful_ingestion_run():
     assert snapshot_count > 0
 
 
+@pytest.mark.usefixtures("database")
 def test_run_market_data_cycle_records_actual_provider_used(monkeypatch):
     class FakeProvider:
         mode = "auto"
@@ -70,6 +74,7 @@ def test_run_market_data_cycle_records_actual_provider_used(monkeypatch):
     assert stored.rejected_count == 0
 
 
+@pytest.mark.usefixtures("database")
 def test_run_market_data_cycle_marks_explicit_dps_coverage_gap_partial(monkeypatch):
     class FakeProvider:
         mode = "dps"
@@ -97,6 +102,7 @@ def test_run_market_data_cycle_marks_explicit_dps_coverage_gap_partial(monkeypat
     assert (run.attempted_count, run.accepted_count, run.rejected_count) == (3, 2, 1)
 
 
+@pytest.mark.usefixtures("database")
 def test_scheduler_run_once_prints_attempted_and_used_provider(monkeypatch, capsys):
     monkeypatch.setattr(
         scheduler,
@@ -117,6 +123,7 @@ def test_scheduler_run_once_prints_attempted_and_used_provider(monkeypatch, caps
     assert "used_provider=yahoo" in output
 
 
+@pytest.mark.usefixtures("database")
 def test_scheduler_succeeds_when_yahoo_fetches_at_least_one_symbol(monkeypatch):
     class FakeYahooProvider:
         mode = "yahoo"

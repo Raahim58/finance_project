@@ -19,6 +19,7 @@ from app.services.market_providers import (
     YahooFinanceMarketDataProvider,
     get_market_data_provider,
 )
+import pytest
 
 
 def test_market_provider_factory_returns_expected_provider_types():
@@ -43,6 +44,7 @@ def test_yahoo_symbol_mapping():
     assert YahooFinanceMarketDataProvider.resolve_yahoo_symbol("ENGRO") == "ENGRO.KA"
 
 
+@pytest.mark.usefixtures("database")
 def test_auto_provider_falls_back_to_yahoo_if_dps_fails(monkeypatch):
     monkeypatch.setattr(
         DpsMarketDataProvider,
@@ -149,6 +151,7 @@ def test_dps_history_uses_prior_session_before_requested_window(monkeypatch):
     assert rows[0].previous_close == Decimal("587.93")
 
 
+@pytest.mark.usefixtures("database")
 def test_dps_refresh_reports_missing_ordinary_symbols_as_partial(tmp_path, monkeypatch):
     from app.core.config import settings
 
@@ -255,6 +258,7 @@ def test_yahoo_provider_requires_observed_or_explicit_symbols(monkeypatch):
     assert seen_symbols == ["ENGRO.KA", "SYS.KA"]
 
 
+@pytest.mark.usefixtures("database")
 def test_yahoo_provider_skips_invalid_symbols_without_inserting_zero_rows(monkeypatch):
     provider = YahooFinanceMarketDataProvider()
 

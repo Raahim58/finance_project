@@ -8,6 +8,7 @@ from app.db.session import SessionLocal
 from app.models.market import MarketIngestionRun, MarketPrice
 from app.services.market_service import serialize_price
 from app.services.market_ingestion import generate_mock_market_data
+import pytest
 
 
 def _seed_market_data():
@@ -106,6 +107,7 @@ def test_market_freshness_shows_provider_and_backup_warning(client):
     assert body["backup_warning"]
 
 
+@pytest.mark.usefixtures("database")
 def test_serialize_price_handles_nan_market_cap():
     with SessionLocal() as db:
         generate_mock_market_data(db, days=1, end_date=date(2026, 6, 30))

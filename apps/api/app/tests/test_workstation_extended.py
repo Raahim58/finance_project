@@ -9,11 +9,14 @@ from app.models.market import MarketPrice
 from app.models.workstation import AllocationSet, FinancialFact, Instrument, InvestorFinancialProfileVersion, MacroObservation, MonitoringRule, MonitoringRun, OptimizerRun, PortfolioIPSVersion, Recommendation, ScenarioRun
 from app.seed.demo import seed_workstation
 from app.services.market_ingestion import generate_mock_market_data
+import pytest
+from app.tests.support.users import signup_user
+
+pytestmark = pytest.mark.usefixtures("database")
 
 
 def auth(client, email="extended@example.com"):
-    token = client.post("/auth/signup", json={"email": email, "password": "password123"}).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+    return signup_user(client, email)
 
 
 def portfolio(client, headers):

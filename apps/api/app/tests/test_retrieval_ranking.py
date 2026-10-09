@@ -10,8 +10,9 @@ from app.domain.retrieval import (
     reciprocal_rank_fusion,
 )
 from app.models.document import Document, DocumentChunk
-from app.services.market_ingestion import generate_mock_market_data
 from app.services.rag_service import ParsedPage, chunk_page_text, create_document_from_pages
+import pytest
+from app.tests.support.market import _seed_companies
 
 
 def _auth_headers(client):
@@ -23,9 +24,6 @@ def _auth_headers(client):
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
-def _seed_companies():
-    with SessionLocal() as db:
-        generate_mock_market_data(db, days=2, end_date=date(2026, 6, 30))
 
 
 def _public_document(
@@ -99,7 +97,9 @@ def test_structure_aware_chunking_keeps_heading_with_body():
 
 def test_table_and_boilerplate_content_are_classified():
     assert classify_chunk_content("Revenue 100 200 300 400 500 600") == "table"
-    assert classify_chunk_content("TABLE OF CONTENTS\nCorporate profile\nGovernance") == "boilerplate"
+    assert (
+        classify_chunk_content("TABLE OF CONTENTS\nCorporate profile\nGovernance") == "boilerplate"
+    )
     assert classify_chunk_content("Management discussed demand and margins.") == "narrative"
 
 
@@ -215,6 +215,7 @@ def test_synthetic_documents_are_excluded_and_audit_is_returned(client):
     assert response.json()["audit"]["embedding_model"] == "token-hash-v1-test-only"
 
 
+@pytest.mark.usefixtures("database")
 def test_source_tier_and_chunk_metadata_are_persisted():
     _seed_companies()
     document_id = _public_document(

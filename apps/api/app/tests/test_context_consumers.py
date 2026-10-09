@@ -11,13 +11,9 @@ from app.models.intelligence_context import (
 from app.models.user import User
 from app.models.workstation import Instrument, StandardizedFinancialFact
 from app.services.market_ingestion import generate_mock_market_data
-from app.services.context_refresh_service import reconcile_pending_contexts
+from app.tests.support.users import signup_user as _auth
 
 
-def _auth(client, email: str):
-    response = client.post("/auth/signup", json={"email": email, "password": "password123"})
-    assert response.status_code == 201
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
 def _instrument_and_fact() -> str:
@@ -70,23 +66,37 @@ def _portfolio(client, headers, name: str, *, confirm_ips: bool = True) -> str:
     return portfolio_id
 
 
-def test_display_only_company_read_loads_facts_without_risk_or_rag_and_checks_ownership(client, monkeypatch):
+def test_display_only_company_read_loads_facts_without_risk_or_rag_and_checks_ownership(
+    client, monkeypatch
+):
     from app.services.context_builder import ContextBuilder
+
     headers = _auth(client, "company-display-owner@example.com")
     other = _auth(client, "company-display-other@example.com")
     instrument_id = _instrument_and_fact()
+
     def forbidden(*args, **kwargs):
         raise AssertionError("Display read must not calculate analytical sections")
+
     monkeypatch.setattr(ContextBuilder, "_market_risk", forbidden)
     monkeypatch.setattr(ContextBuilder, "_sector", forbidden)
     response = client.get(f"/companies/{instrument_id}/overview?display_only=true", headers=headers)
     assert response.status_code == 200
     assert set(response.json()["context"]["sections"]) == {"company_facts"}
     portfolio_id = _portfolio(client, headers, "Display portfolio")
-    scoped = client.get(f"/companies/{instrument_id}/overview?display_only=true&portfolio_id={portfolio_id}", headers=headers)
+    scoped = client.get(
+        f"/companies/{instrument_id}/overview?display_only=true&portfolio_id={portfolio_id}",
+        headers=headers,
+    )
     assert scoped.status_code == 200
     assert set(scoped.json()["context"]["sections"]) == {"company_facts", "portfolio", "ips"}
-    assert client.get(f"/companies/{instrument_id}/overview?display_only=true&portfolio_id={portfolio_id}", headers=other).status_code == 404
+    assert (
+        client.get(
+            f"/companies/{instrument_id}/overview?display_only=true&portfolio_id={portfolio_id}",
+            headers=other,
+        ).status_code
+        == 404
+    )
 
 
 def test_company_research_uses_company_only_contract_without_persisting_receipts(client):
@@ -111,7 +121,9 @@ def test_company_view_active_flag_never_schedules_ingestion(client):
     headers = _auth(client, "phase7b-inactive@example.com")
     instrument_id = _instrument_and_fact()
     for active in ("true", "false"):
-        body = client.get(f"/companies/{instrument_id}/overview?active={active}", headers=headers).json()
+        body = client.get(
+            f"/companies/{instrument_id}/overview?active={active}", headers=headers
+        ).json()
         assert body["refresh_request_id"] is None
     with SessionLocal() as db:
         assert not list(db.scalars(select(ContextRefreshRequest)))
@@ -123,12 +135,18 @@ def test_company_view_reads_changed_authoritative_facts_without_refresh_jobs(cli
     instrument_id = _instrument_and_fact()
     initial = client.get(f"/companies/{instrument_id}/overview", headers=headers).json()
     with SessionLocal() as db:
-        fact = db.scalar(select(StandardizedFinancialFact).where(StandardizedFinancialFact.instrument_id == instrument_id))
+        fact = db.scalar(
+            select(StandardizedFinancialFact).where(
+                StandardizedFinancialFact.instrument_id == instrument_id
+            )
+        )
         fact.value = 125
         db.commit()
     refreshed = client.get(f"/companies/{instrument_id}/overview", headers=headers).json()
     assert refreshed["context"]["scope"] == "company_intelligence"
-    assert refreshed["context_receipt"]["content_hash"] != initial["context_receipt"]["content_hash"]
+    assert (
+        refreshed["context_receipt"]["content_hash"] != initial["context_receipt"]["content_hash"]
+    )
     assert refreshed["refresh_request_id"] is None
 
 

@@ -347,6 +347,7 @@ def test_model_typed_portfolio_id_is_replaced_by_the_selected_one():
     assert 'portfolio_id' not in other.arguments
 
 
+@pytest.mark.usefixtures("database")
 def test_universe_screen_ranks_by_score_screenable_only_and_excludes_held():
     import uuid
     from datetime import date

@@ -82,6 +82,7 @@ def test_candidate_state_machine_allows_retry_but_protects_terminal_states():
         validate_candidate_transition("discovered", "selected")
 
 
+@pytest.mark.usefixtures("database")
 def test_evidence_models_persist_source_state_candidate_and_cluster_links():
     with SessionLocal() as db:
         data_source = DataSource(

@@ -1,6 +1,8 @@
-from datetime import UTC,datetime,timedelta
 from app.db.session import SessionLocal
 from app.services.pipeline import runs
+import pytest
+
+pytestmark = pytest.mark.usefixtures("database")
 
 def test_news_and_commentary_dispatch_before_old_report_backlog():
     with SessionLocal() as db:

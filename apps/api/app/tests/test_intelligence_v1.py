@@ -4,7 +4,6 @@ from pathlib import Path
 from app.db.session import SessionLocal
 from app.models.portfolio import PortfolioHolding, PortfolioTransaction
 from app.models.workstation import AllocationSet
-from app.models.workstation import Instrument
 from app.services.market_ingestion import generate_mock_market_data
 
 

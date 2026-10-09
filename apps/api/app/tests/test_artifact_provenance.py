@@ -4,6 +4,9 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.workstation import SourceArtifact
 from app.services.ingestion_persistence import source, store_artifact
+import pytest
+
+pytestmark = pytest.mark.usefixtures("database")
 
 
 def test_identical_bytes_keep_source_and_request_provenance(tmp_path, monkeypatch):

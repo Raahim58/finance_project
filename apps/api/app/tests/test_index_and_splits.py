@@ -1,3 +1,4 @@
+from app.tests.support.market import seed_split
 import json
 from datetime import date
 from decimal import Decimal
@@ -8,10 +9,10 @@ from app.db.session import SessionLocal
 from app.ingestion.artifact_store import LocalArtifactStore
 from app.models.workstation import Instrument,MarketObservation,CorporateAction,SourceArtifact
 from app.services.index_ingestion import import_index_month
-from app.services.market_ingestion import persist_market_data
-from app.services.market_providers import LatestPriceRow
 from app.services.canonical_market_service import price_series,latest_price
 from app.services.split_adjustments import split_adjusted_price_series
+
+pytestmark = pytest.mark.usefixtures("database")
 
 HTML='<table id="historicalTable"><tr><th>DATE</th><th>OPEN</th><th>HIGH</th><th>LOW</th><th>CLOSE</th><th>VOLUME</th></tr><tr><td>Sep 01, 2026</td><td>100</td><td>102</td><td>99</td><td>101</td><td>10</td></tr><tr><td>Sep 02, 2026</td><td>101</td><td>104</td><td>100</td><td>103</td><td>20</td></tr></table>'
 
@@ -57,13 +58,6 @@ def test_index_month_deduplicates_exact_rows_but_rejects_conflicting_duplicates(
                 Client(HTML.replace('</table>',conflicting+'</table>')),LocalArtifactStore(tmp_path))
 
 
-def seed_split(db):
-    for day,close in [(date(2026,1,1),'500'),(date(2026,1,2),'102'),(date(2026,1,5),'104')]:
-        persist_market_data(db,latest_prices=[LatestPriceRow(symbol='TEST',trade_date=day,close=Decimal(close),previous_close=Decimal(close),open=Decimal(close),high=Decimal(close),low=Decimal(close),volume=10,name='Synthetic split test',sector='Test',source_url='https://example.com/fixture')],source='dps')
-    instrument=db.scalar(select(Instrument).where(Instrument.symbol=='TEST'))
-    artifact=db.scalar(select(SourceArtifact))
-    action=CorporateAction(instrument_id=instrument.id,action_type='stock_split',effective_date=date(2026,1,2),artifact_id=artifact.id,details_json=json.dumps({'old_shares':'1','new_shares':'5','verification':'source_reviewed'}))
-    db.add(action);db.flush();return action
 
 
 def test_split_view_removes_mechanical_jump_without_mutating_raw_prices():
@@ -127,7 +121,7 @@ def test_market_overview_uses_index_closes_and_excludes_index_volume(tmp_path, m
         rows=[SimpleNamespace(symbol='AAA',volume=7,value=Decimal(70)),
               SimpleNamespace(symbol='KSE100',volume=9000,value=Decimal(90000)),
               SimpleNamespace(symbol='KSE100PR',volume=9000,value=Decimal(90000))]
-        monkeypatch.setattr(market_service,'canonical_prices_for_date',lambda *_:rows)
+        monkeypatch.setattr(market_service,'canonical_prices_for_date',lambda *_, **kwargs:rows)
         snapshot=market_service.get_market_snapshot(db,date(2026,9,2))
         assert snapshot.index_value==Decimal(103)
         assert snapshot.index_change==Decimal(2)

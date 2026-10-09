@@ -15,6 +15,7 @@ from app.services.market_ingestion import persist_market_data
 from app.services.market_providers import LatestPriceRow
 from app.services.market_service import get_market_freshness, get_latest_market_date
 from app.services.market_session import resolve_session
+import pytest
 
 
 def daily(db, day, count=10):
@@ -67,6 +68,7 @@ def test_broad_intraday_session_is_eligible_and_sectors_match(monkeypatch, clien
     assert body["sectors"][0]["advancers"] == 9
 
 
+@pytest.mark.usefixtures("database")
 def test_tiny_new_daily_batch_does_not_hide_previous_coverage(monkeypatch):
     monkeypatch.setattr(settings, "market_data_mode", "auto")
     with SessionLocal() as db:
@@ -75,6 +77,7 @@ def test_tiny_new_daily_batch_does_not_hide_previous_coverage(monkeypatch):
         assert get_latest_market_date(db) == date(2026, 10, 2)
 
 
+@pytest.mark.usefixtures("database")
 def test_full_official_snapshot_is_available_early_in_session(monkeypatch):
     from app.models.workstation import DataSource
     monkeypatch.setattr(settings, "market_data_mode", "auto")
@@ -93,6 +96,7 @@ def test_full_official_snapshot_is_available_early_in_session(monkeypatch):
         assert resolve_session(db).securities == 2  # No claim of complete-universe coverage.
 
 
+@pytest.mark.usefixtures("database")
 def test_new_daily_close_wins_over_older_intraday_snapshot(monkeypatch):
     monkeypatch.setattr(settings, "market_data_mode", "auto")
     with SessionLocal() as db:
@@ -117,6 +121,7 @@ def test_untraded_published_quote_preserves_zero_ohlc():
     assert rows[0]["open"] == "0" and rows[0]["close"] == "100"
 
 
+@pytest.mark.usefixtures("database")
 def test_canonical_freshness_does_not_use_old_legacy_ingestion_run(monkeypatch):
     monkeypatch.setattr(settings, "market_data_mode", "auto")
     day = (datetime.now(UTC) - timedelta(days=7)).date()
@@ -132,6 +137,7 @@ def test_canonical_freshness_does_not_use_old_legacy_ingestion_run(monkeypatch):
         assert fresh.is_stale and fresh.trade_date_status == "stale"
 
 
+@pytest.mark.usefixtures("database")
 def test_daily_lane_uses_pipeline_scheduler_and_numeric_queue(monkeypatch):
     from app.jobs.pipeline_tasks import QUEUES, perform, DeferredStage
     from app.jobs.pipeline_scheduler import schedule_sources
@@ -155,6 +161,7 @@ def test_daily_lane_uses_pipeline_scheduler_and_numeric_queue(monkeypatch):
         with pytest.raises(DeferredStage): perform(db, run)
 
 
+@pytest.mark.usefixtures("database")
 def test_misclassified_primary_financial_labels_are_excluded_not_deleted():
     with SessionLocal() as db:
         instrument = Instrument(symbol="FFC", name="Fauji Fertilizer", sector="Fertilizer")

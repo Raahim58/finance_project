@@ -7,7 +7,7 @@ from sqlalchemy import func,select
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.document import Document,DocumentChunk
-from app.models.pipeline import IngestionStageRun,SourceTarget,DocumentSection,EvidenceStatement,CompanyIntelligenceSection,IntelligenceDependency,StatementEvidence
+from app.models.pipeline import IngestionStageRun,SourceTarget,DocumentSection,EvidenceStatement,CompanyIntelligenceSection,StatementEvidence
 from app.models.workstation import Instrument,ExchangeCalendarDay,FinancialFact
 from app.services.pipeline import runs
 from app.services.pipeline.parsing import sections
@@ -27,6 +27,7 @@ def seed(db, *, kind='announcement',body=None):
     return inst,doc
 
 
+@pytest.mark.usefixtures("database")
 def test_duplicate_enqueue_single_claim_and_stale_completion():
     with SessionLocal() as db:
         first=runs.enqueue(db,'sections','doc:1',{'document_id':'one'})
@@ -41,6 +42,7 @@ def test_duplicate_enqueue_single_claim_and_stale_completion():
         assert runs.claim(db,first.id) is None
 
 
+@pytest.mark.usefixtures("database")
 def test_worker_loss_recovered_and_old_fencing_token_rejected():
     with SessionLocal() as db:
         row=runs.enqueue(db,'sections','doc:1',{'document_id':'one'});db.commit()
@@ -51,6 +53,7 @@ def test_worker_loss_recovered_and_old_fencing_token_rejected():
         db.rollback();runs.finish(db,row.id,fresh,{})
 
 
+@pytest.mark.usefixtures("database")
 def test_queue_publish_loss_recovers_without_duplicate_work():
     with SessionLocal() as db:
         row=runs.enqueue(db,'sections','doc:1',{'document_id':'one'});db.commit()
@@ -63,6 +66,7 @@ def test_queue_publish_loss_recovers_without_duplicate_work():
         assert sent[0][0]==row.id
 
 
+@pytest.mark.usefixtures("database")
 def test_dispatch_reserves_history_capacity():
     with SessionLocal() as db:
         for i in range(20): runs.enqueue(db,'sections',str(i),{'document_id':str(i)})
@@ -71,6 +75,7 @@ def test_dispatch_reserves_history_capacity():
         assert sum(mode=='historical' for _,_,mode in sent)==2
 
 
+@pytest.mark.usefixtures("database")
 def test_sections_linking_and_statement_replay_preserve_quotes():
     with SessionLocal() as db:
         inst,doc=seed(db);first=sections(db,doc.id);assert sections(db,doc.id)[0].id==first[0].id
@@ -93,6 +98,7 @@ def test_classification_preserves_uncertainty(quote,kind,lifecycle):
     assert labels(quote,official=True)[::2]==(kind,lifecycle)
 
 
+@pytest.mark.usefixtures("database")
 def test_model_cannot_promote_guidance_or_invent_quotes():
     with SessionLocal() as db:
         inst,doc=seed(db);parts=sections(db,doc.id);section=parts[0]
@@ -102,6 +108,7 @@ def test_model_cannot_promote_guidance_or_invent_quotes():
         with pytest.raises(ValueError,match='quote_not_in_source'): validate_candidate(candidate,{section.id:section},{'LUCK'},official=True)
 
 
+@pytest.mark.usefixtures("database")
 def test_one_invalid_model_candidate_writes_nothing():
     with SessionLocal() as db:
         _,doc=seed(db);part=sections(db,doc.id)[0];link(db,doc.id)
@@ -111,6 +118,7 @@ def test_one_invalid_model_candidate_writes_nothing():
         assert db.scalar(select(func.count()).select_from(EvidenceStatement))==0
 
 
+@pytest.mark.usefixtures("database")
 def test_intelligence_unchanged_reused_exact_values_and_withdrawal():
     with SessionLocal() as db:
         inst,doc=seed(db);sections(db,doc.id);link(db,doc.id);extract(db,doc.id)
@@ -126,6 +134,7 @@ def test_intelligence_unchanged_reused_exact_values_and_withdrawal():
         assert not next(s for s in read(db,inst.id) if s['section']=='financial_performance')['content']['evidence']
 
 
+@pytest.mark.usefixtures("database")
 @pytest.mark.parametrize('value,expected',[
     ('2026-10-06T09:31:00+05:00',False),('2026-10-06T09:32:00+05:00',True),
     ('2026-10-06T15:30:00+05:00',False),('2026-10-09T11:00:00+05:00',True),
@@ -137,6 +146,7 @@ def test_only_regular_session_price_polling(value,expected):
     with SessionLocal() as db: assert bool(price_bucket(db,datetime.fromisoformat(value))[0])==expected
 
 
+@pytest.mark.usefixtures("database")
 def test_calendar_override_holiday_and_friday_break():
     with SessionLocal() as db:
         db.add(ExchangeCalendarDay(exchange_code='PSX',session_date=date(2026,10,6),is_session=False,status='observed'));db.flush()
@@ -145,6 +155,7 @@ def test_calendar_override_holiday_and_friday_break():
         assert price_bucket(db,datetime.fromisoformat('2026-10-09T14:40:00+05:00'))[0] is None
 
 
+@pytest.mark.usefixtures("database")
 def test_requested_news_and_announcement_slots():
     with SessionLocal() as db:
         for hour in (10,14,21):
@@ -153,6 +164,7 @@ def test_requested_news_and_announcement_slots():
         assert datetime.fromisoformat(scheduled_bucket('announcements',now,db)).hour==18
 
 
+@pytest.mark.usefixtures("database")
 def test_unembedded_history_is_lexically_searchable_and_revoked_is_not():
     with SessionLocal() as db:
         _,doc=seed(db,kind='news',body='Lucky Cement Limited capacity expansion and dividend announcement. '*10)
@@ -165,6 +177,7 @@ def test_unembedded_history_is_lexically_searchable_and_revoked_is_not():
         assert not search_rag(db,None,RagSearchRequest(query='LUCK capacity dividend',symbols=['LUCK'])).chunks
 
 
+@pytest.mark.usefixtures("database")
 def test_entity_alias_does_not_crosslink_ambiguous_name():
     from app.models.workstation import InstrumentAlias
     with SessionLocal() as db:
@@ -195,6 +208,7 @@ def test_free_router_fails_closed_on_price_and_schema():
     with pytest.raises(ValueError): request_payload('paid/default',[],[])
 
 
+@pytest.mark.usefixtures("database")
 def test_capacity_missing_volume_defers_without_deleting(tmp_path,monkeypatch):
     from app.services.pipeline.retention import capacity
     with SessionLocal() as db:
@@ -204,6 +218,7 @@ def test_capacity_missing_volume_defers_without_deleting(tmp_path,monkeypatch):
         assert db.scalar(select(func.count()).select_from(Document))==0
 
 
+@pytest.mark.usefixtures("database")
 def test_continuous_history_ignores_daily_quotas_but_live_stays_bounded(monkeypatch):
     from app.services.pipeline.retention import daily_allowance
     now = datetime.now(UTC)
@@ -223,6 +238,7 @@ def test_continuous_history_ignores_daily_quotas_but_live_stays_bounded(monkeypa
         assert not daily_allowance(db, SimpleNamespace(mode='live'), now=now)
 
 
+@pytest.mark.usefixtures("database")
 def test_document_worker_chain_is_replayable_without_models(monkeypatch):
     from app.jobs.pipeline_tasks import execute
     monkeypatch.setattr(settings,'pipeline_enabled',True)
@@ -241,6 +257,7 @@ def test_document_worker_chain_is_replayable_without_models(monkeypatch):
         assert not db.scalar(select(IngestionStageRun.id).where(IngestionStageRun.status.in_(('queued','running','dead_letter'))))
 
 
+@pytest.mark.usefixtures("database")
 def test_scheduler_slot_commits_once_and_never_publishes_prices_at_night():
     from app.jobs.pipeline_scheduler import schedule_sources
     from app.services.ingestion_persistence import source
@@ -332,6 +349,7 @@ def test_strict_financial_extraction_preserves_basis_duration_and_scale():
     assert explicit_report_period([FinancialPage(1,'Annual report FY2026')],'LUCK annual report 2026') is None
 
 
+@pytest.mark.usefixtures("database")
 def test_new_statement_events_reach_existing_company_consumers():
     from app.services.pipeline.events import build
     from app.services.research_intelligence_service import company_event_page, event_views
@@ -350,6 +368,7 @@ def test_new_statement_events_reach_existing_company_consumers():
         NormalizedEventResponse.model_validate(rows[0])
 
 
+@pytest.mark.usefixtures("database")
 def test_html_citations_have_offsets_and_no_fabricated_pages():
     from app.models.document import Citation
     with SessionLocal() as db:
@@ -359,10 +378,10 @@ def test_html_citations_have_offsets_and_no_fabricated_pages():
         assert sections(db,doc.id)[0].page_number is None
 
 
+@pytest.mark.usefixtures("database")
 def test_source_revisions_requeue_without_losing_previous_artifact(monkeypatch):
     from app.ingestion.evidence import Candidate
     from app.services.evidence_pipeline import ensure_source_config,persist_candidate
-    from app.models.evidence import DiscoveryCandidate
     monkeypatch.setattr(settings,'pipeline_enabled',True)
     with SessionLocal() as db:
         _,config,_=ensure_source_config(db,'mettis')
@@ -399,6 +418,7 @@ def test_scstrade_issuer_sessions_are_isolated():
     assert seen==['LUCK']*3+['FFC']*3
 
 
+@pytest.mark.usefixtures("database")
 def test_fx_delta_is_exact_quote_change_and_stale_cpi_is_labelled():
     from app.services.ingestion_persistence import source,store_artifact
     from app.models.workstation import MacroSeries,MacroObservation

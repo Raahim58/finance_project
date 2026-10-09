@@ -4,15 +4,9 @@ from decimal import Decimal
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.services.market_ingestion import generate_mock_market_data
+from app.tests.support.users import signup_user as _signup
 
 
-def _signup(client, email: str) -> dict[str, str]:
-    response = client.post(
-        "/auth/signup",
-        json={"email": email, "password": "password123"},
-    )
-    assert response.status_code == 201
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
 def _seed_market_data() -> None:

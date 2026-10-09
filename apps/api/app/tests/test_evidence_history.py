@@ -22,23 +22,34 @@ from app.services.evidence_scheduler_service import _historical_request_order_ke
 NOW = datetime(2026, 8, 15, 10, 0, tzinfo=UTC)
 
 
+@pytest.mark.usefixtures("database")
 def test_disabled_source_backlog_does_not_block_selected_history(monkeypatch):
     monkeypatch.setattr(settings, "evidence_source_allowlist", "gcaptain")
     with SessionLocal() as db:
         _, config, _ = ensure_source_config(db, "dawn")
-        persist_candidate(db, config, Candidate("dawn", "https://www.dawn.com/news/disabled",
-                          "Policy rate", "Dawn", NOW, "rss_atom"))
+        persist_candidate(
+            db,
+            config,
+            Candidate(
+                "dawn", "https://www.dawn.com/news/disabled", "Policy rate", "Dawn", NOW, "rss_atom"
+            ),
+        )
         db.commit()
         assert live_evidence_pressure(db) == 0
         monkeypatch.setattr(settings, "evidence_source_allowlist", "dawn,gcaptain")
         assert live_evidence_pressure(db) == 1
 
 
+@pytest.mark.usefixtures("database")
 def test_archive_source_selection_is_part_of_request_identity():
     with SessionLocal() as db:
         all_sources = create_historical_request(db, preset_key="global_shipping_90d")
-        freight = create_historical_request(db, preset_key="global_shipping_90d", source_keys=("freightwaves",))
-        repeat = create_historical_request(db, preset_key="global_shipping_90d", source_keys=("freightwaves",))
+        freight = create_historical_request(
+            db, preset_key="global_shipping_90d", source_keys=("freightwaves",)
+        )
+        repeat = create_historical_request(
+            db, preset_key="global_shipping_90d", source_keys=("freightwaves",)
+        )
         assert all_sources.id != freight.id
         assert freight.id == repeat.id
         assert json.loads(freight.source_keys_json) == ["freightwaves"]
@@ -95,6 +106,7 @@ class Registry:
         return self.source
 
 
+@pytest.mark.usefixtures("database")
 def test_presets_create_bounded_durable_progress_and_are_idempotent():
     with SessionLocal() as db:
         first = create_historical_request(db, preset_key="psx_12m")
@@ -110,6 +122,7 @@ def test_presets_create_bounded_durable_progress_and_are_idempotent():
         assert progress["total_units"] == 1
 
 
+@pytest.mark.usefixtures("database")
 def test_corpus_presets_are_scheduled_before_per_company_backlog():
     with SessionLocal() as db:
         instrument = Instrument(symbol="HBL", name="Habib Bank Limited")
@@ -124,6 +137,7 @@ def test_corpus_presets_are_scheduled_before_per_company_backlog():
         assert [row.preset_key for row in ordered] == ["psx_12m", "news_90d", "deep_company_12m"]
 
 
+@pytest.mark.usefixtures("database")
 def test_psx_history_advances_one_page_and_resumes_from_postgres(monkeypatch):
     source = PagedPsxSource()
     monkeypatch.setattr(
@@ -154,6 +168,7 @@ def test_psx_history_advances_one_page_and_resumes_from_postgres(monkeypatch):
         assert db.get(EvidenceRefreshRequest, request.id).status == "processing"
 
 
+@pytest.mark.usefixtures("database")
 def test_historical_discovery_yields_while_live_work_exists(monkeypatch):
     monkeypatch.setattr(settings, "evidence_historical_live_backlog_reserve", 1)
     monkeypatch.setattr(settings, "evidence_fetch_queue_target", 2)
@@ -185,6 +200,7 @@ def test_historical_discovery_yields_while_live_work_exists(monkeypatch):
         assert json.loads(request.progress_json)["halted_reason"] == "yielding_to_live_work"
 
 
+@pytest.mark.usefixtures("database")
 def test_small_live_backlog_does_not_starve_history(monkeypatch):
     source = PagedPsxSource()
     monkeypatch.setattr(
@@ -220,6 +236,7 @@ def test_small_live_backlog_does_not_starve_history(monkeypatch):
         assert result.discovered == 1
 
 
+@pytest.mark.usefixtures("database")
 def test_budget_deferred_live_backlog_does_not_starve_history(monkeypatch):
     source = PagedPsxSource()
     monkeypatch.setattr(
@@ -256,6 +273,7 @@ def test_budget_deferred_live_backlog_does_not_starve_history(monkeypatch):
         assert result.discovered == 1
 
 
+@pytest.mark.usefixtures("database")
 def test_historical_request_respects_open_source_circuit(monkeypatch):
     monkeypatch.setattr(settings, "evidence_fetch_queue_target", 80)
     monkeypatch.setattr(settings, "evidence_historical_live_backlog_reserve", 1)
@@ -278,6 +296,7 @@ def test_historical_request_respects_open_source_circuit(monkeypatch):
         )
 
 
+@pytest.mark.usefixtures("database")
 def test_historical_fetch_stops_before_storage_budget_is_exceeded(tmp_path):
     with SessionLocal() as db:
         request = create_historical_request(db, preset_key="psx_12m")
@@ -315,6 +334,7 @@ def test_historical_fetch_stops_before_storage_budget_is_exceeded(tmp_path):
         assert request.fetched_bytes == 0
 
 
+@pytest.mark.usefixtures("database")
 def test_budget_expansion_requires_seven_continuous_healthy_days():
     with SessionLocal() as db:
         with pytest.raises(ValueError, match="seven continuous healthy"):
@@ -354,6 +374,7 @@ def test_registry_contract_still_has_no_pass4_sources():
     assert "fed_releases" not in registry.keys()
 
 
+@pytest.mark.usefixtures("database")
 def test_pass2_historical_row_is_upgraded_to_resumable_pass3_progress(monkeypatch):
     source = PagedPsxSource()
     monkeypatch.setattr(

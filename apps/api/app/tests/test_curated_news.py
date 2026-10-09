@@ -4,6 +4,7 @@ from app.ingestion.evidence import Candidate
 from app.ingestion.news_selection import classify_news
 from app.ingestion.news_selection import prepare_material_candidate
 from app.jobs.curated_news import rank_candidates
+import pytest
 
 
 def test_material_news_rejects_promotional_and_engineering_articles():
@@ -43,6 +44,7 @@ def test_shared_material_filter_bounds_live_news_and_preserves_archive_window():
     assert prepare_material_candidate(announcement) is announcement
 
 
+@pytest.mark.usefixtures("database")
 def test_live_discovery_rejects_irrelevant_titles_before_download(monkeypatch):
     from app.core.config import settings
     from app.db.session import SessionLocal

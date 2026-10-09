@@ -29,7 +29,7 @@ def test_this_branch_routing_migration_is_additive_on_top_of_production_revision
 
 @pytest.fixture
 def stub(tmp_path):
-    """Fake docker/curl that log every call; behaviour is driven by env vars."""
+    """Stub external commands so rollout contracts also run on hosts without flock."""
     bindir, log = tmp_path / 'bin', tmp_path / 'calls.log'
     bindir.mkdir()
     docker = bindir / 'docker'
@@ -41,7 +41,9 @@ exit 0
 ''')
     curl = bindir / 'curl'
     curl.write_text('#!/usr/bin/env bash\necho "curl $*" >> "$STUB_LOG"\nexit 0\n')
-    for f in (docker, curl):
+    flock = bindir / 'flock'
+    flock.write_text('#!/usr/bin/env bash\nexit "${STUB_LOCK_BUSY:-0}"\n')
+    for f in (docker, curl, flock):
         f.chmod(0o755)
 
     def run(**extra):
@@ -95,3 +97,10 @@ def test_deploy_with_no_ingestion_running_is_a_plain_deploy(stub):
     result, calls = stub(STUB_RUNNING='')
     assert result.returncode == 0 and not [c for c in calls if ' stop ' in c]
     assert any('alembic upgrade head' in c for c in calls)
+
+
+def test_busy_deployment_lock_aborts_before_docker_commands(stub):
+    result, calls = stub(STUB_LOCK_BUSY='1')
+    assert result.returncode != 0
+    assert 'Another Oracle deployment is running.' in result.stderr
+    assert calls == []

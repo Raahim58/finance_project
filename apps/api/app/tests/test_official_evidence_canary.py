@@ -64,12 +64,12 @@ def test_pass4_registry_contains_only_requested_official_canary_sources():
     assert OFFICIAL_CANARY_KEYS <= set(build_pass1_registry().keys())
     assert not {"reuters", "bloomberg", "ft", "specialist_sector"} & set(canary_specs)
     assert canary_specs["sec_edgar_current"].enabled is (
-        settings.evidence_pass4_official_enabled
-        and bool(settings.evidence_sec_edgar_ciks.strip())
+        settings.evidence_pass4_official_enabled and bool(settings.evidence_sec_edgar_ciks.strip())
     )
     assert canary_specs["nccpl_notices"].enabled is False
 
 
+@pytest.mark.usefixtures("database")
 def test_official_source_config_persists_bounds_provenance_and_fallback():
     with SessionLocal() as db:
         data_source, config, _ = ensure_source_config(db, "secp_releases")
@@ -92,6 +92,7 @@ def test_sec_registry_is_scoped_to_configured_ciks(monkeypatch):
     assert source.ciks == ("0000320193", "0000789019")
 
 
+@pytest.mark.usefixtures("database")
 def test_discovery_task_immediately_dispatches_new_candidates_to_fetch(monkeypatch):
     """Smoke the worker hand-off without a broker, scheduler loop, or live HTTP."""
 
@@ -233,11 +234,15 @@ def test_every_official_source_has_a_generic_adapter_fixture(source_key):
         def sec_fetcher(*args, **kwargs):
             return payload, str(args[0]), "application/json", {}
 
-        candidates = SecEdgarSource(
-            ciks=("0000320193",),
-            key=source_key,
-            fetcher=sec_fetcher,
-        ).discover_since({}, 1).candidates
+        candidates = (
+            SecEdgarSource(
+                ciks=("0000320193",),
+                key=source_key,
+                fetcher=sec_fetcher,
+            )
+            .discover_since({}, 1)
+            .candidates
+        )
         assert len(candidates) == 1
         assert candidates[0].metadata["form"] == "10-Q"
         return
@@ -255,7 +260,12 @@ def test_every_official_source_has_a_generic_adapter_fixture(source_key):
         ).encode()
 
     def fetcher(*args, **kwargs):
-        return payload, str(args[0]), "application/xml" if spec.discovery_method == "rss" else "text/html", {}
+        return (
+            payload,
+            str(args[0]),
+            "application/xml" if spec.discovery_method == "rss" else "text/html",
+            {},
+        )
 
     source = HttpEvidenceSource(
         spec.key,
@@ -271,6 +281,7 @@ def test_every_official_source_has_a_generic_adapter_fixture(source_key):
     assert candidates[0].source_key == source_key
 
 
+@pytest.mark.usefixtures("database")
 def test_canary_budgets_are_reserved_at_each_funnel_boundary(monkeypatch):
     monkeypatch.setattr(settings, "evidence_canary_discovery_daily", 1)
     monkeypatch.setattr(settings, "evidence_canary_fetch_daily", 1)
@@ -309,6 +320,7 @@ def test_canary_budgets_are_reserved_at_each_funnel_boundary(monkeypatch):
         assert db.get(DiscoveryCandidate, rows[0].id).fetched_bytes == 512
 
 
+@pytest.mark.usefixtures("database")
 def test_canary_storage_rejects_response_over_source_budget():
     now = datetime.now(UTC)
     with SessionLocal() as db:
@@ -330,6 +342,7 @@ def test_canary_storage_rejects_response_over_source_budget():
         assert decision.reason == "source_daily_storage_budget"
 
 
+@pytest.mark.usefixtures("database")
 def test_official_canary_samples_low_information_headlines_before_full_relevance_gate(tmp_path):
     now = datetime.now(UTC)
 

@@ -94,6 +94,7 @@ def repair_fixture(db):
                            "reason": "Confirmed source-column error", "before": [fact_snapshot(old)], "replacements": [replacement]}]}
 
 
+@pytest.mark.usefixtures("database")
 def test_repair_is_idempotent_preserves_original_values_and_other_records():
     with SessionLocal() as db:
         manifest = repair_fixture(db)
@@ -106,6 +107,7 @@ def test_repair_is_idempotent_preserves_original_values_and_other_records():
         assert len(list(db.scalars(select(FinancialFact)))) == 3
 
 
+@pytest.mark.usefixtures("database")
 def test_repair_rejects_drift_before_mutating_anything():
     with SessionLocal() as db:
         manifest = repair_fixture(db)
@@ -134,6 +136,7 @@ def test_revenue_before_tax_deductions_is_kept_separate_from_net_revenue():
         ("net_revenue", 410995183000), ("net_revenue", 385125191000)]
 
 
+@pytest.mark.usefixtures("database")
 def test_exact_facts_reader_excludes_rejected_rows_and_keeps_basis_and_duration():
     from app.services.research_intelligence_service import exact_facts
     with SessionLocal() as db:
@@ -150,6 +153,7 @@ def test_four_digit_fiscal_headers_do_not_assume_current_column_first():
     assert [(f.value, f.period_end) for f in facts] == [(123517000000, date(2024, 6, 30)), (122738000000, date(2025, 6, 30))]
 
 
+@pytest.mark.usefixtures("database")
 def test_assistant_fact_context_excludes_rejected_rows_and_retains_period_start():
     from app.services.context_builder import ContextBuilder
     with SessionLocal() as db:

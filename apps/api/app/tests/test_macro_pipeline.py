@@ -18,6 +18,7 @@ from app.providers.macro.series import ProviderObservation, ProviderResult, fetc
 from app.services.macro_ingestion_service import ensure_macro_catalog, persist_provider_result
 from app.services.research_service import macro_releases
 from app.providers.macro.sbp import SbpKeyIndicatorsProvider
+import pytest
 
 
 def _provider(series_key, prefix):
@@ -28,6 +29,7 @@ def _provider(series_key, prefix):
     )
 
 
+@pytest.mark.usefixtures("database")
 def test_daily_macro_allowlist_only_registers_and_queues_verified_series(monkeypatch):
     from app.services.macro_schedule_service import enqueue_due_macro_refreshes
     monkeypatch.setattr(settings, 'macro_ingestion_enabled', True)
@@ -40,6 +42,7 @@ def test_daily_macro_allowlist_only_registers_and_queues_verified_series(monkeyp
         assert set(db.scalars(select(MacroSeries.key))) == set(published)
 
 
+@pytest.mark.usefixtures("database")
 def test_daily_macro_allowlist_rejects_unknown_keys_before_mutation(monkeypatch):
     import pytest
     from app.services.macro_schedule_service import enqueue_due_macro_refreshes
@@ -144,6 +147,7 @@ def test_imf_parser_contract_is_available_but_runtime_provider_stays_disabled(mo
     assert not _provider("PK_CPI_YOY", "imf:").enabled
 
 
+@pytest.mark.usefixtures("database")
 def test_reconciliation_retains_conflicts_and_selects_highest_authority(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "source_artifact_root", str(tmp_path / "artifacts"))
     spec = MACRO_SERIES_BY_KEY["PK_CPI_YOY"]
@@ -202,6 +206,7 @@ def test_reconciliation_retains_conflicts_and_selects_highest_authority(tmp_path
         assert releases[0]["selection_reason"]["conflict"] is True
 
 
+@pytest.mark.usefixtures("database")
 def test_macro_scheduler_is_bounded_and_publishes_only_when_enabled(monkeypatch):
     from app.jobs import macro_scheduler
 

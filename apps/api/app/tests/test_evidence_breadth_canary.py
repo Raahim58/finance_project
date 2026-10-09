@@ -14,7 +14,10 @@ from app.services.evidence_pipeline import ensure_source_config, persist_candida
 
 
 BREADTH_KEYS = {
-    "world_fertilizer", "world_cement", "oilprice", "medium_kahloon",
+    "world_fertilizer",
+    "world_cement",
+    "oilprice",
+    "medium_kahloon",
     "reuters_world",
     "bloomberg_markets",
     "financial_times",
@@ -66,9 +69,13 @@ def test_breadth_catalog_matches_the_agreed_source_scope():
         for key in BREADTH_KEYS - DORMANT_KEYS
     )
     assert all(spec.historical_days == 90 for spec in specs.values())
-    additions={"world_fertilizer", "world_cement", "oilprice", "medium_kahloon"}
-    assert all(spec.daily_fetch_budget <= (20 if key in additions else 8) for key,spec in specs.items())
-    assert all(spec.daily_selected_budget <= (10 if key in additions else 4) for key,spec in specs.items())
+    additions = {"world_fertilizer", "world_cement", "oilprice", "medium_kahloon"}
+    assert all(
+        spec.daily_fetch_budget <= (20 if key in additions else 8) for key, spec in specs.items()
+    )
+    assert all(
+        spec.daily_selected_budget <= (10 if key in additions else 4) for key, spec in specs.items()
+    )
 
     tier_one = {
         "reuters_world",
@@ -103,8 +110,7 @@ def test_every_breadth_source_has_a_generic_adapter_fixture(source_key):
     else:
         article_url = LISTING_FIXTURES[source_key]
         payload = (
-            f"<html><body><a href='{article_url}'>"
-            "Official market sector update</a></body></html>"
+            f"<html><body><a href='{article_url}'>Official market sector update</a></body></html>"
         ).encode()
 
     def fetcher(*args, **kwargs):
@@ -131,6 +137,7 @@ def test_every_breadth_source_has_a_generic_adapter_fixture(source_key):
     assert candidates[0].observed_url.startswith("https://")
 
 
+@pytest.mark.usefixtures("database")
 def test_breadth_source_config_persists_shared_canary_and_provenance():
     with SessionLocal() as db:
         data_source, config, _ = ensure_source_config(db, "semiconductor_engineering")
@@ -157,6 +164,7 @@ def test_dormant_breadth_sources_preserve_documented_non_browser_fallbacks():
     assert all("browser" not in spec.fallback.lower() for spec in specs.values())
 
 
+@pytest.mark.usefixtures("database")
 def test_official_and_breadth_sources_share_one_global_fetch_ceiling(monkeypatch):
     from datetime import UTC, datetime
 

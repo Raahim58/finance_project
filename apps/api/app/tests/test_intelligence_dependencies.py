@@ -17,6 +17,8 @@ from app.services.pipeline.statements import extract
 from app.services.rag_service import ParsedPage, create_document_from_pages
 from app.ai.source_identity import source_identity
 
+pytestmark = pytest.mark.usefixtures("database")
+
 
 def prepare(db):
     instrument=Instrument(symbol='TEST',name='Test Company Limited',sector='Cement')

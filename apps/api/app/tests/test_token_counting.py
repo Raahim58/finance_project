@@ -41,7 +41,7 @@ async def test_count_failure_never_silently_bypasses_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_count_endpoint_preserves_tools_and_thinking_but_excludes_transport(monkeypatch):
+async def test_count_endpoint_preserves_tools_and_thinking_but_excludes_transport(monkeypatch, token_count_transport):
     captured = []
     real_client = httpx.AsyncClient
     def handle(request):
@@ -109,7 +109,7 @@ async def test_http_provider_awaits_guard_before_generation(monkeypatch):
 @pytest.mark.parametrize("provider_count", [32640, 49000])
 def test_assistant_uses_provider_count_to_accept_or_block_and_reconciles_usage(client, monkeypatch, provider_count):
     from sqlalchemy import select
-    from app.tests.test_phase8_phase2_tool_loop import _auth_with_anthropic
+    from app.tests.support.assistant import _auth_with_anthropic
     from app.ai import tool_loop
     from app.db.session import SessionLocal
     from app.models.assistant_execution import AssistantExecution, AssistantAttempt

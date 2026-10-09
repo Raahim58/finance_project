@@ -84,9 +84,9 @@ credentials:
 
 ```bash
 python -m app.jobs.evaluate_phase8
-pytest app/tests/test_phase7a_canonical_context.py \
-  app/tests/test_phase7b_context_consumers.py \
-  app/tests/test_phase8_revamp.py app/tests/test_phase8_phase2_tool_loop.py \
+pytest app/tests/test_context_builder.py app/tests/test_context_deficiencies.py app/tests/test_context_ingestion.py \
+  app/tests/test_context_consumers.py \
+  app/tests/test_assistant_execution.py app/tests/test_allocation_calculation.py app/tests/test_evidence_projection.py app/tests/test_tool_loop_*.py \
   app/tests/test_tool_registry.py app/tests/test_quant_domain.py \
   app/tests/test_intelligence_v1.py app/tests/test_providers.py \
   app/tests/test_llm_provider_usage.py -q
@@ -96,14 +96,14 @@ Run the Phase 8 Phase 1 read-tool fidelity suite separately while iterating on e
 contracts (it performs no network, ingestion, broker, or model calls):
 
 ```bash
-pytest app/tests/test_phase8_phase1_read_tools.py -q
+pytest app/tests/test_read_tool_contracts.py app/tests/test_company_read_tools.py app/tests/test_document_read_tools.py app/tests/test_allocation_verification_tools.py -q
 ```
 
 Run the Phase 2 native-provider and durable-loop acceptance suite without network or
 paid model calls:
 
 ```bash
-pytest app/tests/test_phase8_phase2_tool_loop.py \
+pytest app/tests/test_tool_loop_*.py \
   app/tests/test_llm_provider_usage.py app/tests/test_tool_registry.py -q
 ```
 

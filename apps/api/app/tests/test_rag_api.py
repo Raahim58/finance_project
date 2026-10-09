@@ -1,10 +1,9 @@
-from datetime import date
 
 from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.models.document import Citation, DocumentChunk, DocumentPage
-from app.services.market_ingestion import generate_mock_market_data
+from app.tests.support.market import _seed_companies
 
 
 def _auth_headers(client):
@@ -16,9 +15,6 @@ def _auth_headers(client):
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
-def _seed_companies():
-    with SessionLocal() as db:
-        generate_mock_market_data(db, days=2, end_date=date(2026, 6, 30))
 
 
 def test_ingest_text_document_and_search_returns_citations(client):

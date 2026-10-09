@@ -5,6 +5,7 @@ from app.db.session import SessionLocal
 from app.models.user import User
 from app.models.research_intelligence import AIBrief
 from app.services import brief_service
+import pytest
 
 
 def make_user(db):
@@ -25,6 +26,7 @@ def test_validation_drops_uncited_points_and_unknown_ids():
     assert out["sections"] == [{"title": "T", "body": "ok", "question": "Why?", "fact_ids": ["f1"], "tickers": ["KML"]}]
 
 
+@pytest.mark.usefixtures("database")
 def test_cached_brief_is_served_without_scheduling_and_new_hash_schedules_once(monkeypatch):
     calls = []
     with SessionLocal() as db:
@@ -44,6 +46,7 @@ def test_cached_brief_is_served_without_scheduling_and_new_hash_schedules_once(m
         assert stale["status"] == "generating" and not stale["current"] and stale["brief"]["headline"] == "h" and len(calls) == 2
 
 
+@pytest.mark.usefixtures("database")
 def test_no_key_means_no_generation(monkeypatch):
     with SessionLocal() as db:
         user = make_user(db)

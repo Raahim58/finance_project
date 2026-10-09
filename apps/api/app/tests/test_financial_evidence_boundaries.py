@@ -18,6 +18,8 @@ from app.schemas.intelligence_context import IntelligenceContextRequest, Context
 from app.tools.research_tools import CompanyDigestInput, _company_digest
 from app.tools.registry import expand_model_data
 
+pytestmark = pytest.mark.usefixtures("database")
+
 
 def instrument(db):
     row=Instrument(symbol='TEST',name='Fixture Company',sector='Cement')
