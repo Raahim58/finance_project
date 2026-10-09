@@ -1,8 +1,6 @@
 """Offline evidence projection contracts and fixtures."""
 
 from app.ai.providers.base import ContentBlock, ProviderTurn
-import pytest
-from app.ai.tool_loop import unwrap_final_text
 from app.reasoning.projection import project, encode
 
 
@@ -43,10 +41,3 @@ def test_mebl_233_subjects_224_references_have_one_prompt_copy():
     assert raw.count('"evidence_id":"event-source-223"') == 1
     assert "do not send" not in raw
     assert projected["counts"]["duplicate_records_removed"] >= 1
-
-
-@pytest.mark.parametrize(
-    "raw", ['```json\n{"answer":"Observed evidence."}\n```', '{"answer":"Observed evidence."}']
-)
-def test_safe_transport_unwraps_without_a_repair_call(raw):
-    assert unwrap_final_text(raw) == "Observed evidence."

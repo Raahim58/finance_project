@@ -1,5 +1,7 @@
 """Offline tool loop citations contracts and fixtures."""
 
+import pytest
+
 import json
 from app.ai.providers.http_placeholders import AnthropicProvider
 from app.ai.tool_loop import ToolExecution, resolve_citations, unwrap_final_text
@@ -11,13 +13,13 @@ from app.tools.registry import tool_result
 from app.tests.support.assistant import _auth_with_anthropic
 
 
-def test_legacy_json_unwrap_keeps_readable_text_without_semantic_label():
-    assert unwrap_final_text('{"answer":"Readable initial response.","claims":[]}') == (
-        "Readable initial response."
-    )
-    assert unwrap_final_text('```json\n{"answer":"Readable repaired response."}\n```') == (
-        "Readable repaired response."
-    )
+@pytest.mark.parametrize("raw", [
+    '{"answer":"Readable response.","claims":[]}',
+    '```json\n{"answer":"Readable response."}\n```',
+    '{"answer":"Readable response."}',
+])
+def test_transport_unwrap_keeps_readable_text_without_semantic_label(raw):
+    assert unwrap_final_text(raw) == "Readable response."
 
 
 def test_false_sentence_citation_resolves_as_reference_not_proof():

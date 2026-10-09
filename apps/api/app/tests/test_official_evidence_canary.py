@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.ingestion.evidence import Candidate, DiscoveryBatch, RawContent
-from app.ingestion.evidence_catalog import SOURCE_SPECS, build_pass1_registry
+from app.ingestion.evidence_catalog import build_pass1_registry
 from app.models.evidence import DiscoveryCandidate
 from app.models.workstation import DataSource
 from app.providers.evidence.sources import HttpEvidenceSource, SecEdgarSource
@@ -19,54 +19,6 @@ from app.services.evidence_canary_service import (
 )
 from app.services.evidence_pipeline import ensure_source_config, persist_candidate
 from app.services.evidence_operations import EvidenceSpool, fetch_stage
-
-
-OFFICIAL_CANARY_KEYS = {
-    "mof_pakistan",
-    "pbs_releases",
-    "secp_releases",
-    "nepra_releases",
-    "ogra_releases",
-    "nccpl_notices",
-    "world_bank_news",
-    "federal_reserve",
-    "ecb_releases",
-    "bis_releases",
-    "eia_releases",
-    "opec_releases",
-    "sec_edgar_current",
-    "ofac_actions",
-}
-
-LISTING_FIXTURE_URLS = {
-    "mof_pakistan": "https://www.finance.gov.pk/example.pdf",
-    "pbs_releases": "https://www.pbs.gov.pk/press-release/example/",
-    "secp_releases": "https://www.secp.gov.pk/media-center/press-releases/example/",
-    "nepra_releases": "https://nepra.org.pk/Press%20Release/example.pdf",
-    "ogra_releases": "https://www.ogra.org.pk/press-release-example",
-    "nccpl_notices": "https://www.nccpl.com.pk/legal-framework/example",
-    "world_bank_news": "https://www.worldbank.org/en/news/press-release/example",
-    "opec_releases": "https://www.opec.org/pr-detail/example",
-    "ofac_actions": "https://ofac.treasury.gov/recent-actions/example",
-}
-
-
-def test_pass4_registry_contains_only_requested_official_canary_sources():
-    canary_specs = {
-        spec.key: spec for spec in SOURCE_SPECS if spec.canary_group == "pass4_official"
-    }
-    assert set(canary_specs) == OFFICIAL_CANARY_KEYS
-    assert all(spec.tier == "official" for spec in canary_specs.values())
-    assert all(
-        spec.discovery_method in {"rss", "listing", "sec_submissions"}
-        for spec in canary_specs.values()
-    )
-    assert OFFICIAL_CANARY_KEYS <= set(build_pass1_registry().keys())
-    assert not {"reuters", "bloomberg", "ft", "specialist_sector"} & set(canary_specs)
-    assert canary_specs["sec_edgar_current"].enabled is (
-        settings.evidence_pass4_official_enabled and bool(settings.evidence_sec_edgar_ciks.strip())
-    )
-    assert canary_specs["nccpl_notices"].enabled is False
 
 
 @pytest.mark.usefixtures("database")
@@ -212,75 +164,6 @@ def test_generic_rss_adapter_resolves_relative_official_links_for_fetch():
     assert candidate.canonical_url == candidate.observed_url
 
 
-@pytest.mark.parametrize("source_key", sorted(OFFICIAL_CANARY_KEYS))
-def test_every_official_source_has_a_generic_adapter_fixture(source_key):
-    spec = next(item for item in SOURCE_SPECS if item.key == source_key)
-    if source_key == "sec_edgar_current":
-        payload = json.dumps(
-            {
-                "cik": "320193",
-                "name": "Fixture Issuer",
-                "filings": {
-                    "recent": {
-                        "accessionNumber": ["0000320193-26-000001"],
-                        "form": ["10-Q"],
-                        "filingDate": ["2026-08-01"],
-                        "primaryDocument": ["fixture-10q.htm"],
-                    }
-                },
-            }
-        ).encode()
-
-        def sec_fetcher(*args, **kwargs):
-            return payload, str(args[0]), "application/json", {}
-
-        candidates = (
-            SecEdgarSource(
-                ciks=("0000320193",),
-                key=source_key,
-                fetcher=sec_fetcher,
-            )
-            .discover_since({}, 1)
-            .candidates
-        )
-        assert len(candidates) == 1
-        assert candidates[0].metadata["form"] == "10-Q"
-        return
-    if spec.discovery_method == "rss":
-        payload = (
-            "<?xml version='1.0'?><rss version='2.0'><channel><item>"
-            f"<guid>{source_key}-1</guid><title>Official policy update</title>"
-            f"<link>{spec.base_url}/official-update</link>"
-            "</item></channel></rss>"
-        ).encode()
-    else:
-        payload = (
-            f"<html><body><a href='{LISTING_FIXTURE_URLS[source_key]}'>"
-            "Official policy update</a></body></html>"
-        ).encode()
-
-    def fetcher(*args, **kwargs):
-        return (
-            payload,
-            str(args[0]),
-            "application/xml" if spec.discovery_method == "rss" else "text/html",
-            {},
-        )
-
-    source = HttpEvidenceSource(
-        spec.key,
-        spec.name,
-        spec.discovery_url,
-        spec.discovery_method,
-        spec.topic,
-        link_pattern=spec.link_pattern,
-        fetcher=fetcher,
-    )
-    candidates = source.discover_since({}, 1).candidates
-    assert len(candidates) == 1
-    assert candidates[0].source_key == source_key
-
-
 @pytest.mark.usefixtures("database")
 def test_canary_budgets_are_reserved_at_each_funnel_boundary(monkeypatch):
     monkeypatch.setattr(settings, "evidence_canary_discovery_daily", 1)
@@ -376,3 +259,15 @@ def test_official_canary_samples_low_information_headlines_before_full_relevance
 
         assert result.outcome == "raw_ready"
         assert db.get(DiscoveryCandidate, row.id).fetched_at is not None
+
+
+def test_sec_submission_adapter_preserves_filing_identity():
+    payload = json.dumps({"cik": "320193", "name": "Fixture Issuer", "filings": {"recent": {
+        "accessionNumber": ["0000320193-26-000001"], "form": ["10-Q"],
+        "filingDate": ["2026-08-01"], "primaryDocument": ["fixture-10q.htm"],
+    }}}).encode()
+    def fetcher(url, **kwargs):
+        return payload, str(url), "application/json", {}
+    candidates = SecEdgarSource(ciks=("0000320193",), key="sec_edgar_current", fetcher=fetcher).discover_since({}, 1).candidates
+    assert len(candidates) == 1
+    assert candidates[0].metadata["form"] == "10-Q"

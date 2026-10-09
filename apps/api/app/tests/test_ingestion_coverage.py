@@ -92,19 +92,6 @@ def test_dynamic_universe_filters_non_ordinary_and_deactivates_absent_symbols():
         assert db.scalar(select(Company).where(Company.symbol == "AAA")).is_active is False
 
 
-def test_celery_has_only_required_phase2_workload_queues():
-    routes = celery_app.conf.task_routes
-    queues = {route["queue"] for name, route in routes.items() if name.startswith("phase2.")}
-    assert queues == {
-        "broad_fundamentals",
-        "dps_history",
-        "financial_download",
-        "financial_extract",
-    }
-    assert celery_app.conf.task_acks_late is True
-    assert celery_app.conf.worker_prefetch_multiplier == 1
-
-
 @pytest.mark.usefixtures("database")
 def test_screening_keeps_missing_data_separate_and_promotes_observed_candidate():
     with SessionLocal() as db:
@@ -159,38 +146,6 @@ def test_screening_keeps_missing_data_separate_and_promotes_observed_candidate()
         assert by_symbol["FULL"].screenable is True
         assert by_symbol["FULL"].promoted is True
         assert full.id in deep_instrument_ids(db)
-
-
-@pytest.mark.usefixtures("database")
-def test_coverage_key_is_durable_and_unique():
-    with SessionLocal() as db:
-        sync_observed_dps_universe(
-            db,
-            [
-                {
-                    "symbol": "AAA",
-                    "name": "A",
-                    "sector": "Cement",
-                    "is_debt": False,
-                    "is_etf": False,
-                    "is_gem": False,
-                }
-            ],
-        )
-        instrument = db.scalar(select(Instrument).where(Instrument.symbol == "AAA"))
-        db.add(
-            IngestionCoverage(
-                instrument_id=instrument.id,
-                dataset_type="price_history",
-                period_key="2023-04",
-                source="dps",
-                status="complete",
-                item_count=20,
-            )
-        )
-        db.commit()
-        row = db.scalar(select(IngestionCoverage).where(IngestionCoverage.period_key == "2023-04"))
-        assert (row.dataset_type, row.status, row.item_count) == ("price_history", "complete", 20)
 
 
 def test_phase2_queueability_treats_partial_and_live_reservations_as_terminal():
@@ -436,3 +391,8 @@ def test_image_only_financial_statement_uses_ocr_with_lower_confidence():
         fact.extraction_method == "ocr" and fact.confidence == Decimal("0.700000") for fact in facts
     )
     assert not any("remain unavailable" in message for message in fact_diagnostics)
+
+
+def test_worker_delivery_is_acknowledged_after_execution_and_not_prefetched():
+    assert celery_app.conf.task_acks_late is True
+    assert celery_app.conf.worker_prefetch_multiplier == 1

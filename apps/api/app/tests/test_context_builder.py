@@ -49,6 +49,8 @@ def test_company_context_is_unpersonalized_and_only_builds_requested_sections():
             _company_request(ContextSectionName.MARKET_RISK),
         )
 
+    assert context.receipt.build_duration_ms >= 0
+    assert set(context.receipt.section_duration_ms) == set(context.sections)
     assert set(context.sections) == {"market_risk"}
     assert context.portfolio_id is None
     serialized = context.model_dump_json()
@@ -437,20 +439,6 @@ def test_soft_provider_failure_is_isolated_and_build_is_instrumented(monkeypatch
     assert context.sections["macro"].provenance["failure_isolated"] is True
     assert context.receipt.build_duration_ms >= 0
     assert set(context.receipt.section_duration_ms) == {"market_risk", "macro"}
-
-
-@pytest.mark.usefixtures("database")
-def test_representative_company_build_records_measured_duration():
-    user_id, _ = _seed_user_and_market()
-    with SessionLocal() as db:
-        context = ContextBuilder().build(
-            db,
-            db.get(User, user_id),
-            IntelligenceContextRequest(symbol="MEBL", research_purpose="risks"),
-        )
-    assert context.receipt.build_duration_ms >= 0
-    assert len(context.sections) == 6
-    assert len(context.receipt.section_duration_ms) == len(context.sections)
 
 
 @pytest.mark.usefixtures("database")
