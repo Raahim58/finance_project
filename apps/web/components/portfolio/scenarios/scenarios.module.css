@@ -1,5 +1,5 @@
 /* Editorial palette is provided by the shell's .overviewShell scope. */
-.layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) 330px; min-height: calc(100vh - 46px); gap: 0; color: #141619; }
+.layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) var(--rail-width); min-height: calc(100vh - 46px); gap: 0; color: #141619; }
 .layout button, .layout input, .layout select { font: inherit; }
 .layout button:focus-visible, .layout input:focus-visible, .layout select:focus-visible { outline: 2px solid #00875a; outline-offset: 2px; }
 .setup, .results, .history { min-width: 0; padding: 22px 22px 28px; }

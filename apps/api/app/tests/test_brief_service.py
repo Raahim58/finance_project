@@ -50,3 +50,24 @@ def test_no_key_means_no_generation(monkeypatch):
         patch(monkeypatch, {"d": 1}, config=False)
         out = brief_service.read(db, user, "market", schedule=lambda *a: (_ for _ in ()).throw(AssertionError("scheduled")))
         assert out["status"] == "provider_unavailable"
+
+
+def test_numeric_guard_flags_restated_figures():
+    ok = {"headline": "Narrow advance", "sections": [{"title": "Breadth", "body": "One name drove roughly 3% of it."}]}
+    bad = {"headline": "Index up 0.09%", "sections": [{"title": "Breadth", "body": "Up 2% and then 3%."}]}
+    assert not brief_service._too_numeric(ok) and brief_service._too_numeric(bad)
+
+
+def test_portfolio_facts_include_derived_analysis_inputs(monkeypatch):
+    from decimal import Decimal as D
+    from types import SimpleNamespace as NS
+    h = lambda sym, sec, mv, dc: NS(symbol=sym, sector=sec, market_value=D(mv), day_change=D(dc), day_change_percent=D("0.5"),
+                                    unrealized_gain_loss_percent=D("1"), quantity=D("1"), latest_price_date="2026-10-09")
+    summary = NS(portfolio=NS(name="P"), total_value=D("1000"), day_change=D("10"), day_change_percent=D("1.0"), cash_balance=D("100"),
+                 data_freshness_date="2026-10-09", data_source="x", unpriced_symbols=[], holdings=[h("AAA", "Banks", "500", "8"), h("BBB", "Cement", "400", "2")])
+    monkeypatch.setattr("app.services.portfolio_service.get_portfolio_summary", lambda *a: summary)
+    monkeypatch.setattr("app.services.pipeline.event_reads.event_records", lambda *a, **k: [])
+    monkeypatch.setattr("app.services.market_service.get_market_overview", lambda db: NS(snapshot=NS(index_name="KSE-100", index_change_percent=D("0.2"), snapshot_date="2026-10-09", source="s")))
+    facts, _ = brief_service.portfolio_facts(None, None, "id")
+    text = " ".join(f["text"] for f in facts)
+    assert "Concentration: cash is 10.0%" in text and "Banks 50.0%" in text and "Largest contributor" in text and "a gap of 0.8 points" in text

@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useAssistantWorkspace } from "@/components/AssistantWorkspace";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ComparisonTable } from "@/components/DecisionTables";
@@ -25,8 +24,6 @@ const tone = (value: number | null | undefined, goodWhenPositive = true) => valu
 const constraintPct = (value: unknown) => { const n = numeric(value); return n == null ? "Not set" : pctOf(n, 1); };
 
 export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: string; data: WorkspaceData; setMessage: (message: string) => void }) {
-  const assistant = useAssistantWorkspace();
-  const [question, setQuestion] = useState("");
   const [selectedAllocationId, setSelectedAllocationId] = useState("");
   const hydratedAllocation = useRef("");
   const proposalName = (row: AllocationSet) => typeof row.assumptions?.name === "string" ? row.assumptions.name : "";
@@ -224,7 +221,7 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
         <label className={styles.control}>Method<select id="build-method" className={styles.field} value={method} disabled={!usesReturns} onChange={event => setMethod(event.target.value)}>{returnMethodOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <button type="button" className={styles.btn} disabled={running || !weightState.valid} onClick={() => void analyze()}>{running ? "Calculating…" : savedAllocation && !dirty ? "Compare saved proposal" : "Compare proposal"}</button>
         <button type="button" className={styles.btnSmall} disabled={running || !weightState.valid} onClick={saveSandbox}>Save sandbox</button>
-        <details className={styles.actions}><summary aria-label="Construction actions">•••</summary><button type="button" disabled={running || Boolean(compatibilityProblem) || analystIncomplete || missingTarget} onClick={optimize}>Run optimization</button><button type="button" disabled={running} onClick={reset}>Reset to current holdings</button></details>
+        <details className={styles.actions}><summary aria-label="Construction actions">•••</summary><div className={styles.menu}><button type="button" disabled={running || Boolean(compatibilityProblem) || analystIncomplete || missingTarget} onClick={optimize}>Run optimization</button><button type="button" disabled={running} onClick={reset}>Reset to current holdings</button></div></details>
       </div>
       <p className={styles.sub}>Proposal only · holdings and transactions remain unchanged. Comparison uses current stored market inputs; configuration controls apply to a new optimizer run.</p>
       {savedAllocations.length > 1 ? <label className={styles.saved}>Saved proposal<select className={styles.field} value={savedAllocation?.id ?? ""} onChange={event => {setDirty(false); hydratedAllocation.current = ""; setSelectedAllocationId(event.target.value);}}>{savedAllocations.map(row => <option key={row.id} value={row.id}>{proposalLabel(row)}</option>)}</select></label> : null}
@@ -251,11 +248,11 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
       {diagnostics ? <details className={styles.details}><summary>Optimizer diagnostics</summary><pre>{JSON.stringify(diagnostics,null,2)}</pre></details> : null}
     </main>
     <aside data-portfolio-panel="context" className={styles.rail}>
-      <h2 className={styles.h2}>Proposal review</h2><p className={`${styles.notice} ${comparison?.proposed_compliance.status === "BREACH" ? styles.noticeBad : ""}`}>{proposalStatus}</p>
+      <h2 className={styles.h2}>Proposal review</h2>
+      <div className={`${styles.status} ${comparison?.proposed_compliance.status === "BREACH" ? styles.statusBad : comparison?.proposed_compliance.status === "PASS" && !fitProposed?.notEvaluated ? styles.statusOk : ""}`} role="status"><span className={styles.statusDot} aria-hidden="true" /><div><small>IPS compliance</small><strong>{proposalStatus}</strong></div></div>
+      {comparison?.warnings?.map(line => <p className={styles.sub} key={line}>{line}</p>)}
       {insights ? <div className={styles.insight}>{insights.lines.map(line => <p key={line}>{line}</p>)}</div> : <p className={styles.sub}>Compare the allocation to evaluate modeled changes and IPS checks.</p>}
       <section className={styles.insight}><h3>Stored constraints</h3>{confirmed ? <dl className={styles.constraints}>{mandate.map(([label,value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl> : <p className={styles.sub}>—</p>}<Link className={styles.link} href={`/portfolios/${portfolioId}/ips` as never}>Review IPS →</Link>{comparison ? <a className={styles.checkLink} href="#build-checks" onClick={() => {const details = document.getElementById("build-checks") as HTMLDetailsElement | null; if(details) details.open=true;}}>View failed checks</a> : null}</section>
-      <section className={styles.insight}><h3>Methodology</h3><p>{comparison ? humanize(String(comparison.assumptions?.expected_return_method ?? "Unavailable")) : "—"}</p><p>{comparison ? "Comparison includes cash; historical model output, not a forecast." : savedAllocation ? `Stored ${humanize(savedAllocation.kind).toLowerCase()} allocation v${savedAllocation.version}.` : "No saved proposal."}</p>{comparison?.warnings?.map(line => <p key={line}>{line}</p>)}<Link className={styles.link} href={`/portfolios/${portfolioId}/quant` as never}>Open quant analysis →</Link></section>
-      <section className={styles.ask}><h3>Ask</h3><form onSubmit={event => {event.preventDefault(); if(question.trim()) assistant?.open(question.trim());}}><textarea aria-label="Ask about this proposal" placeholder="Explain the allocation changes" value={question} onChange={event => setQuestion(event.target.value)}/><button type="submit" aria-label="Open assistant with proposal question" disabled={!question.trim()}>↑</button></form></section>
     </aside>
   </div>;
 }

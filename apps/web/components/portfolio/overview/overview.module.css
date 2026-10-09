@@ -1,5 +1,5 @@
 /* Overview tab. Palette follows the editorial scope used by markets.module.css. */
-.layout { display: grid; grid-template-columns: 250px minmax(0, 1fr) 300px; gap: 0; color: #141619; }
+.layout { display: grid; grid-template-columns: 250px minmax(0, 1fr) var(--rail-width); gap: 0; color: #141619; }
 .layout button, .layout input { font: inherit; }
 .layout button:focus-visible, .layout input:focus-visible, .layout a:focus-visible { outline: 2px solid #00875a; outline-offset: 3px; }
 .main { min-width: 0; padding: 24px; }
@@ -99,8 +99,6 @@
 .facts{padding-top:0!important}.facts>:first-child{margin-top:0;padding-top:16px}
 
 .railSummary{font-size:13px;line-height:1.6;color:var(--ink-2);margin:0 0 18px;padding-bottom:18px;border-bottom:1px solid var(--line)}
-.facts .heroTop{margin-top:18px;gap:8px}
-.facts .ranges button{min-width:34px;height:28px}
 .facts .contribution{margin-top:22px}
 .facts .contribution h3{margin:0 0 10px}
 .facts .contributionRow{grid-template-columns:46px minmax(30px,1fr) auto;gap:8px}
@@ -108,10 +106,9 @@
 
 /* Portfolio chart in the left panel */
 .portfolioChart{margin:18px 0 4px}
-.portfolioChart .heroTop{display:grid;gap:8px;margin:0}
-.portfolioChart .ranges{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:2px;padding:2px;background:var(--surface);border-radius:7px}
+.portfolioChart .heroTop{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;margin:0}
+.portfolioChart .ranges{width:100%;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:2px;padding:2px;background:var(--surface);border-radius:7px}
 .portfolioChart .ranges button{min-width:0;height:26px;border-radius:5px;font-size:12px;color:var(--muted)}
 .portfolioChart .ranges button[aria-pressed="true"]{background:var(--paper);color:var(--ink);font-weight:600;box-shadow:0 0 0 1px var(--line)}
 .portfolioChart .chart{margin:6px -4px 0;min-height:0}
 .facts .capital{margin-top:14px}
-.portfolioChart .heroTop{justify-items:stretch}.portfolioChart .ranges{width:100%}

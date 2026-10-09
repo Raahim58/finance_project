@@ -1,5 +1,5 @@
 /* Editorial palette is provided by the shell's .overviewShell scope. */
-.layout { display: grid; grid-template-columns: 246px minmax(0, 1fr) 288px; gap: 0; color: #16181b; font-variant-numeric: tabular-nums; }
+.layout { display: grid; grid-template-columns: 246px minmax(0, 1fr) var(--rail-width); gap: 0; color: #16181b; font-variant-numeric: tabular-nums; }
 .layout button, .layout input { font: inherit; }
 .layout button:focus-visible, .layout input:focus-visible { outline: 2px solid #00875a; outline-offset: 3px; }
 .main { min-width: 0; padding: 0 24px 24px; }
@@ -101,7 +101,7 @@
 .row { grid-template-columns: 105px minmax(0, 1fr); border-bottom: 0; padding: 7px 0; }
 .exportBtn { background:var(--paper); border: 1px solid #dfe3e9; color: #16181b; width: auto; padding: 0 17px; height: 36px; }
 .skeleton { background: #f3f4f6; animation: none; }
-@media (max-width: 1300px) and (min-width: 1101px) { .layout { grid-template-columns: 200px minmax(0, 1fr) 250px; } .portfolioRail { padding: 24px 16px; } .main { padding: 0 18px 20px; } .subtabs { margin: 0 -18px; padding: 0 18px; gap: 18px; } .cashSection { gap: 8px; } .cashRing { width: 44px; height: 44px; flex-basis: 44px; } }
+@media (max-width: 1300px) and (min-width: 1101px) { .layout { grid-template-columns: 200px minmax(0, 1fr) var(--rail-width); } .portfolioRail { padding: 24px 16px; } .main { padding: 0 18px 20px; } .subtabs { margin: 0 -18px; padding: 0 18px; gap: 18px; } .cashSection { gap: 8px; } .cashRing { width: 44px; height: 44px; flex-basis: 44px; } }
 @media (max-width: 1100px) { .layout { grid-template-columns: 210px minmax(0, 1fr); } .portfolioRail { grid-row: span 2; } .rail { margin: 0; padding: 22px 24px; } .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } .kpi:nth-child(odd) { padding-left: 8px; border-left: 1px solid var(--line); } .kpi:first-child, .kpi:nth-child(4) { border-left: 0; padding-left: 0; } }
 @media (max-width: 720px) { .layout { display: block; } .portfolioRail { padding: 18px; border-right: 0; border-bottom: 1px solid var(--line); } .holdingSection { display: none; } .cashSection { padding: 16px 0 0; border-bottom: 0; } .main { padding: 0 18px 20px; } .subtabs { margin: 0 -18px; padding: 0 18px; gap: 24px; } .viewHeading h1 { font-size: 26px; } .rail { padding: 22px 18px; } }
 .askControls { display: flex; justify-content: flex-end; margin: -6px 0 20px; }

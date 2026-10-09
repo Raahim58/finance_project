@@ -117,3 +117,19 @@
   .workspace-header-tabs button,.workspace-header-tabs a,.ptabs a { font-size:13px; }
   .workstation-shell .mobile-menu-btn { flex-shrink:0; }
 }
+
+/* One right-rail width everywhere. The header's utility cluster (search, portfolio, alerts) is exactly that wide,
+   so its divider continues straight into every page's right-panel border. */
+.workstation-shell { --rail-width:340px; }
+@media(max-width:1250px) { .workstation-shell { --rail-width:300px; } }
+@media(min-width:1051px) {
+  .workstation-shell .app-topbar,
+  .workstation-shell[data-workspace="portfolio"] .app-topbar { padding-right:0; }
+  .workstation-shell .app-topbar > .workspace-header-utilities,
+  .workstation-shell[data-workspace="portfolio"] .app-topbar > .workspace-header-utilities {
+    width:var(--rail-width); box-sizing:border-box; flex:0 0 var(--rail-width);
+    height:100%; margin-left:0; padding:0 18px; gap:6px; border-left:1px solid var(--line);
+  }
+  .workstation-shell .app-topbar .workspace-header-utilities .portfolio-context { flex:1 1 auto; min-width:0; max-width:none; }
+  .workstation-shell .app-topbar .workspace-header-utilities .portfolio-context select { max-width:100%; width:100%; }
+}

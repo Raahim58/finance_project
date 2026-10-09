@@ -1,4 +1,4 @@
-.layout { display:grid; grid-template-columns:minmax(0,1fr) 340px; color:var(--rx-ink); }
+.layout { display:grid; grid-template-columns:minmax(0,1fr) var(--rail-width); color:var(--rx-ink); }
 .main { min-width:0; padding:24px 28px 40px; }
 .rail { border-left:1px solid var(--rx-line); padding:24px 28px 40px; }
 .empty { padding:24px; color:var(--rx-muted); }
@@ -30,3 +30,5 @@
 @media (max-width:720px) { .kpis,.hero { grid-template-columns:repeat(2,minmax(0,1fr)); } .main { padding-inline:16px; } }
 
 .main,.rail{padding-top:34px}
+
+.rail{padding-top:18px}

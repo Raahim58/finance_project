@@ -1,8 +1,8 @@
 /* Research, Monitoring, Recommendations and Activity workspaces.
    Type scale: page title 30/600 · section heading 20/600 · body + controls 14 · table cells + labels 13 · sources + metadata 12.
    Header and left-panel geometry lives in app/workspace-system.css. */
-.workspace{display:grid;grid-template-columns:280px minmax(0,1fr) 340px;min-height:calc(100vh - var(--workspace-header-height));background:var(--paper);color:var(--ink);font-family:var(--font-ui);font-size:14px;line-height:1.55}
-.two{grid-template-columns:minmax(0,1fr) 360px}
+.workspace{display:grid;grid-template-columns:280px minmax(0,1fr) var(--rail-width);min-height:calc(100vh - var(--workspace-header-height));background:var(--paper);color:var(--ink);font-family:var(--font-ui);font-size:14px;line-height:1.55}
+.two{grid-template-columns:minmax(0,1fr) var(--rail-width)}
 .left,.right,.main{min-width:0;padding:20px 24px}
 .left{border-right:1px solid var(--line)}
 .right{border-left:1px solid var(--line);display:flex;flex-direction:column;gap:14px}
@@ -101,9 +101,9 @@
 
 :where(.workspace) button:focus-visible,:where(.workspace) a:focus-visible,:where(.workspace) input:focus-visible,:where(.workspace) select:focus-visible,:where(.workspace) textarea:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
 
-@media(min-width:1650px){.workspace{grid-template-columns:300px minmax(0,1fr) 370px}.two{grid-template-columns:minmax(0,1fr) 390px}}
+@media(min-width:1650px){.workspace{grid-template-columns:300px minmax(0,1fr) var(--rail-width)}}
 @media(min-width:1201px){.left[data-document-browser="true"]{position:sticky;top:0;height:100vh;overflow-y:auto}.left[data-document-browser="true"]~.right{position:sticky;top:var(--workspace-header-height);height:calc(100vh - var(--workspace-header-height));overflow-y:auto;align-self:start}}
-@media(max-width:1200px){.workspace{grid-template-columns:220px minmax(0,1fr)}.right{grid-column:2;border-top:1px solid var(--line);border-left:0}.two{grid-template-columns:minmax(0,1fr) 320px}.two .right{grid-column:auto;border-top:0;border-left:1px solid var(--line)}.left{grid-row:span 2}.heading{font-size:28px}}
+@media(max-width:1200px){.workspace{grid-template-columns:220px minmax(0,1fr)}.right{grid-column:2;border-top:1px solid var(--line);border-left:0}.two{grid-template-columns:minmax(0,1fr) var(--rail-width)}.two .right{grid-column:auto;border-top:0;border-left:1px solid var(--line)}.left{grid-row:span 2}.heading{font-size:28px}}
 @media(max-width:760px){.workspace,.two{grid-template-columns:minmax(0,1fr)}.left{grid-row:auto;border-right:0;border-bottom:1px solid var(--line);padding:18px}.left .nav{flex-direction:row;flex-wrap:wrap}.left .nav button{padding:7px}.left .section{margin-top:12px;padding-top:12px}.right,.two .right{grid-column:1;border-left:0;border-top:1px solid var(--line);padding:20px}.main{padding:22px 18px}.heading{font-size:26px}.table{min-width:500px}.composer{margin-top:15px}.reader h2{font-size:25px}.documentPage{padding:18px;font-size:13px}}
 
 /* Local filter row (Monitoring, Recommendations, Activity): filter field first, selectors after. */
