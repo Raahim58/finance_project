@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useAssistantWorkspace } from "@/components/AssistantWorkspace";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ComparisonTable } from "@/components/DecisionTables";
@@ -25,8 +24,6 @@ const tone = (value: number | null | undefined, goodWhenPositive = true) => valu
 const constraintPct = (value: unknown) => { const n = numeric(value); return n == null ? "Not set" : pctOf(n, 1); };
 
 export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: string; data: WorkspaceData; setMessage: (message: string) => void }) {
-  const assistant = useAssistantWorkspace();
-  const [question, setQuestion] = useState("");
   const [selectedAllocationId, setSelectedAllocationId] = useState("");
   const hydratedAllocation = useRef("");
   const proposalName = (row: AllocationSet) => typeof row.assumptions?.name === "string" ? row.assumptions.name : "";
@@ -57,6 +54,7 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
   const [extras, setExtras] = useState<BuildExtras | null>(null);
   const [extrasError, setExtrasError] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [draftName, setDraftName] = useState<string | null>(null);
   useEffect(() => {
     if (dirty) return;
     if (savedAllocation && hydratedAllocation.current !== savedAllocation.id) {
@@ -131,14 +129,14 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
     try {
       const allocation = await createAllocation(portfolioId, {
         kind: "sandbox", base_value: Number(summary?.total_value ?? 0),
-        assumptions: { source: "manual_build_workspace", compliance_snapshot: comparison?.proposed_compliance ?? null, ...(recommendationId ? { recommendation_id: recommendationId } : {}) },
+        assumptions: { source: "manual_build_workspace", ...((draftName ?? (savedAllocation ? proposalName(savedAllocation) : "")) ? { name: draftName ?? proposalName(savedAllocation!) } : {}), compliance_snapshot: comparison?.proposed_compliance ?? null, ...(recommendationId ? { recommendation_id: recommendationId } : {}) },
         items: Object.entries(proposed).filter(([, weight]) => weight > 0).map(([symbol, weight]) => ({ symbol, target_weight: weight, locked: false, is_cash: symbol === "CASH" })),
       });
       if (recommendationId) await decideRecommendation(recommendationId, "reviewed");
-      setMessage(`Sandbox allocation v${allocation.version} saved${recommendationId ? " and linked to the recommendation" : ""}. Actual holdings were not changed.`); refreshAllocations();
+      setMessage(`Sandbox allocation v${allocation.version} saved${recommendationId ? " and linked to the recommendation" : ""}. Actual holdings were not changed.`); refreshAllocations(); hydratedAllocation.current = ""; setSelectedAllocationId(String(allocation.id)); setDraftName(null); setDirty(false);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not save sandbox"); } finally { setRunning(false); }
   }
-  function reset() { setObjective(DEFAULT_OBJECTIVE); setMethod(DEFAULT_METHOD); setTargetVolatility(""); setTargetBeta(""); setAnalystReturns({}); setDirty(true); setProposed(current); setComparison(null); setDiagnostics(null); }
+  function reset() { setDraftName(null); setObjective(DEFAULT_OBJECTIVE); setMethod(DEFAULT_METHOD); setTargetVolatility(""); setTargetBeta(""); setAnalystReturns({}); setDirty(true); setProposed(current); setComparison(null); setDiagnostics(null); }
   const setWeight = (symbol: string, percent: string) => { setDirty(true); setComparison(null); setProposed(values => ({ ...values, [symbol]: Math.max(0, Number(percent) || 0) / 100 })); };
 
   if (!summary) return <div className={styles.empty}>Loading portfolio holdings…</div>;
@@ -212,19 +210,14 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
   const missingTarget = objective === "target_volatility_maximum_return" ? !targetVolatility || Number(targetVolatility) <= 0 : objective === "target_beta" ? !targetBeta || !Number.isFinite(Number(targetBeta)) : false;
   const proposalStatus = !comparison ? "Not evaluated" : fitProposed?.notEvaluated || comparison.proposed_compliance.status === "BREACH" ? `${(fitProposed?.evaluated ?? 0) - (fitProposed?.passed ?? 0)} breach · ${fitProposed?.notEvaluated ?? 0} check unavailable` : comparison.proposed_compliance.status === "PASS" ? "Evaluated checks passed" : "Not evaluated";
   return <div className={styles.root}>
-    <main data-portfolio-panel="content" className={styles.main}>
-      {savedAllocation && !dirty
-        ? <input key={savedAllocation.id} className={styles.titleInput} aria-label="Proposal name" maxLength={80} defaultValue={proposalName(savedAllocation)} placeholder={`Saved proposal · ${formatDate(savedAllocation.created_at)}`}
-            onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); }}
-            onBlur={event => { const name = event.currentTarget.value.trim(); if (name === proposalName(savedAllocation)) return;
-              void renameAllocation(portfolioId, savedAllocation.id, name).then(refreshAllocations).catch(error => setMessage(error instanceof Error ? error.message : "Could not rename the proposal")); }} />
-        : <h1 className={styles.title}>Portfolio construction</h1>}
+    <aside data-workspace-left-panel className={styles.left} aria-label="Build options">
+      <h2 className={styles.h2}>Build options</h2>
       <div className={styles.toolbar}>
         <label className={styles.control}>Objective<select id="build-objective" className={styles.field} value={objective} onChange={event => setObjective(event.target.value)}>{objectiveOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <label className={styles.control}>Method<select id="build-method" className={styles.field} value={method} disabled={!usesReturns} onChange={event => setMethod(event.target.value)}>{returnMethodOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <button type="button" className={styles.btn} disabled={running || !weightState.valid} onClick={() => void analyze()}>{running ? "Calculating…" : savedAllocation && !dirty ? "Compare saved proposal" : "Compare proposal"}</button>
-        <button type="button" className={styles.btnSmall} disabled={running || !weightState.valid} onClick={saveSandbox}>Save sandbox</button>
-        <details className={styles.actions}><summary aria-label="Construction actions">•••</summary><button type="button" disabled={running || Boolean(compatibilityProblem) || analystIncomplete || missingTarget} onClick={optimize}>Run optimization</button><button type="button" disabled={running} onClick={reset}>Reset to current holdings</button></details>
+        <button type="button" className={styles.btnSmall} disabled={running || !weightState.valid} onClick={saveSandbox}>{dirty && savedAllocation ? "Save changes" : "Save sandbox"}</button>
+        <details className={styles.actions}><summary aria-label="Construction actions">•••</summary><div className={styles.menu}><button type="button" disabled={running || Boolean(compatibilityProblem) || analystIncomplete || missingTarget} onClick={optimize}>Run optimization</button><button type="button" disabled={running} onClick={reset}>Reset to current holdings</button></div></details>
       </div>
       <p className={styles.sub}>Proposal only · holdings and transactions remain unchanged. Comparison uses current stored market inputs; configuration controls apply to a new optimizer run.</p>
       {savedAllocations.length > 1 ? <label className={styles.saved}>Saved proposal<select className={styles.field} value={savedAllocation?.id ?? ""} onChange={event => {setDirty(false); hydratedAllocation.current = ""; setSelectedAllocationId(event.target.value);}}>{savedAllocations.map(row => <option key={row.id} value={row.id}>{proposalLabel(row)}</option>)}</select></label> : null}
@@ -233,6 +226,17 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
       {objective === "target_volatility_maximum_return" ? <label className={styles.saved}>Target volatility (%)<input className={styles.field} type="number" min="0.1" step="0.1" value={targetVolatility} onChange={event => setTargetVolatility(event.target.value)} /></label> : null}
       {objective === "target_beta" ? <label className={styles.saved}>Target beta<input className={styles.field} type="number" step="0.05" value={targetBeta} onChange={event => setTargetBeta(event.target.value)} /></label> : null}
       {usesReturns && method === "user_model" ? <div className={styles.analyst}>{riskySymbols.map(symbol => <label key={symbol}>{symbol} annual return (%)<input type="number" step="0.1" value={analystReturns[symbol] ?? ""} onChange={event => setAnalystReturns(values => ({ ...values, [symbol]: event.target.value }))} /></label>)}</div> : null}
+    </aside>
+    <main data-portfolio-panel="content" className={styles.main}>
+      {savedAllocation
+        ? <input key={`${savedAllocation.id}-${dirty}`} className={styles.titleInput} aria-label="Proposal name" maxLength={80} defaultValue={dirty ? draftName ?? proposalName(savedAllocation) : proposalName(savedAllocation)} placeholder={`Saved proposal · ${formatDate(savedAllocation.created_at)}`}
+            onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); }}
+            onBlur={event => { const name = event.currentTarget.value.trim();
+              if (dirty) { setDraftName(name); return; }
+              if (name === proposalName(savedAllocation)) return;
+              void renameAllocation(portfolioId, savedAllocation.id, name).then(refreshAllocations).catch(error => setMessage(error instanceof Error ? error.message : "Could not rename the proposal")); }} />
+        : <h1 className={styles.title}>Portfolio construction</h1>}
+      {dirty ? <p className={styles.editing}>Editing{savedAllocation ? " a copy of this proposal" : ""} · unsaved changes. Saving creates a new version; the stored proposal is not overwritten.</p> : null}
       <div className={styles.allocations}>
         <section><div className={styles.allocationHeading}><h2>Current allocation</h2><span>Total {pctOf(Object.values(current).reduce((sum, value) => sum + value, 0))}</span></div>
           <table className={styles.table}><thead><tr><th>#</th><th>Company</th><th className={styles.num}>Weight</th><th /></tr></thead><tbody>{rowsView.rows.map((row,index) => renderRow(row,index,"current"))}{othersRow("current")}</tbody></table>
@@ -251,11 +255,11 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
       {diagnostics ? <details className={styles.details}><summary>Optimizer diagnostics</summary><pre>{JSON.stringify(diagnostics,null,2)}</pre></details> : null}
     </main>
     <aside data-portfolio-panel="context" className={styles.rail}>
-      <h2 className={styles.h2}>Proposal review</h2><p className={`${styles.notice} ${comparison?.proposed_compliance.status === "BREACH" ? styles.noticeBad : ""}`}>{proposalStatus}</p>
+      <h2 className={styles.h2}>Proposal review</h2>
+      <div className={`${styles.status} ${comparison?.proposed_compliance.status === "BREACH" ? styles.statusBad : comparison?.proposed_compliance.status === "PASS" && !fitProposed?.notEvaluated ? styles.statusOk : ""}`} role="status"><span className={styles.statusDot} aria-hidden="true" /><div><small>IPS compliance</small><strong>{proposalStatus}</strong></div></div>
+      {comparison?.warnings?.map(line => <p className={styles.sub} key={line}>{line}</p>)}
       {insights ? <div className={styles.insight}>{insights.lines.map(line => <p key={line}>{line}</p>)}</div> : <p className={styles.sub}>Compare the allocation to evaluate modeled changes and IPS checks.</p>}
       <section className={styles.insight}><h3>Stored constraints</h3>{confirmed ? <dl className={styles.constraints}>{mandate.map(([label,value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl> : <p className={styles.sub}>—</p>}<Link className={styles.link} href={`/portfolios/${portfolioId}/ips` as never}>Review IPS →</Link>{comparison ? <a className={styles.checkLink} href="#build-checks" onClick={() => {const details = document.getElementById("build-checks") as HTMLDetailsElement | null; if(details) details.open=true;}}>View failed checks</a> : null}</section>
-      <section className={styles.insight}><h3>Methodology</h3><p>{comparison ? humanize(String(comparison.assumptions?.expected_return_method ?? "Unavailable")) : "—"}</p><p>{comparison ? "Comparison includes cash; historical model output, not a forecast." : savedAllocation ? `Stored ${humanize(savedAllocation.kind).toLowerCase()} allocation v${savedAllocation.version}.` : "No saved proposal."}</p>{comparison?.warnings?.map(line => <p key={line}>{line}</p>)}<Link className={styles.link} href={`/portfolios/${portfolioId}/quant` as never}>Open quant analysis →</Link></section>
-      <section className={styles.ask}><h3>Ask</h3><form onSubmit={event => {event.preventDefault(); if(question.trim()) assistant?.open(question.trim());}}><textarea aria-label="Ask about this proposal" placeholder="Explain the allocation changes" value={question} onChange={event => setQuestion(event.target.value)}/><button type="submit" aria-label="Open assistant with proposal question" disabled={!question.trim()}>↑</button></form></section>
     </aside>
   </div>;
 }

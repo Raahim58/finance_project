@@ -9,7 +9,7 @@ const capabilities = [
 
 export default function HomePage() {
   return (
-    <main className="min-h-screen bg-[#f7f7f4]">
+    <main className="min-h-screen bg-[var(--canvas)]">
       <header className="mx-auto flex h-[74px] max-w-[1440px] items-center justify-between px-5 sm:px-8 lg:px-12">
         <Link href="/" className="flex items-center gap-3" aria-label="PSX Workstation home">
           <span className="brand-mark">PX</span>
@@ -43,7 +43,7 @@ export default function HomePage() {
               {[["Workspace","grid"],["Portfolios","briefcase"],["Markets","market"],["Research","search"],["Monitoring","bell"]].map(([label,icon],index)=><div key={label} className={`mb-1 flex items-center gap-3 rounded-lg px-3 py-2.5 text-xs font-semibold ${index===1?"bg-[#e8f3ee] text-accent":"text-muted"}`}><Icon name={icon as "grid"} size={16}/>{label}</div>)}
               <div className="mt-28 rounded-lg bg-surface p-3 text-[10px] leading-4 text-muted"><strong className="block text-ink">Decision support only</strong>No trade execution</div>
             </aside>
-            <div className="min-w-0 bg-[#f7f7f4]">
+            <div className="min-w-0 bg-[var(--canvas)]">
               <div className="flex h-12 items-center justify-between border-b border-line px-5 text-[10px] text-muted"><span className="font-semibold text-ink">Portfolio workspace</span><span className="flex items-center gap-2"><i className="h-1.5 w-1.5 rounded-full bg-accent"/>Source and freshness labels active</span></div>
               <div className="p-5 sm:p-7">
                 <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">

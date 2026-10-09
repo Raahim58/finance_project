@@ -35,7 +35,7 @@ NUMBER = re.compile(r"\(?-?\d[\d,]*(?:\.\d+)?\)?")
 STATEMENT_SIGNALS = ("financial position", "balance sheet", "profit and loss", "income statement", "profit or loss", "cash flow")
 MAX_OCR_PAGES = 80
 OCR_PAGE_TIMEOUT_SECONDS = 30
-FINANCIAL_EXTRACTION_VERSION = "financial-layout-v4-validated-columns"
+FINANCIAL_EXTRACTION_VERSION = "financial-layout-v5-local-units"
 
 
 class _MalformedPdfColorFilter(logging.Filter):
@@ -165,12 +165,20 @@ def _ocr_financial_pages(content: bytes, page_count: int) -> tuple[list[Financia
 
 
 def _scale(text: str) -> Decimal | None:
-    lowered = unicodedata.normalize("NFKC", text).lower().replace("‘", "\'").replace("’", "\'")
-    if re.search(r"(?:rs\.?|rupees|pkr)\s*(?:in)?\s*(?:'000|000s|thousand)", lowered): return Decimal("1000")
-    if re.search(r"(?:rs\.?|rupees|pkr)\s*(?:in)?\s*(?:million|mn)", lowered): return Decimal("1000000")
-    if re.search(r"(?:rs\.?|rupees|pkr)\s*(?:in)?\s*(?:billion|bn)", lowered): return Decimal("1000000000")
-    if re.search(r"(?:amounts?\s+in\s+)?(?:rs\.?|rupees|pkr)(?:\s+unless|\s*$)", lowered, re.MULTILINE): return Decimal("1")
-    return None
+    lowered = unicodedata.normalize("NFKC", text).lower().replace("‘", "'").replace("’", "'")
+    lowered = re.sub(r"[()\[\]:]", " ", lowered)
+    currency = r"(?:rs\.?|rupees|pkr)"
+    scales = set()
+    for suffix, multiplier in ((r"(?:'000|000s?|thousands?)", "1000"),
+                               (r"(?:millions?|mn)", "1000000"),
+                               (r"(?:billions?|bn)", "1000000000")):
+        if re.search(currency + r"\s*(?:in)?\s*" + suffix + r"\b", lowered):
+            scales.add(Decimal(multiplier))
+    if re.search(r"(?:amounts?\s+in\s+)?" + currency + r"(?:\s+unless|\s*$)", lowered, re.MULTILINE):
+        scales.add(Decimal(1))
+    # Several statements on one page can have different units. There is no
+    # page-wide default in that case; each explicit local heading sets its scope.
+    return next(iter(scales)) if len(scales) == 1 else None
 
 
 def resolve_report_period(pages: list[object], fallback: date) -> date:
@@ -222,7 +230,8 @@ def extract_facts(
             lowered = line.lower().rstrip(":")
             if re.search(r"analysis.*%", lowered):
                 percentage_scope = True
-            elif _scale(line) is not None:
+            elif (line_scale := _scale(line)) is not None:
+                scale = line_scale
                 percentage_scope = False
             if len(line) < 160:
                 if (re.match(r"^(?:notes to the )?(?:unconsolidated|standalone)\b", lowered)

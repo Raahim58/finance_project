@@ -28,8 +28,9 @@ test("demo decision workflow stays semantically connected", async ({ page }) => 
   await expect(page.getByText(/Regime:/)).toBeVisible();
   await expect(page.getByText("Broad PSX drawdown", { exact: true })).toBeVisible();
 
-  await page.goto("/recommendations");
-  const review = page.getByRole("link", { name: /Review in Build|Revise linked proposal/ }).first();
+  await page.goto("/monitoring");
+  await page.getByRole("button", { name: "Reviews", exact: true }).click();
+  const review = page.getByRole("link", { name: /Open linked proposal/ }).first();
   await expect(review).toHaveAttribute("href", /\/build\?recommendation=/);
 
   await page.goto("/market");

@@ -279,10 +279,10 @@ def upsert_company_from_price_row(db: Session, row: LatestPriceRow, *, source: s
         instrument.name = company.name
         instrument.sector = company.sector
     if source.lower() == "dps":
-        instrument.active_from = instrument.active_from or date.today()
         instrument.active_to = None
     if source.lower() != "mock":
         metadata = json.loads(instrument.metadata_json or "{}")
+        metadata.setdefault("catalog_first_seen_on", date.today().isoformat())
         metadata.update(
             {
                 "data_classification": "observed",

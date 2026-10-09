@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.models.document import Document, DocumentPage, DocumentChunk
 from app.models.workstation import SourceArtifact
 from app.ingestion.artifact_store import get_artifact_store
-from app.providers.fundamentals.extraction import _native_text_pages
+from app.providers.fundamentals.extraction import _native_text_pages, parse_financial_pdf
 from app.services.rag_service import ParsedPage, index_document_pages, active_embedding_model
 
 REPORT_TYPES = ("annual_report", "quarterly_report", "interim_report")
@@ -94,10 +94,17 @@ def prepare_report(db, document_id):
     content = get_artifact_store(settings).get(artifact.storage_path)
     if hashlib.sha256(content).hexdigest() != artifact.sha256:
         raise ValueError("Artifact hash mismatch")
-    pages = [ParsedPage(p.page_number, p.text) for p in _native_text_pages(content)]
+    native = _native_text_pages(content)
+    coverage_note = None
+    if not any(page.text.strip() for page in native):
+        native, classification, diagnostics = parse_financial_pdf(content)
+        coverage_note = "Bounded OCR selected pages; remaining report pages are unavailable."
+        if not any(page.text.strip() for page in native):
+            raise ValueError("Report text unavailable after bounded OCR")
+    pages = [ParsedPage(p.page_number, p.text) for p in native if p.text.strip()]
     count = index_document_pages(db, document, pages)
     db.commit()
-    return {"document_id": document_id, "status": "indexed", "pages": len(pages), "chunks": count}
+    return {"document_id": document_id, "status": "indexed", "pages": len(pages), "chunks": count, "coverage_note": coverage_note}
 
 
 def document_page(db, user, document_id, page_number):

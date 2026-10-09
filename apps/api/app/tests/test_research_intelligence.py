@@ -792,3 +792,22 @@ def test_portfolio_intelligence_is_cached_per_holdings_and_limits_events(monkeyp
     summary.model_dump = lambda mode="json": {"total_value": "101"}
     service.portfolio_intelligence(None, user, "p1", 3)
     assert len(calls) == 2
+
+
+def test_scanned_retained_report_uses_bounded_ocr_and_keeps_physical_pages(monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+    from app.models.workstation import DataSource, SourceArtifact
+    from app.services import research_evidence_service as service
+    from app.providers.fundamentals.extraction import FinancialPage
+    content=b'offline scanned report fixture'
+    monkeypatch.setattr(service,'get_artifact_store',lambda _:SimpleNamespace(get=lambda _:content))
+    monkeypatch.setattr(service,'_native_text_pages',lambda _:[FinancialPage(8,'')])
+    monkeypatch.setattr(service,'parse_financial_pdf',lambda _:([FinancialPage(8,'Source financing disclosure from OCR.')],'ocr',['Bounded OCR']))
+    with SessionLocal() as db:
+        source=DataSource(name='Offline fixture',source_type='report');db.add(source);db.flush()
+        artifact=SourceArtifact(data_source_id=source.id,sha256=hashlib.sha256(content).hexdigest(),storage_path='fixture',parser_version='fixture',source_url='https://example.test/offline-report.pdf');db.add(artifact);db.flush()
+        doc=Document(title='Offline scanned report',document_type='annual_report',source_name='Fixture',content_hash=artifact.sha256,artifact_id=artifact.id,data_status='observed');db.add(doc);db.commit()
+        result=service.prepare_report(db,doc.id)
+        assert result['status']=='indexed' and result['coverage_note'].startswith('Bounded OCR')
+        assert db.scalar(select(DocumentPage).where(DocumentPage.document_id==doc.id)).page_number==8

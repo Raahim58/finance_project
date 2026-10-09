@@ -11,6 +11,7 @@ from app.models.workstation import DataSource, Instrument
 from app.models.evidence import EvidenceSourceConfig
 from app.services.pipeline.runs import enqueue
 from app.services.ingestion_persistence import source
+from app.services.instrument_history import history_start
 
 
 def news_start(day):
@@ -62,7 +63,7 @@ def historical(db,symbol, *, price_start=None):
     count=0
     if price_start:
         first=date.fromisoformat(price_start)
-        first=max(first,instrument.active_from) if instrument.active_from else first
+        first=history_start(instrument, first)
         if first>end: raise ValueError('history_start_after_end')
         cursor=first.replace(day=1)
         while cursor<=end:

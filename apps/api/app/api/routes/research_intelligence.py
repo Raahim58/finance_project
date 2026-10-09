@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.session import get_db
@@ -91,3 +91,29 @@ def retry_digest(symbol: str, user: User = Depends(get_current_user), db: Sessio
     from app.services.research_intelligence_service import resolve_company
     from app.services.company_digest_service import read_digest
     return read_digest(db,user,resolve_company(db,symbol),active=True,retry=True)
+
+
+def _brief(scope, key, background, user, db, retry=False):
+    import asyncio
+    from app.services import brief_service
+    def schedule(user_id, s, k, h):
+        background.add_task(brief_service.generate, user_id, s, k, h)
+    return brief_service.read(db, user, scope, key, schedule=schedule, retry=retry)
+
+
+@router.get("/research/briefs/market")
+def market_brief(background: BackgroundTasks, retry: bool = False, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return _brief("market", "", background, user, db, retry)
+
+
+@router.get("/research/briefs/portfolio/{portfolio_id}")
+def portfolio_brief(portfolio_id: str, background: BackgroundTasks, retry: bool = False, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.portfolio_access import get_portfolio_or_404
+    get_portfolio_or_404(db, user, portfolio_id)
+    return _brief("portfolio", portfolio_id, background, user, db, retry)
+
+
+@router.get("/research/briefs/company/{symbol}")
+def company_brief(symbol: str, background: BackgroundTasks, retry: bool = False, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.research_intelligence_service import resolve_company
+    return _brief("company", resolve_company(db, symbol).symbol.upper(), background, user, db, retry)

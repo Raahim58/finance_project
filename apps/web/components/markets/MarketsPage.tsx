@@ -17,6 +17,8 @@ import { MarketDigest } from "./MarketDigest";
 import { WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { MarketDetailRail,type MarketSelection } from "./MarketDetailRail";
 import { MarketRail } from "./MarketRail";
+import { useBrief } from "@/components/AIBriefCard";
+import { getMarketBrief } from "@/lib/api/research";
 import styles from "./markets.module.css";
 
 type Data = ReturnType<typeof useMarketsData>;
@@ -31,6 +33,7 @@ function Note({ resource, empty }: { resource: Resource<unknown>; empty: string 
 
 export function MarketsPage() {
   const data = useMarketsData();
+  const brief = useBrief(getMarketBrief);
   const [view, setView] = useState<MarketView>("index");
   const [query, setQuery] = useState("");
   const [selection,setSelection]=useState<MarketSelection|null>(null);
@@ -45,15 +48,15 @@ export function MarketsPage() {
   const changeBySymbol = useMemo(() => new Map((session?.prices ?? [...(session?.top_gainers ?? []), ...(session?.top_losers ?? []), ...(session?.top_volume ?? [])]).map(row => [row.symbol, row.change_percent])), [session]);
   const failed = [data.market, data.freshness, data.events, data.history, data.companies].some(resource => resource.status === "error");
   return <div className={styles.page}>
-    <WorkspaceHeader title="Markets"><nav className="workspace-header-tabs" aria-label="Market views">{([["index","Market digest"],["stocks","All stocks"],["sectors","Sectors"],["events","Events"]] as const).map(([key,label])=><button key={key} aria-current={view===key?"page":undefined} onClick={()=>setView(key)}>{label}</button>)}</nav><button className="workspace-header-action" aria-label="Refresh market view" onClick={()=>{clearApiCache();data.reload()}}><Icon name="clock" size={15}/></button></WorkspaceHeader>
+    <WorkspaceHeader title=""><nav className="workspace-header-tabs" aria-label="Market views">{([["index","Market digest"],["stocks","All stocks"],["sectors","Sectors"],["events","Events"]] as const).map(([key,label])=><button key={key} aria-current={view===key?"page":undefined} onClick={()=>setView(key)}>{label}</button>)}</nav><button className="workspace-header-action" aria-label="Refresh market view" onClick={()=>{clearApiCache();data.reload()}}><Icon name="clock" size={15}/></button></WorkspaceHeader>
     <MarketCatalog view={view} select={setView} market={session ?? null} freshness={fresh} companies={data.companies.data ?? []} onCompany={openCompany} chart={<IndexPanel data={data} />} />
     <div className={styles.main}>
-      <p className={styles.dateline}>
+      {view !== "index" ? <p className={styles.dateline}>
         <span>{(session?.trade_date ?? fresh?.latest_trade_date ?? latest?.date) ? new Date(`${session?.trade_date ?? fresh?.latest_trade_date ?? latest?.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : "Date unavailable"}</span>
         <span>{fresh ? `Market ${fresh.exchange_session_status === "unknown" ? "session unknown" : fresh.exchange_session_status}` : "Session unavailable"}</span>
         {latest?.percent != null ? <span>{latest.name} <b className={tone(latest.percent)}>{formatPercent(latest.percent)}</b></span> : null}
-      </p>
-      {session?.trade_date ? <p className={styles.source} role="status">
+      </p> : null}
+      {view !== "index" && session?.trade_date ? <p className={styles.source} role="status">
         {session.price_basis === "intraday" ? "Observed intraday quotes" : "Latest daily session"} · {formatDate(session.trade_date)} · {session.priced_securities} securities
         {session.observed_at ? ` · Retrieved ${timeAgo(session.observed_at)}` : ""}
         {session.latest_quote_date && session.latest_quote_date > session.trade_date ? ` · ${session.latest_quote_count} newer quotes (${formatDate(session.latest_quote_date)}); insufficient coverage for market rankings` : ""}
@@ -63,10 +66,10 @@ export function MarketsPage() {
         <span>{fresh.market_data_mode === "mock" ? "Demo market data" : "Market data needs review"}{[fresh.provider_mode_warning, fresh.ingestion_staleness_warning, fresh.stale_warning].filter(Boolean).slice(0, 1).map(text => ` · ${text}`)}</span></div> : null}
       {failed ? <div className={styles.notice} role="status"><span>Some sections could not be loaded. Available data is shown below.</span><button onClick={() => { clearApiCache(); data.reload(); }}>Retry</button></div> : null}
       {view === "stocks" ? <MoversPanels data={data} bySymbol={bySymbol} query={query} setQuery={setQuery} onCompany={openCompany}/> : null}
-      {view === "index" ? <MarketDigest market={session ?? null} events={data.events.data ?? []} companies={bySymbol} onStocks={() => setView("stocks")} /> : view === "stocks" ? <StocksPanel companies={data.companies} query={query} setQuery={setQuery} changes={changeBySymbol} prices={prices} onCompany={openCompany} onSector={openSector} selected={selection?.kind==="company"?selection.symbol:undefined}/> : view === "sectors" ? <SectorsPanel resource={data.market} onSector={openSector}/> : <section className={styles.eventList}><h2>Recent market events</h2>{(data.events.data ?? []).map(event => <article key={event.event_key}><small>{formatDate(event.occurred_at)}</small><h3>{event.title}</h3><a href={event.evidence[0]?.source_url ?? "/research"}>{event.evidence[0]?.source_name ?? "View evidence"} ↗</a></article>)}{!data.events.data?.length ? <Note resource={data.events} empty="No selected market event evidence is available." /> : null}</section>}
-      <p className={styles.source}>{fresh?.latest_used_provider ?? fresh?.latest_source ?? snapshot?.source ?? "Source unavailable"} · prices as of {formatDate(session?.trade_date ?? fresh?.latest_trade_date ?? snapshot?.snapshot_date)} · refreshes hourly</p>
+      {view === "index" ? <MarketDigest brief={brief} market={session ?? null} events={data.events.data ?? []} companies={bySymbol} onStocks={() => setView("stocks")} /> : view === "stocks" ? <StocksPanel companies={data.companies} query={query} setQuery={setQuery} changes={changeBySymbol} prices={prices} onCompany={openCompany} onSector={openSector} selected={selection?.kind==="company"?selection.symbol:undefined}/> : view === "sectors" ? <SectorsPanel resource={data.market} onSector={openSector}/> : <section className={styles.eventList}><h2>Recent market events</h2>{(data.events.data ?? []).map(event => <article key={event.event_key}><small>{formatDate(event.occurred_at)}</small><h3>{event.title}</h3><a href={event.evidence[0]?.source_url ?? "/research"}>{event.evidence[0]?.source_name ?? "View evidence"} ↗</a></article>)}{!data.events.data?.length ? <Note resource={data.events} empty="No selected market event evidence is available." /> : null}</section>}
+      {view !== "index" ? <p className={styles.source}>{fresh?.latest_used_provider ?? fresh?.latest_source ?? snapshot?.source ?? "Source unavailable"} · prices as of {formatDate(session?.trade_date ?? fresh?.latest_trade_date ?? snapshot?.snapshot_date)} · refreshes hourly</p> : null}
     </div>
-    {selection?<MarketDetailRail key={selection.kind=== "company"?`company:${selection.symbol}`:`sector:${selection.sector}`} selection={selection} companies={data.companies.data??[]} market={session??null} onClose={()=>setSelection(null)} onCompany={openCompany} onSector={openSector}/>:<MarketRail market={session ?? null} events={data.events.data ?? []} loading={data.events.status === "loading"} onSector={openSector}/> }
+    {selection?<MarketDetailRail key={selection.kind=== "company"?`company:${selection.symbol}`:`sector:${selection.sector}`} selection={selection} companies={data.companies.data??[]} market={session??null} onClose={()=>setSelection(null)} onCompany={openCompany} onSector={openSector}/>:<MarketRail brief={brief} market={session ?? null} events={data.events.data ?? []} loading={data.events.status === "loading"} onSector={openSector}/> }
   </div>;
 }
 
@@ -157,7 +160,7 @@ function StocksPanel({ companies, query, setQuery, changes, prices,onCompany,onS
   const rows = (companies.data ?? []).filter(company => !needle || company.symbol.toLowerCase().includes(needle) || company.name.toLowerCase().includes(needle) || company.sector.toLowerCase().includes(needle));
   return <section className={styles.sectors}>
     <div className={styles.moversBar}><h2>{rows.length} companies</h2>
-      <div className={styles.search}><Icon name="search" size={15} /><input aria-label="Filter stocks" placeholder="Filter by symbol, name or sector…" value={query} onChange={event => setQuery(event.target.value)} /></div></div>
+      <div className={styles.search}><Icon name="search" size={15} /><input aria-label="Filter stocks" placeholder="Filter stocks" value={query} onChange={event => setQuery(event.target.value)} /></div></div>
     {rows.length ? <div className={styles.directory}><table><thead><tr><th>Symbol</th><th>Company</th><th>Sector</th><th>Price (PKR)</th><th>Day %</th><th>Volume</th><th>Quote date</th></tr></thead>
       <tbody>{rows.slice(0, visible).map(company => <tr key={company.symbol} aria-selected={selected===company.symbol}>
         <td><button onClick={()=>onCompany(company.symbol)} className={styles.symbol}><CompanyLogo symbol={company.symbol} website={company.official_website}/><b>{company.symbol}</b></button></td>

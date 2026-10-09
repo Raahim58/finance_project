@@ -66,10 +66,10 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
       className={`assistant-message ${message.role === "user" ? "assistant-user" : "assistant-answer"}`}
     >
       <div className="assistant-message-label">
-        <strong>{message.role === "user" ? "You" : "Assistant"}</strong>
-        <small>
+        {message.role === "user" ? <strong className="sr-only">You</strong> : <><span className="assistant-avatar" aria-hidden="true">R</span><strong className="sr-only">Assistant</strong></>}
+        {message.role === "user" ? null : <small>
           {[context.symbol, context.portfolio_name].filter(Boolean).join(" · ")}
-        </small>
+        </small>}
       </div>
       <Markdown text={message.content} />
       {message.role === "assistant" && message.outcome && message.outcome !== "completed" ? (

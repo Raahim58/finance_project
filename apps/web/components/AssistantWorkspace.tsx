@@ -113,6 +113,9 @@ export function AssistantWorkspaceProvider({
     return () => window.removeEventListener("psx-portfolio-change", changed);
   }, []);
   const [account, setAccount] = useState<string | null>(null);
+  const [launcherHidden, setLauncherHidden] = useState(false);
+  useEffect(()=>{setLauncherHidden(window.localStorage.getItem("psx_ask_hidden")==="1")},[]);
+  const hideLauncher=(hidden:boolean)=>{setLauncherHidden(hidden);window.localStorage.setItem("psx_ask_hidden",hidden?"1":"0")};
   const [opened, setOpened] = useState(false),
     [expanded, setExpanded] = useState(false),
     [showChats, setShowChats] = useState(false);
@@ -513,6 +516,15 @@ export function AssistantWorkspaceProvider({
     live = Object.values(runs).filter((r) => r.conversationId === selected),
     running = live.find((r) => active(r.status)),
     draft = drafts[selected ?? "new"] ?? "";
+  const suggestions = context.portfolio_id
+    ? ["Explain concentration", "Review missing inputs", "What changed recently?"]
+    : context.symbol
+      ? [`Summarise ${context.symbol}`, `Key risks for ${context.symbol}`]
+      : ["Summarise today's market", "What can you tell me about my portfolio?"];
+  const prefill = (text: string) => {
+    setDrafts((old) => ({ ...old, [selected ?? "new"]: text }));
+    composer.current?.focus();
+  };
   const marketWorkspace = !fullPage;
   const action: WorkspaceAction = { open, setCompanyPortfolioScope, setPortfolioScope:setCompanyPortfolioScope, close: () => setOpened(false), opened, chats, selected,
     selectChat: id => { setSelected(id); setOpened(true); setShowChats(false); nearBottom.current = true; },
@@ -520,19 +532,22 @@ export function AssistantWorkspaceProvider({
   return (
     <Workspace.Provider value={action}>
       {children}
-      {!fullPage?<button
-        ref={trigger}
-        className="assistant-launcher"
-        type="button"
-        aria-label="Open Assistant"
-        aria-expanded={opened}
-        onClick={() => setOpened(!opened)}
-      >
-        <span aria-hidden="true">✦</span> Ask
-        {Object.values(runs).some((r) => active(r.status)) ? (
-          <span className="assistant-running-dot" />
-        ) : null}
-      </button>:null}
+      {!fullPage?(launcherHidden?<button type="button" className="assistant-launcher-tab" aria-label="Show Ask" onClick={()=>hideLauncher(false)}>‹</button>:<div className={`assistant-launcher-wrap${opened?" assistant-launcher-open":""}`}>
+        <button
+          ref={trigger}
+          className="assistant-launcher"
+          type="button"
+          aria-label="Open Assistant"
+          aria-expanded={opened}
+          onClick={() => setOpened(!opened)}
+        >
+          <span aria-hidden="true">✦</span> Ask
+          {Object.values(runs).some((r) => active(r.status)) ? (
+            <span className="assistant-running-dot" />
+          ) : null}
+        </button>
+        <button type="button" className="assistant-launcher-dismiss" aria-label="Hide Ask" title="Hide Ask" onClick={()=>hideLauncher(true)}>›</button>
+      </div>):null}
       {opened || fullPage ? (
         <section
           ref={dialog}
@@ -541,17 +556,16 @@ export function AssistantWorkspaceProvider({
           aria-label="Assistant"
           className={`assistant-drawer${expanded && !fullPage ? " assistant-expanded" : ""}${marketWorkspace ? " assistant-market-overlay" : ""}${fullPage ? " assistant-full-page" : ""}`}
         >
-          {fullPage?<aside className="assistant-conversation-list" aria-label="Conversations">
+          {fullPage?<aside data-workspace-left-panel className="assistant-conversation-list" aria-label="Conversations">
             <div><h1>Chats</h1><button type="button" onClick={()=>void newChat()}>＋ New chat</button></div>
             <nav aria-label="Saved chat threads">{chats.map(chat=><button key={chat.id} aria-current={selected===chat.id?"true":undefined} onClick={()=>{setSelected(chat.id);nearBottom.current=true;}}><strong>{chat.title}</strong><span>{chat.latest_activity?formatDate(chat.latest_activity):"—"}{chat.active_run?" · Generating":""}</span></button>)}</nav>
             {!chats.length?<p>No saved chats yet.</p>:null}{chatCursor?<button type="button" onClick={()=>void refreshChats(chatCursor)}>More chats</button>:null}
           </aside>:null}
           <div className="assistant-conversation-column">
-          {fullPage?<div className="assistant-scope-bar"><label>Company <select aria-label="Assistant company context" value={assistantCompany?.id??""} onChange={event=>setAssistantCompany(companyChoices.find(row=>row.id===event.target.value)??null)}><option value="">All companies</option>{companyChoices.map(row=><option key={row.id} value={row.id}>{row.symbol} · {row.name}</option>)}</select></label></div>:null}
+          {fullPage?<div className="assistant-scope-bar"><label>Portfolio <strong>{context.portfolio_name??"None selected"}</strong></label><label>Company <select aria-label="Assistant company context" value={assistantCompany?.id??""} onChange={event=>setAssistantCompany(companyChoices.find(row=>row.id===event.target.value)??null)}><option value="">All companies</option>{companyChoices.map(row=><option key={row.id} value={row.id}>{row.symbol} · {row.name}</option>)}</select></label></div>:null}
           <header className="assistant-header">
             <div>
               <strong>Assistant</strong>
-              <p>Research with your financial context</p>
             </div>
             <div className="flex gap-2">
               {!fullPage?<><button
@@ -583,7 +597,6 @@ export function AssistantWorkspaceProvider({
               </button></>:<Link href="/dashboard">Back to workspace ↗</Link>}
             </div>
           </header>
-          <AssistantProviderSwitch key={account} onProviderChange={setProvider} onSavingChange={setProviderSaving} />
           {showChats && !fullPage ? (
             <nav
               className="assistant-chat-list assistant-chat-dropdown"
@@ -650,6 +663,7 @@ export function AssistantWorkspaceProvider({
                   Ask about a company, compare evidence, or discuss your
                   portfolio. Sources and missing data stay visible.
                 </p>
+                <div className="assistant-suggestions">{suggestions.map((text) => <button key={text} type="button" onClick={() => prefill(text)}>{text}</button>)}</div>
               </div>
             ) : null}
             {history?.items.map((message) => (
@@ -676,11 +690,10 @@ export function AssistantWorkspaceProvider({
                   key={run.execution_id}
                   className="assistant-message assistant-answer"
                 >
-                  <strong>Ask</strong>
-                  <small className="assistant-status">
-                    {" "}
-                    · Provisional answer
-                  </small>
+                  <div className="assistant-message-label">
+                    <span className="assistant-avatar" aria-hidden="true">R</span>
+                    <small className="assistant-status">Unverified draft</small>
+                  </div>
                   {run.text ? <Markdown text={run.text} /> : null}
                   <p role="status" className="assistant-status">
                     {active(run.status)
@@ -750,6 +763,7 @@ export function AssistantWorkspaceProvider({
               {error}
             </p>
           ) : null}
+          {history?.items.length && !running ? <div className="assistant-suggestions assistant-followups">{suggestions.map((text) => <button key={text} type="button" onClick={() => prefill(text)}>{text}</button>)}</div> : null}
           <form
             className="assistant-composer"
             onSubmit={(e) => {
@@ -757,16 +771,11 @@ export function AssistantWorkspaceProvider({
               void send();
             }}
           >
-            <div className="assistant-context">
-              Next message · {context.symbol ?? "All companies"} ·{" "}
-              {context.portfolio_name ?? "No default portfolio"}
-              {!contextReady ? " · Loading context…" : ""}
-            </div>
             <textarea
               ref={composer}
               aria-label="Message Assistant"
               maxLength={8000}
-              placeholder="Ask a question…"
+              placeholder={history?.items.length ? "Ask a follow-up…" : "Ask a question…"}
               value={draft}
               onChange={(e) =>
                 setDrafts((old) => ({
@@ -786,27 +795,37 @@ export function AssistantWorkspaceProvider({
               }}
             />
             <div className="assistant-composer-footer">
-              <span>Enter to send · Shift + Enter for a new line</span>
-              {running ? (
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() =>
-                    void stopRun(running.execution_id).catch((e) =>
-                      setError(e.message),
-                    )
-                  }
-                >
-                  Stop generating
-                </button>
-              ) : (
-                <button
-                  className="btn btn-primary"
-                  disabled={!draft.trim() || submitting || providerSaving || !contextReady}
-                >
-                  {submitting ? "Sending…" : "Send"}
-                </button>
-              )}
+              <span className="assistant-chip" title="Context for the next message">
+                {context.symbol ?? "All companies"} · {context.portfolio_name ?? "No default portfolio"}
+                {!contextReady ? " · Loading…" : ""}
+              </span>
+              <div className="assistant-composer-actions">
+                <AssistantProviderSwitch key={account} onProviderChange={setProvider} onSavingChange={setProviderSaving} />
+                {running ? (
+                  <button
+                    type="button"
+                    className="assistant-send assistant-stop"
+                    aria-label="Stop generating"
+                    title="Stop generating"
+                    onClick={() =>
+                      void stopRun(running.execution_id).catch((e) =>
+                        setError(e.message),
+                      )
+                    }
+                  >
+                    ■
+                  </button>
+                ) : (
+                  <button
+                    className="assistant-send"
+                    aria-label="Send"
+                    title="Send (Enter)"
+                    disabled={!draft.trim() || submitting || providerSaving || !contextReady}
+                  >
+                    {submitting ? "…" : "↑"}
+                  </button>
+                )}
+              </div>
             </div>
           </form>
           </div>

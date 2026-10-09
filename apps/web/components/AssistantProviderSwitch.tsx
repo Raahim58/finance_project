@@ -53,18 +53,16 @@ export function AssistantProviderSwitch({ onProviderChange, onSavingChange }: {
   }
 
   const model = providers.find((key) => key.provider === selected)?.default_model;
-  return <div className="border-b border-line px-3 py-2 text-xs">
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <span>{selected ? (labels[selected] ?? selected) : "Loading provider…"}
-        {model ? <span className="ml-2 text-muted">{model}</span> : null}</span>
-      <button type="button" className="btn btn-secondary" aria-expanded={opened}
-        disabled={saving} onClick={() => setOpened(!opened)}>
-        {saving ? "Switching…" : "Switch AI provider"}
-      </button>
-    </div>
-    {opened ? <div className="mt-2 grid gap-2" aria-label="Saved AI providers">
-      <p className="text-muted">Applies to your next message. Existing runs keep their provider.</p>
-      {providers.map((key) => <button type="button" className="btn btn-secondary text-left"
+  return <div className="assistant-provider">
+    <button type="button" className="assistant-provider-trigger" aria-label="Switch AI provider" aria-expanded={opened}
+      disabled={saving} onClick={() => setOpened(!opened)}>
+      <span>{saving ? "Switching…" : selected ? (labels[selected] ?? selected) : "Provider"}</span>
+      {model ? <span className="assistant-provider-model">{model}</span> : null}
+      <span aria-hidden="true">⌄</span>
+    </button>
+    {opened ? <div className="assistant-provider-pop" aria-label="Saved AI providers">
+      <p>Applies to your next message. Existing runs keep their provider.</p>
+      {providers.map((key) => <button type="button"
         key={key.provider} disabled={saving || key.provider === selected}
         onClick={() => void switchProvider(key.provider)}>
         {labels[key.provider] ?? key.provider}{key.default_model ? ` · ${key.default_model}` : ""}
@@ -72,6 +70,6 @@ export function AssistantProviderSwitch({ onProviderChange, onSavingChange }: {
       </button>)}
       {!providers.length ? <a href="/settings">Add a provider key in Settings</a> : null}
     </div> : null}
-    {error ? <p role="alert" className="mt-2 assistant-warning">{error}</p> : null}
+    {error ? <p role="alert" className="assistant-warning">{error}</p> : null}
   </div>;
 }

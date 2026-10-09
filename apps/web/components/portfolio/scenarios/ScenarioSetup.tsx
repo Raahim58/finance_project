@@ -26,7 +26,7 @@ export function ScenarioSetup({ templates, templatesError, regime, symbols, sect
   const submit = (event: FormEvent) => { event.preventDefault(); onRun(); };
   const canRun = !running && (selection.kind !== "template" || Boolean(template)) && (selection.kind !== "replay" || Boolean(replay.start && replay.end));
 
-  return <form className={styles.setup} onSubmit={submit}>
+  return <form data-workspace-left-panel className={styles.setup} onSubmit={submit}>
     <h2 className={styles.h2}>Setup</h2>
     <p className={styles.sub}>Apply a deterministic shock to stored holdings and prices to see the estimated impact.</p>
     <div className={styles.types} role="list" aria-label="Scenario type">
