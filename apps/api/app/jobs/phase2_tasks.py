@@ -2,6 +2,7 @@ from calendar import monthrange
 from datetime import UTC, date, datetime
 from decimal import Decimal
 import json
+import hashlib
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -198,12 +199,15 @@ def financial_extract(document_id: str) -> dict[str, object]:
         if document is None: raise ValueError("Document not found")
         instrument = _instrument(db, document.symbol or "")
         state = coverage(db, instrument.id, "financial_extract", document.id, "psx_financials")
-        if state.status in {"complete", "partial"}: return {"document_id": document.id, "status": state.status, "idempotent": True, "facts": state.item_count}
+        if state.status in {"complete", "partial"} and document.extraction_version == FINANCIAL_EXTRACTION_VERSION: return {"document_id": document.id, "status": state.status, "idempotent": True, "facts": state.item_count}
         begin(state); db.commit()
         try:
             artifact = db.get(SourceArtifact, document.artifact_id)
             if artifact is None or not artifact.storage_path: raise ValueError("Downloaded report artifact is unavailable")
-            content = get_artifact_store(settings).get(artifact.storage_path); pages, classification, parser_diagnostics = parse_financial_pdf(content)
+            content = get_artifact_store(settings).get(artifact.storage_path)
+            if hashlib.sha256(content).hexdigest() != artifact.sha256 or document.content_hash != artifact.sha256:
+                raise ValueError("Financial report source hash mismatch")
+            pages, classification, parser_diagnostics = parse_financial_pdf(content)
             if settings.pipeline_enabled:
                 from app.providers.fundamentals.extraction import explicit_report_period
                 period_end=explicit_report_period(pages,document.title)
@@ -214,10 +218,10 @@ def financial_extract(document_id: str) -> dict[str, object]:
             facts, diagnostics = extract_facts(pages, period_end, extraction_method=method, confidence=confidence, strict=settings.pipeline_enabled) if period_end else ([], ["Report period unavailable."])
             diagnostics = parser_diagnostics + diagnostics
             if classification == "scanned_or_sparse": diagnostics.append("Normal and OCR extraction produced no deterministic financial facts; facts remain unavailable.")
-            for fact in facts if classification in {"text_native", "ocr"} else []:
-                exists = db.scalar(select(FinancialFact.id).where(FinancialFact.instrument_id == instrument.id, FinancialFact.taxonomy_key == fact.taxonomy_key, FinancialFact.period_end == fact.period_end, FinancialFact.document_id == document.id, FinancialFact.consolidated == fact.consolidated))
-                if not exists:
-                    db.add(FinancialFact(instrument_id=instrument.id, taxonomy_key=fact.taxonomy_key, period_type="instant" if settings.pipeline_enabled and fact.taxonomy_key in {"assets","liabilities","equity","debt"} else "annual" if document.document_type == "annual_report" else "interim", period_start=fact.period_start, period_end=fact.period_end, filing_date=document.published_date, value=fact.value, unit=fact.unit, currency=fact.currency, consolidated=fact.consolidated, document_id=document.id, page_number=fact.page_number, source_label=fact.source_label, extraction_method=fact.extraction_method, confidence=fact.confidence, diagnostics_json=json.dumps({"messages": diagnostics})))
+            from app.services.financial_extraction_replay import save_extracted_facts
+            save_extracted_facts(db, document, instrument,
+                                 facts if classification in {"text_native", "ocr"} else [],
+                                 diagnostics, FINANCIAL_EXTRACTION_VERSION, strict=settings.pipeline_enabled)
             document.status = "parsed" if classification in {"text_native", "ocr"} else "needs_ocr"; document.extraction_version = FINANCIAL_EXTRACTION_VERSION; document.parsed_at = datetime.now(UTC)
             complete(state, len(facts) if classification in {"text_native", "ocr"} else 0, diagnostics); db.commit()
             if document.status == "parsed":

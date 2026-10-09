@@ -43,3 +43,19 @@ def test_per_share_facts_are_not_multiplied_by_statement_scale():
         ("earnings_per_share", 12.5),
         ("dividend_per_share", 4),
     ]
+
+
+def test_parenthesized_reporting_units_are_normalized():
+    facts, _ = extract_facts([Page(1, "Amounts in Rupees ('000)\nTotal assets 3,000")], date(2025, 12, 31))
+    assert [(fact.taxonomy_key, fact.value) for fact in facts] == [('assets', 3_000_000)]
+
+
+def test_each_table_uses_its_own_explicit_unit_heading():
+    facts, _ = extract_facts([Page(1, "Rupees in millions\nTotal equity 2\nRupees in thousands\nRevenue 3,000")], date(2025, 12, 31))
+    assert [(fact.taxonomy_key, fact.value) for fact in facts] == [('equity', 2_000_000), ('revenue', 3_000_000)]
+
+
+def test_later_unit_header_is_not_applied_to_an_earlier_ambiguous_table():
+    facts, diagnostics = extract_facts([Page(1, "Total assets 100\nRupees in millions\nTotal equity 2\nRupees in thousands\nRevenue 3,000")], date(2025, 12, 31))
+    assert not any(fact.taxonomy_key == 'assets' for fact in facts)
+    assert any('scale unknown' in message for message in diagnostics)

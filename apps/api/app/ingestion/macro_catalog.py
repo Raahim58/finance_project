@@ -212,7 +212,7 @@ MACRO_SERIES = (
     ),
     MacroSeriesSpec("PK_FDI_NET_USD", "Pakistan foreign direct investment net inflows", "USD", "annual", "external", (_sbp_unverified("FDI_NET_USD"), _wb("PAK", "BX.KLT.DINV.CD.WD"))),
     MacroSeriesSpec("PK_POLICY_RATE", "SBP policy rate", "percent", "daily", "rates", (_sbp("sbp.policy_rate"),)),
-    # MacroSeriesSpec("PK_TBILL_3M", "Pakistan 3-month treasury-bill yield", "percent", "auction", "rates", (_sbp("sbp.tbill.3m_yield"),)),
+    MacroSeriesSpec("PK_TBILL_3M", "Pakistan 3-month treasury-bill yield", "percent", "auction", "rates", (_sbp("sbp.tbill.3m_yield"),)),
     MacroSeriesSpec(
         "PK_KIBOR_3M_OFFER",
         "Pakistan 3-month KIBOR offer rate",
