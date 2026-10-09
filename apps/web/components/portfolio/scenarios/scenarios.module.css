@@ -85,3 +85,6 @@
   .stat { padding: 0; border-left: 0; }
 }
 .table td.num { white-space: nowrap; }
+
+.skeletonBlock{border-radius:8px;background:linear-gradient(90deg,#f3f4f6 25%,#eceef1 50%,#f3f4f6 75%);background-size:200% 100%;animation:scenarioShimmer 1.4s linear infinite}
+@keyframes scenarioShimmer{to{background-position:-200% 0}}

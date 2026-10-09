@@ -133,3 +133,8 @@
   .workstation-shell .app-topbar .workspace-header-utilities .portfolio-context { flex:1 1 auto; min-width:0; max-width:none; }
   .workstation-shell .app-topbar .workspace-header-utilities .portfolio-context select { max-width:100%; width:100%; }
 }
+
+/* Active tabs are shown by weight and colour only, never an underline. */
+.ptabs a[aria-current="page"]::after { display:none !important; }
+.workspace-header-tabs [aria-current="page"],
+.workspace-header-tabs [aria-selected="true"],.ptabs a[aria-current="page"] { border-bottom-color:transparent !important; text-decoration:none; }

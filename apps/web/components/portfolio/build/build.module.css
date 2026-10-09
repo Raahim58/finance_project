@@ -44,3 +44,28 @@
 .statusOk{background:#f3faf6;border-color:#cfe8da}.statusOk .statusDot{background:#12a150;box-shadow:0 0 0 4px rgba(18,161,80,.16)}
 .statusBad{background:#fff6f5;border-color:#f3cdc8}.statusBad .statusDot{background:#d92d20;box-shadow:0 0 0 4px rgba(217,45,32,.14)}
 .rail .insight{margin:18px 0 0;padding-bottom:18px}
+
+/* Build options live in a left panel like the other portfolio tabs. */
+.root{grid-template-columns:270px minmax(0,1fr) var(--rail-width)}
+.left{min-width:0;padding:18px 20px 28px;border-right:1px solid var(--line)}
+.left>.h2{font-size:20px;margin:0 0 16px}
+.left .toolbar{display:grid;grid-template-columns:1fr auto;gap:12px 8px;align-items:end}
+.left .control{grid-column:1/-1;display:grid;gap:6px;font-size:12px;color:var(--muted)}
+.left .control .field{width:100%;max-width:none;font-size:13px;color:var(--ink)}
+.left .toolbar .btn{grid-column:1/-1;width:100%}
+.left .toolbar .btnSmall{width:100%}
+.left .actions{position:relative}
+.left .menu{left:auto;right:0}
+.left .saved{display:grid;gap:6px;font-size:12px;color:var(--muted);margin:16px 0 0}
+.left .saved .field{width:100%;max-width:none}
+.left .sub{margin:16px 0 0}
+.left .notice,.left .noticeBad{margin:14px 0 0}
+.left .analyst{display:grid;gap:10px;margin-top:14px}
+.left .analyst label{display:grid;gap:4px;font-size:12px;color:var(--muted)}
+.main{padding:18px 24px 28px}
+.title,.titleInput{margin-bottom:10px}
+.main .allocations{margin-top:10px;gap:22px}
+@media(max-width:1180px){.root{grid-template-columns:240px minmax(0,1fr) var(--rail-width)}.left{padding:18px 16px}}
+@media(max-width:950px){.root{grid-template-columns:1fr}.left{border-right:0;border-bottom:1px solid var(--line)}}
+
+.editing{margin:-4px 0 12px;font-size:12px;color:var(--muted);line-height:1.5}

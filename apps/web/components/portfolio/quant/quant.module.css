@@ -122,3 +122,10 @@
 
 /* Keep the analysis switcher inside the content column at every breakpoint. */
 .main .subtabs { margin:0; padding:0; width:100%; max-width:100%; min-width:0; justify-content:safe center; }
+
+/* Breathing room between the sub-tab line and each sub-panel's content. */
+.main .subtabs{margin:0 0 32px;padding:0}
+.main .subtabs button[aria-selected="true"]{border-color:transparent!important;border-bottom-color:transparent!important}
+.main .caption{margin:0 0 18px}
+.main .metricsBlock{margin-top:36px}
+.main .chartBox{margin-top:0}

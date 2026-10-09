@@ -55,6 +55,11 @@ export function ScenariosTab({ portfolioId, data, setMessage }: { portfolioId: s
     } finally { setRunning(false); }
   }
 
+  if (!scenario.loaded) return <div className={styles.layout} aria-busy="true" aria-label="Loading scenarios">
+    <aside className={styles.setup}><h2 className={styles.h2}>Setup</h2><div className={styles.skeletonBlock} style={{ height: 300, marginTop: 20 }} /></aside>
+    <section className={styles.results}><h2 className={styles.h2}>Results</h2><div className={styles.skeletonBlock} style={{ height: 120, marginTop: 20 }} /><div className={styles.skeletonBlock} style={{ height: 260, marginTop: 20 }} /></section>
+    <aside className={styles.history}><h2 className={styles.h2}>History</h2><div className={styles.skeletonBlock} style={{ height: 200, marginTop: 20 }} /></aside>
+  </div>;
   const extrasNote = scenario.extras.error ? "Volatility estimates are unavailable from this API build." : null;
   return <div className={styles.layout}>
     <ScenarioSetup templates={scenario.templates.value} templatesError={scenario.templates.error} regime={scenario.regime.value}

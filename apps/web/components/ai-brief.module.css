@@ -12,7 +12,8 @@
 .refs abbr { color:var(--muted); text-decoration:none; margin-left:4px; cursor:help; font-size:12px; white-space:nowrap; }
 .question { display:block; width:100%; text-align:left; padding:6px 0; margin:0 0 8px; font-size:14px; font-weight:600; color:var(--ink); cursor:pointer; }
 .question::after { content:" →"; color:var(--muted); font-weight:400; }
-.question:hover { text-decoration:underline; text-underline-offset:3px; }
+.question:hover { color:var(--muted); }
+.card h2,.card h3,.card b,.card strong,.card abbr,.card button { text-decoration:none!important; }
 .chips { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 10px; }
 .chips a { display:inline-flex; align-items:center; gap:6px; padding:4px 10px 4px 5px; border:1px solid var(--line); border-radius:999px; font-size:12px; }
 .chips span { font-weight:600; }

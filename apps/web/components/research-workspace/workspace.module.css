@@ -110,3 +110,23 @@
 .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:16px}
 .toolbar input.field{flex:1 1 220px;min-width:180px}
 .toolbar .field{width:auto;min-width:130px}
+
+.pageHead{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px}
+.pageHead .sub{margin:0;padding-top:8px}
+.pageHead .button{flex-shrink:0;white-space:nowrap;text-align:center}
+.num{text-align:right!important}
+
+/* Research views: same sub-tab treatment as Quant. */
+.subtabs{display:flex;justify-content:center;gap:28px;margin:0 0 28px;border-bottom:1px solid var(--line);overflow-x:auto}
+.subtabs button{padding:6px 0 14px;font-size:14px;white-space:nowrap;color:var(--muted);background:none;border:0;border-radius:0}
+.subtabs button[aria-selected="true"]{color:var(--ink);font-weight:650}
+.tabs button[aria-selected=true],.status button[aria-pressed=true]{border-bottom-color:transparent}
+
+/* Filter rows: every control the same height, one row. */
+.toolbar{flex-wrap:nowrap;align-items:stretch}
+.toolbar .field{height:38px;box-sizing:border-box;margin:0;padding:0 12px;flex:0 0 auto;min-width:150px;max-width:220px}
+.toolbar input.field{flex:1 1 220px;max-width:none}
+.toolbar .source{align-self:center;margin-left:auto;white-space:nowrap}
+.main .heading{margin-bottom:8px}
+.section .heading{font-size:24px}
+@media(max-width:900px){.toolbar{flex-wrap:wrap}}

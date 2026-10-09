@@ -762,7 +762,7 @@ body:has(select[aria-label="Activity type"]) .data-table td:nth-child(n+4):not(:
 .ptabs a,.workspace-header-tabs a,.workspace-header-tabs button { outline:none; box-shadow:none; }
 .ptabs a:focus-visible,.workspace-header-tabs a:focus-visible,.workspace-header-tabs button:focus-visible { text-decoration:underline; text-underline-offset:6px; }
 .ptabs a[aria-current="page"],.workspace-header-tabs [aria-current="page"],.workspace-header-tabs [aria-selected="true"] { font-weight:600; color:var(--ink); border-bottom-color:var(--ink); }
-.workstation-shell [role="tablist"] [aria-selected="true"],.workstation-shell [class*="ubtabs"] [aria-selected="true"],.workstation-shell [class*="atementTabs"] [aria-current="page"],.workstation-shell [class*="tabs"] [aria-selected="true"],.workstation-shell [class*="tabs"] [aria-current="page"] { border-bottom-color:var(--ink)!important; box-shadow:none!important; font-weight:600!important; color:var(--ink); }
+.workstation-shell [role="tablist"] [aria-selected="true"],.workstation-shell [class*="ubtabs"] [aria-selected="true"],.workstation-shell [class*="atementTabs"] [aria-current="page"],.workstation-shell [class*="tabs"] [aria-selected="true"],.workstation-shell [class*="tabs"] [aria-current="page"] { border-bottom-color:transparent!important; box-shadow:none!important; font-weight:600!important; color:var(--ink); }
 
 /* Rail selection: the icon chip carries the fill; no box, ring or stripe on the item. */
 .workstation-shell .app-sidebar .nav-item,.workstation-shell .app-sidebar .nav-item:focus,.workstation-shell .app-sidebar .nav-item[aria-current="page"] { outline:none; box-shadow:none; border:0; }

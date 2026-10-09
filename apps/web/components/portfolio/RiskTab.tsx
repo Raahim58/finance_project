@@ -7,7 +7,7 @@ import type { WorkspaceData } from "@/components/workspace/useWorkspaceData";
 import { PortfolioRiskFlag, RollingRisk, getAlerts, getPortfolioRiskFlags, getRollingRisk } from "@/lib/api";
 import { timeAgo } from "@/lib/markets";
 import { formatDate, formatNumber, formatPercent, numeric } from "@/lib/overview";
-import { MandateRow, MetricRow, RiskIssue, RiskRange, concentrationRows, diversificationRows, fraction, mandateRows, overallRisk, riskBrief, riskRanges, rollingSeries, systematicRows, tailRows } from "@/lib/portfolio-risk";
+import { MetricRow, RiskIssue, RiskRange, concentrationRows, diversificationRows, fraction, mandateRows, overallRisk, riskBrief, riskRanges, rollingSeries, systematicRows, tailRows } from "@/lib/portfolio-risk";
 import s from "./risk/risk.module.css";
 
 type AlertRow = { id: string; message: string; alert_type: string; created_at: string };
@@ -51,46 +51,39 @@ export function RiskTab({ portfolioId, data }: { portfolioId: string; data: Work
 
   return (
     <div className={`rx ${s.layout}`}>
+      <aside data-workspace-left-panel className={s.facts} aria-label="Risk snapshot">
+        <p className={s.eyebrow}>Portfolio value</p>
+        <strong className={s.level}>{pkr(totalValue)}</strong>
+        {summary ? <small className={`${s.session} ${tone(numeric(summary.day_change_percent))}`}>{formatPercent(summary.day_change_percent)} latest session</small> : null}
+        <div className={s.gauges}>
+          <Gauge label="Annualized volatility" value={fraction(overall.volatility)} level={overall.volatility} scale={0.5} />
+          <Gauge label="1-day VaR (95%)" value={pkr(overall.var95?.amount ?? null)} note={overall.var95 ? `${fraction(overall.var95.fraction)} of portfolio` : "Unavailable"} level={overall.var95?.fraction ?? null} scale={0.08} />
+          <Gauge label="Expected shortfall (95%)" value={pkr(overall.es95?.amount ?? null)} note={overall.es95 ? `${fraction(overall.es95.fraction)} of portfolio` : "Unavailable"} level={overall.es95?.fraction ?? null} scale={0.08} />
+          <Gauge label="Maximum drawdown" value={fraction(overall.drawdown)} note={quant ? `As of ${formatDate(quant.data_cutoff)}` : undefined} level={overall.drawdown == null ? null : Math.abs(overall.drawdown)} scale={0.5} />
+        </div>
+        <h3 className={s.leftHead}>Returns</h3>
+        <dl className={s.pairs}>
+          <div><dt>Total return (unrealized)</dt><dd className={tone(numeric(summary?.unrealized_gain_loss_percent))}>{formatPercent(summary?.unrealized_gain_loss_percent)}</dd></div>
+          <div><dt>Annualized return</dt><dd className={tone(overall.annualReturn)}>{fraction(overall.annualReturn, 1, true)}</dd></div>
+        </dl>
+        <p className={s.hint}>Annualized return is modeled on the current allocation.</p>
+      </aside>
+
       <div className={s.main} data-portfolio-panel="content">
-        <header className={s.kpis}>
-          <Kpi label="Portfolio value" value={pkr(totalValue)} sub={summary ? `${formatPercent(summary.day_change_percent)} latest session` : undefined} subTone={tone(numeric(summary?.day_change_percent))} />
-          <Kpi label="Total return (unrealized)" value={formatPercent(summary?.unrealized_gain_loss_percent)} tone={tone(numeric(summary?.unrealized_gain_loss_percent))} />
-          <Kpi label="Annualized return" value={fraction(overall.annualReturn, 1, true)} tone={tone(overall.annualReturn)} sub="Modeled current allocation" />
-          <Kpi label="Volatility (ann.)" value={fraction(overall.volatility)} />
-        </header>
-
-        {compliance?.status === "BREACH" || breaches.length ? (
-          <div className={`${s.banner} ${s.bannerBad}`} role="alert"><strong>{breaches.length || compliance?.violations.length} mandate issue{(breaches.length || compliance?.violations.length) === 1 ? "" : "s"} require attention</strong><span>{(compliance?.violations ?? []).map(v => String(v.message ?? "")).filter(Boolean).join(" ")}</span></div>
-        ) : compliance?.status === "PASS" ? (
-          <div className={s.banner} role="status"><strong>Within mandate</strong><span>All evaluated IPS checks pass.</span></div>
-        ) : (
-          <div className={`${s.banner} ${s.bannerWarn}`} role="status"><strong>Mandate not fully evaluated</strong><span>Compliance data or IPS limits are missing. <Link className="rx-link" href={`/portfolios/${portfolioId}/ips` as never}>Review the IPS</Link></span></div>
-        )}
-
-        <section className={s.section}>
-          <h2 className={s.h2}>Overall risk</h2>
-          <div className={s.hero}>
-            <Hero label="Annualized volatility" value={fraction(overall.volatility)} />
-            <Hero label="1-day VaR (95%)" value={pkr(overall.var95?.amount ?? null)} note={overall.var95 ? `${fraction(overall.var95.fraction)} of portfolio` : "Unavailable"} />
-            <Hero label="Expected shortfall (95%)" value={pkr(overall.es95?.amount ?? null)} note={overall.es95 ? `${fraction(overall.es95.fraction)} of portfolio` : "Unavailable"} />
-            <Hero label="Maximum drawdown" value={fraction(overall.drawdown)} note={quant ? `As of ${formatDate(quant.data_cutoff)}` : undefined} />
-          </div>
+        <section className={s.panel}>
           <div className={s.chartHead}>
-            <p className={s.hint}>Rolling {rolling?.window ?? 60}-day portfolio volatility (%)</p>
+            <h2 className={s.h2}>Rolling {rolling?.window ?? 60}-day volatility</h2>
             <div className={s.ranges} role="group" aria-label="Chart range">{riskRanges.map(r => <button key={r} type="button" aria-pressed={range === r} onClick={() => setRange(r)}>{r}</button>)}</div>
           </div>
           {rollingError ? <p className={s.hint}>Rolling volatility could not be loaded: {rollingError}</p> : rolling ? <IndexChart points={series} name="Rolling volatility" height={240} compactAxis={false} /> : <p className={s.hint}>Loading rolling volatility…</p>}
           {rolling?.diagnostics?.length ? <p className={s.hint}>{rolling.diagnostics.join(" ")}</p> : null}
         </section>
 
-        <div className={s.triple}>
+        <div className={s.grid}>
           <MetricTable title="Market / systematic risk" rows={systematic.rows} unavailable={systematic.unavailable} />
           <MetricTable title="Concentration" rows={concentrationRows(exposure, quant)} />
           <MetricTable title="Tail risk" rows={tailRows(quant)} />
-        </div>
-        <div className={s.double}>
           <MetricTable title="Diversification" rows={diversificationRows(quant)} />
-          <MandateTable rows={mandate} portfolioId={portfolioId} />
         </div>
         {quant?.warnings.length ? <p className={s.hint}>Model warnings: {quant.warnings.join(" · ")}</p> : null}
         <p className={s.hint}>Source: {summary?.data_source ?? "source unavailable"} · analytics cutoff {quant ? formatDate(quant.data_cutoff) : "unavailable"}. Period-over-period changes and a benchmark volatility line are not shown because the API does not provide them.</p>
@@ -112,16 +105,10 @@ export function RiskTab({ portfolioId, data }: { portfolioId: string; data: Work
   );
 }
 
-function Kpi({ label, value, sub, tone: t = "", subTone = "" }: { label: string; value: string; sub?: string; tone?: string; subTone?: string }) {
-  return <div className={s.kpi}><p>{label}</p><strong className={t}>{value}</strong>{sub ? <small className={subTone}>{sub}</small> : null}</div>;
-}
-function Hero({ label, value, note }: { label: string; value: string; note?: string }) {
-  return <div><p>{label}</p><strong>{value}</strong>{note ? <small>{note}</small> : null}</div>;
+function Gauge({ label, value, note, level, scale }: { label: string; value: string; note?: string; level: number | null; scale: number }) {
+  const width = level == null ? 0 : Math.max(3, Math.min(100, (level / scale) * 100));
+  return <div className={s.gauge}><p>{label}</p><strong>{value}</strong><span className={s.track} aria-hidden="true"><i style={{ width: `${width}%` }} /></span>{note ? <small>{note}</small> : null}</div>;
 }
 function MetricTable({ title, rows, unavailable }: { title: string; rows: MetricRow[]; unavailable?: string }) {
   return <section className={s.table}><h3>{title}</h3>{unavailable ? <p className={s.hint}>{unavailable}</p> : null}<dl>{rows.map(row => <div key={row.label}><dt>{row.label}</dt><dd>{row.value}</dd></div>)}</dl></section>;
-}
-function MandateTable({ rows, portfolioId }: { rows: MandateRow[]; portfolioId: string }) {
-  return <section className={s.table}><div className={s.tableHead}><h3>Mandate compliance</h3><Link className="rx-link" href={`/portfolios/${portfolioId}/ips` as never}>View IPS</Link></div>
-    {rows.length ? <table><thead><tr><th>Rule</th><th>Limit</th><th>Current</th><th>Status</th></tr></thead><tbody>{rows.map(row => <tr key={row.rule}><td>{row.rule}</td><td>{row.limit}</td><td>{row.current}</td><td className={row.status === "BREACH" ? s.bad : row.status === "PASS" ? s.good : s.hint}>{row.status === "BREACH" ? "✕ Breach" : row.status === "PASS" ? "✓ Compliant" : "Not evaluated"}</td></tr>)}</tbody></table> : <p className={s.hint}>No IPS limits are configured, so no mandate checks were evaluated.</p>}</section>;
 }
