@@ -45,7 +45,7 @@ export function MarketsPage() {
   const changeBySymbol = useMemo(() => new Map((session?.prices ?? [...(session?.top_gainers ?? []), ...(session?.top_losers ?? []), ...(session?.top_volume ?? [])]).map(row => [row.symbol, row.change_percent])), [session]);
   const failed = [data.market, data.freshness, data.events, data.history, data.companies].some(resource => resource.status === "error");
   return <div className={styles.page}>
-    <WorkspaceHeader title="Markets"><nav className="workspace-header-tabs" aria-label="Market views">{([["index","Market digest"],["stocks","All stocks"],["sectors","Sectors"],["events","Events"]] as const).map(([key,label])=><button key={key} aria-current={view===key?"page":undefined} onClick={()=>setView(key)}>{label}</button>)}</nav><button className="workspace-header-action" aria-label="Refresh market view" onClick={()=>{clearApiCache();data.reload()}}><Icon name="clock" size={15}/></button></WorkspaceHeader>
+    <WorkspaceHeader title=""><nav className="workspace-header-tabs" aria-label="Market views">{([["index","Market digest"],["stocks","All stocks"],["sectors","Sectors"],["events","Events"]] as const).map(([key,label])=><button key={key} aria-current={view===key?"page":undefined} onClick={()=>setView(key)}>{label}</button>)}</nav><button className="workspace-header-action" aria-label="Refresh market view" onClick={()=>{clearApiCache();data.reload()}}><Icon name="clock" size={15}/></button></WorkspaceHeader>
     <MarketCatalog view={view} select={setView} market={session ?? null} freshness={fresh} companies={data.companies.data ?? []} onCompany={openCompany} chart={<IndexPanel data={data} />} />
     <div className={styles.main}>
       <p className={styles.dateline}>

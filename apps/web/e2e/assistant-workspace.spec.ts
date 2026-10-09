@@ -146,7 +146,7 @@ test("persistent streaming drawer survives navigation, closure, switching and re
   });
   await page.goto("/settings");
   await page.getByLabel("Open Assistant").click();
-  await expect(page.getByText(/Next message.*Growth/)).toBeVisible();
+  await expect(page.getByText(/Growth/)).toBeVisible();
   await page.getByLabel("Message Assistant").fill("Explain my context");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(

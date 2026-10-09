@@ -42,7 +42,7 @@
 .exportWrap { position: relative; margin-top: 24px; }
 .exportBtn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 42px; border: 0; border-radius: 5px; background: #16181b; color: #fff; font-size: 13px; cursor: pointer; }
 .exportBtn:disabled { opacity: .45; cursor: default; }
-.exportMenu { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 20; border: 1px solid #dfe3e9; border-radius: 5px; background: #ffffff; box-shadow: 0 8px 25px #16181b1a; overflow: hidden; }
+.exportMenu { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 20; border: 1px solid #dfe3e9; border-radius: 5px; background: var(--canvas); box-shadow: 0 8px 25px #16181b1a; overflow: hidden; }
 .exportMenu button { display: block; width: 100%; padding: 10px 12px; border: 0; border-bottom: 1px solid #e8ebef; background: transparent; text-align: left; font-size: 12px; cursor: pointer; color: #16181b; }
 .exportMenu button:last-child { border-bottom: 0; }
 .exportMenu button:hover:not(:disabled) { background: #f4f5f7; }
@@ -50,7 +50,7 @@
 .exportHint { margin-top: 8px; text-align: center; color: #747b87; font-size: 11px; }
 .state { display: grid; align-content: center; justify-items: start; gap: 6px; min-height: 220px; padding: 12px 0; color: #747b87; font-size: 12px; line-height: 1.6; }
 .state strong { color: #16181b; font-size: 14px; font-weight: 600; }
-.state button { margin-top: 6px; height: 32px; padding: 0 14px; border: 1px solid #dfe3e9; border-radius: 5px; background: #ffffff; cursor: pointer; font-size: 12px; }
+.state button { margin-top: 6px; height: 32px; padding: 0 14px; border: 1px solid #dfe3e9; border-radius: 5px; background: var(--canvas); cursor: pointer; font-size: 12px; }
 .skeleton { height: 340px; border-radius: 6px; background: linear-gradient(90deg, #f6f7f8, #f6f7f8, #f6f7f8); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 .notes { margin: 14px 0 0; padding: 0; list-style: none; font-size: 11px; line-height: 1.6; color: #747b87; }
@@ -112,3 +112,10 @@
 .metricsBlock .railTitle { font-size: 15px; font-weight: 650; margin: 0 0 4px; }
 .main .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: 8px; }
 @media (max-width: 1100px) { .main .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+/* Left rail starts higher; main gets room under the tab bar. */
+.portfolioRail{padding-top:14px}.rail{padding-top:18px}.main{padding-top:6px}
+
+/* Left panel starts flush under the header/tab bar. */
+.portfolioRail{padding-top:10px}.rail,.main{padding-top:10px}
+.portfolioRail{padding-top:0!important}.portfolioRail>:first-child{margin-top:0;padding-top:16px}

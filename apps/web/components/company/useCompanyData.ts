@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { getCompanyDetail, getCompanyHistory, getCompanyResearch, getCompanyCompleteness, getPortfolios, getDocuments,
   getContextRefresh, deactivateContextRefresh, type ApiDocument, type CompanyDetail, type CompanyResearch, type CompanyCompleteness, type MarketPrice, type Portfolio } from "@/lib/api";
+import { getCompanies, getMarketOverview } from "@/lib/api/market";
 import { getCompanyIntelligence, type CompanyIntelligence } from "@/lib/api/research";
 
 export function useCompanyData(symbol: string) {
@@ -13,6 +14,7 @@ export function useCompanyData(symbol: string) {
   const [intelligence,setIntelligence]=useState<CompanyIntelligence|null>(null);
   const [coverage,setCoverage]=useState<CompanyCompleteness|null>(null);
   const [documents,setDocuments]=useState<ApiDocument[]>([]);
+  const [peers,setPeers]=useState<Array<{symbol:string;name:string;close?:string;change_percent?:string;market_cap?:string|null}>>([]);
   const [errors,setErrors]=useState<Record<string,string>>({});
   const [loaded,setLoaded]=useState<Record<string,boolean>>({});
   useEffect(()=>{
@@ -28,6 +30,14 @@ export function useCompanyData(symbol: string) {
     void read("intelligence",()=>getCompanyIntelligence(symbol),setIntelligence);
     void read("documents",()=>getDocuments(symbol),setDocuments);
     void read("coverage",()=>getCompanyCompleteness(symbol),setCoverage);
+    void read("peers",async()=>{
+      const [companies,overview]=await Promise.all([getCompanies(),getMarketOverview()]);
+      const sector=companies.find(row=>row.symbol===symbol)?.sector;
+      const priced=new Map((overview.prices??[]).map(row=>[row.symbol,row]));
+      return companies.filter(row=>row.is_active&&row.symbol!==symbol&&sector&&row.sector===sector)
+        .map(row=>({symbol:row.symbol,name:row.name,close:priced.get(row.symbol)?.close,change_percent:priced.get(row.symbol)?.change_percent,market_cap:priced.get(row.symbol)?.market_cap}))
+        .sort((a,b)=>Number(b.market_cap??0)-Number(a.market_cap??0)).slice(0,8);
+    },setPeers);
     const portfoliosChanged=()=>void read("portfolios",getPortfolios,rows=>{
       const owned=rows.filter(row=>!row.archived_at);setPortfolios(owned);setPortfolioId(owned.find(row=>row.is_default)?.id??"");
     });
@@ -53,5 +63,5 @@ export function useCompanyData(symbol: string) {
     }catch{if(active)timer=setTimeout(()=>void poll(),10000);}};
     void poll();return()=>{active=false;if(timer)clearTimeout(timer);void deactivateContextRefresh(id).catch(()=>undefined);};
   },[research?.refresh_request_id]);
-  return {detail,research,history,portfolios,portfolioId,setPortfolioId,portfolioContext,intelligence,documents,coverage,errors,loaded};
+  return {peers,detail,research,history,portfolios,portfolioId,setPortfolioId,portfolioContext,intelligence,documents,coverage,errors,loaded};
 }

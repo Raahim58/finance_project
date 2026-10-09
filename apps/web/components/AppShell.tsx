@@ -9,6 +9,7 @@ import { getPortfolios } from "@/lib/api";
 import { PortfolioContextPicker } from "@/components/PortfolioContextPicker";
 import { CompanyQuickSearch } from "./CompanyQuickSearch";
 import { NotificationBell } from "@/components/NotificationBell";
+import { AccountMenu } from "@/components/AccountMenu";
 import { PortfolioTabs, portfolioRoute } from "@/components/PortfolioTabs";
 
 type NavEntry = [string, string, IconName];
@@ -120,7 +121,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (publicRoute) return <>{children}</>;
 
   return (
-    <AssistantWorkspaceProvider><div className="app-shell workstation-shell" data-workspace={pathname === "/market" || pathname === "/markets" ? "markets" : pathname.startsWith("/portfolios") ? "portfolio" : "default"}>
+    <AssistantWorkspaceProvider><div className="app-shell workstation-shell" data-page={pathname === "/dashboard" ? "today" : "workspace"} data-workspace={pathname === "/market" || pathname === "/markets" ? "markets" : pathname.startsWith("/portfolios") ? "portfolio" : "default"}>
       <aside className="app-sidebar" aria-label="Primary navigation">
         <Link href="/dashboard" className="workstation-brand" aria-label="RAAHIM home">R</Link>
         <nav className="rail-navigation" aria-label="Workspace navigation">
@@ -134,6 +135,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {groups.flatMap(group => group.items).filter(([label]) => ["Recommendations", "Activity"].includes(label)).map(item => <NavItem key={item[1]} item={item} pathname={pathname} selectedPortfolioId={selectedPortfolioId} />)}
           </nav></details>
         </nav>
+        <AccountMenu />
 
       </aside>
       <div className="app-main">
@@ -142,13 +144,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <button type="button" ref={menuTriggerRef} className="mobile-menu-btn icon-btn" aria-label="Open primary navigation" aria-haspopup="dialog" aria-expanded={menuOpen} aria-controls="mobile-nav-drawer" onClick={() => setMenuOpen(true)}>
               <Icon name="menu" />
             </button>
-            <div id="workspace-header-content" data-portfolio-id={portfolioRoute(pathname)?.id} className="workspace-header-content"><div className="workspace-header-fallback"><h1>{currentScope(pathname)}</h1>{portfolioRoute(pathname)?<PortfolioTabs/>:null}</div></div>
+            <div id="workspace-header-content" data-portfolio-id={portfolioRoute(pathname)?.id} className="workspace-header-content"><div className="workspace-header-fallback">{portfolioRoute(pathname)?null:<h1>{currentScope(pathname)}</h1>}{portfolioRoute(pathname)?<PortfolioTabs/>:null}</div></div>
           </div>
           <div className="flex items-center gap-1">
             <CompanyQuickSearch />
             <PortfolioContextPicker />
             <NotificationBell />
-            <Link className="icon-btn" aria-label="Account settings" href={"/settings" as never}><Icon name="settings" /></Link>
           </div>
         </header>
         <main>{children}</main>

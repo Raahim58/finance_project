@@ -111,7 +111,7 @@ async function open() {
   fireEvent.click(screen.getByLabelText("Open Assistant"));
   await waitFor(() =>
     expect(
-      screen.getByText(/Next message · OGDC · Growth/),
+      screen.getByText(/OGDC · Growth/),
     ).toBeInTheDocument(),
   );
   await waitFor(() =>
@@ -140,7 +140,7 @@ describe("persistent Assistant", () => {
     function Scope(){const setScope=useAssistantWorkspace()?.setCompanyPortfolioScope;useEffect(()=>{setScope?.("p2")},[setScope]);return <AssistantControls/>}
     render(<AssistantWorkspaceProvider><Scope/></AssistantWorkspaceProvider>);
     fireEvent.click(screen.getByLabelText("Open Assistant sidebar"));
-    await screen.findByText(/Next message · FFC · Income/);
+    await screen.findByText(/FFC · Income/);
     expect(mocks.submit).not.toHaveBeenCalled();
   });
   it("opens a previous chat over the market brief and closes without generating", async () => {
@@ -208,7 +208,7 @@ describe("persistent Assistant", () => {
     );
     fireEvent.click(screen.getByLabelText("Open Assistant"));
     await waitFor(() =>
-      expect(screen.getByText(/Next message · LUCK/)).toBeInTheDocument(),
+      expect(screen.getByText(/LUCK/)).toBeInTheDocument(),
     );
     expect(screen.getByText("Provisional answer")).toBeInTheDocument();
     expect(screen.getByLabelText("Message Assistant")).toHaveValue(

@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Icon } from "@/components/Icon";
 import { EvidenceDrawer } from "@/components/ResearchEventCard";
 import { useAssistantWorkspace } from "@/components/AssistantWorkspace";
 import { clearApiCache } from "@/lib/api";
+import { request } from "@/lib/api/client";
 import { formatDate, formatNumber, formatPercent, humanize, investigationSignals, marketBreadth, numeric, performanceSeries, signalFilters, visibleSignals, type SignalFilter } from "@/lib/overview";
 import { OverviewPerformanceChart } from "./OverviewPerformanceChart";
 import { WorkspaceHeader } from "@/components/WorkspaceHeader";
@@ -27,8 +28,8 @@ export function OverviewPage() {
   const fresh = data.freshness.data;
   const hasError = [data.market, data.freshness, data.events, data.regime, data.portfolios, data.summary, data.performance, data.alerts, data.compliance, data.exposure].some(resource => resource.status === "error");
   return <div className={styles.page}>
-    <WorkspaceHeader title="Today"/>
-    <div className={styles.sessionLine}><span>The market today</span><span>PSX · {fresh?humanize(fresh.exchange_session_status):"Session unavailable"} · Data as of {formatDate(data.market.data?.snapshot?.snapshot_date??fresh?.latest_trade_date)}</span></div>
+    <WorkspaceHeader title=""/>
+    <Greeting data={data} />
     {fresh?.is_stale || fresh?.market_data_mode === "mock" ? <div className={styles.dataNotice} role="status"><Icon name="warning" size={16} /><span>{fresh.market_data_mode === "mock" ? "Demo market data" : "Market data needs review"}{fresh.stale_warning ? ` · ${fresh.stale_warning}` : ""}</span><Link href="/market">View market context <Arrow /></Link></div> : null}
     {hasError ? <div className={styles.dataNotice} role="status"><span>Some sections could not be loaded. Available data is shown below.</span><button onClick={() => { clearApiCache(); data.reload(); }}>Retry unavailable data <Arrow /></button></div> : null}
     <MarketSnapshot data={data} />
@@ -36,6 +37,24 @@ export function OverviewPage() {
     <div className={styles.bottomGrid}><MaterialEvents data={data} /><MacroContext data={data} /></div>
     <footer className={styles.footer}><button onClick={() => { clearApiCache(); data.reload(); }}><Icon name="clock" size={14} />Refresh overview</button>{assistant ? <button onClick={() => assistant.open()}><Icon name="assistant" size={16} />Ask this workspace</button> : null}</footer>
   </div>;
+}
+
+function greetingFor(hour: number) { return hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening"; }
+
+function Greeting({ data }: { data: OverviewData }) {
+  const [name, setName] = useState("");
+  useEffect(() => { let live = true; void request<{ full_name?: string | null }>("/settings/profile").then(profile => { if (live) setName((profile.full_name || "").trim().split(/\s+/)[0] ?? ""); }).catch(() => {}); return () => { live = false; }; }, []);
+  const fresh = data.freshness.data;
+  const snapshot = data.market.data?.snapshot;
+  const move = numeric(snapshot?.index_change_percent);
+  const now = new Date();
+  return <header className={styles.greeting}>
+    <h1>{greetingFor(now.getHours())}{name ? `, ${name}` : ""}</h1>
+    <p>{now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+      {fresh ? ` · PSX ${humanize(fresh.exchange_session_status).toLowerCase()}` : ""}
+      {snapshot && move != null ? <> · {snapshot.index_name} <span className={move < 0 ? styles.negative : styles.positive}>{formatPercent(snapshot.index_change_percent)}</span></> : null}
+      {` · Data as of ${formatDate(snapshot?.snapshot_date ?? fresh?.latest_trade_date)}`}</p>
+  </header>;
 }
 
 function Arrow() { return <span className={styles.arrow} aria-hidden="true">→</span>; }

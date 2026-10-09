@@ -28,3 +28,5 @@
 .issue strong { font-size:15px; text-transform:capitalize; } .issue p { font-size:13px; color:var(--rx-muted); margin-top:3px; line-height:1.45; } .issue small { display:block; margin-top:6px; font-size:12px; color:var(--rx-muted); }
 @media (max-width:1100px) { .layout { grid-template-columns:1fr; } .rail { border-left:0; border-top:1px solid var(--rx-line); } .triple { grid-template-columns:1fr; } .double { grid-template-columns:1fr; } }
 @media (max-width:720px) { .kpis,.hero { grid-template-columns:repeat(2,minmax(0,1fr)); } .main { padding-inline:16px; } }
+
+.main,.rail{padding-top:34px}

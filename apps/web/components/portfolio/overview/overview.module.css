@@ -91,3 +91,9 @@
 .rail h3 { margin: 0 0 12px; }
 .rail h4 { font-size: 13px; font-weight: 600; letter-spacing: 0; }
 .main { padding-top: 22px; }
+
+.facts{padding-top:14px}.rail{padding-top:18px}
+
+/* Left panel starts flush under the header/tab bar. */
+.facts{padding-top:10px}.rail,.main{padding-top:10px}
+.facts{padding-top:0!important}.facts>:first-child{margin-top:0;padding-top:16px}
