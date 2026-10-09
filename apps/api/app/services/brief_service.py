@@ -28,7 +28,7 @@ SYSTEM = (
     "ask), \"tickers\": [str] (0-4 ticker symbols that appear in the cited facts), \"fact_ids\": [str]}] (exactly 3), "
     "\"events\": [str] (0-3 items, only upcoming or scheduled things that a FACT explicitly states; otherwise [])}. "
     "Each section must cover a DIFFERENT theme (for example index and breadth, leaders and laggards, sectors, events). "
-    "Never repeat a number or sentence across sections or the summary. Every section must cite the fact ids it relies on."
+    "Analyse, do not restate: the reader already sees the raw figures, so use them only as evidence for an insight (what drove the move, what is concentrated, what it implies). Never repeat a number or sentence across sections or the summary. Every section must cite the fact ids it relies on."
 )
 PORTFOLIO_SYSTEM = SYSTEM.replace("Pakistan Stock Exchange investor", "Pakistan Stock Exchange investor about their own portfolio").replace(
     "(for example index and breadth, leaders and laggards, sectors, events)", "(for example overall performance, biggest movers among holdings, concentration or sector exposure, events affecting holdings)").replace(

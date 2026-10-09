@@ -97,3 +97,21 @@
 /* Left panel starts flush under the header/tab bar. */
 .facts{padding-top:10px}.rail,.main{padding-top:10px}
 .facts{padding-top:0!important}.facts>:first-child{margin-top:0;padding-top:16px}
+
+.railSummary{font-size:13px;line-height:1.6;color:var(--ink-2);margin:0 0 18px;padding-bottom:18px;border-bottom:1px solid var(--line)}
+.facts .heroTop{margin-top:18px;gap:8px}
+.facts .ranges button{min-width:34px;height:28px}
+.facts .contribution{margin-top:22px}
+.facts .contribution h3{margin:0 0 10px}
+.facts .contributionRow{grid-template-columns:46px minmax(30px,1fr) auto;gap:8px}
+.facts .contributionRow>span:last-child{white-space:nowrap}
+
+/* Portfolio chart in the left panel */
+.portfolioChart{margin:18px 0 4px}
+.portfolioChart .heroTop{display:grid;gap:8px;margin:0}
+.portfolioChart .ranges{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:2px;padding:2px;background:var(--surface);border-radius:7px}
+.portfolioChart .ranges button{min-width:0;height:26px;border-radius:5px;font-size:12px;color:var(--muted)}
+.portfolioChart .ranges button[aria-pressed="true"]{background:var(--paper);color:var(--ink);font-weight:600;box-shadow:0 0 0 1px var(--line)}
+.portfolioChart .chart{margin:6px -4px 0;min-height:0}
+.facts .capital{margin-top:14px}
+.portfolioChart .heroTop{justify-items:stretch}.portfolioChart .ranges{width:100%}

@@ -45,7 +45,6 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
   const chartPoints = rangeSlice(basis === "value" ? points : twrPoints, range);
   const contributions = rows.filter(row => row.dayChange != null).sort((a, b) => b.dayChange! - a.dayChange!);
   const maxContribution = Math.max(...contributions.map(row => Math.abs(row.dayChange!)), 1);
-  const compliance = data.compliance, status = compliance?.status ?? (compliance ? (compliance.compliant ? "PASS" : "BREACH") : null);
   const notices = [
     summary.valuation_complete ? null : `Valuation incomplete${summary.unpriced_symbols.length ? `: no stored price for ${summary.unpriced_symbols.join(", ")}` : ""}. Totals exclude unpriced holdings.`,
     summary.valuation_note,
@@ -55,27 +54,21 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
     <aside data-workspace-left-panel className={styles.facts} aria-label="Portfolio valuation and holdings">
       <p className={styles.muted}>Portfolio value</p><strong className={styles.level}>{pkr(total)}</strong>
       <p className={`${styles.change} ${tone(dayPercent)}`}>{formatPercent(dayPercent)}<small>Latest stored session · {formatDate(summary.data_freshness_date)}</small></p>
+      <div className={styles.portfolioChart}><div className={styles.heroTop}>
+        <div className={styles.ranges} role="group" aria-label="Chart basis"><button aria-pressed={basis === "value"} onClick={() => setBasis("value")}>Value</button><button aria-pressed={basis === "twr"} onClick={() => setBasis("twr")}>TWR</button></div>
+        <div className={styles.ranges} role="group" aria-label="Chart range">
+          {overviewRanges.map(([label]) => <button key={label} aria-pressed={range === label} onClick={() => setRange(label)}>{label}</button>)}
+        </div>
+      </div>
+      <div className={styles.chart}>{chartPoints.length >= 2 ? <IndexChart height={190} axisFormat={basis === "value" ? (v: number) => `${(v / 1e6).toFixed(2)}M` : (v: number) => `${v.toFixed(1)}%`} points={chartPoints} name={basis === "value" ? "Portfolio value" : "Cumulative time-weighted return (%)"} /> : <p className={styles.empty}>{basis === "value" ? "Value history" : "TWR history"} unavailable for this range. At least two stored observations are needed.</p>}</div>
+      </div>
       <dl className={styles.capital}><Stat label="Cash" value={pkr(cash)} note={share(cash)} /><Stat label="Invested" value={pkr(invested)} note={share(invested)} /></dl>
-      <h3>Holdings by weight</h3>{rows.map(row => <Link key={row.symbol} href={`/companies/${row.symbol}` as never} className={styles.weightRow}><CompanyLogo symbol={row.symbol} website={extras.websites[row.symbol]} /><span>{row.symbol}</span><span>{row.weight == null ? "—" : `${row.weight.toFixed(2)}%`}</span></Link>)}
+      <section className={styles.contribution}><h3>Latest session contribution</h3>{contributions.length ? contributions.map(row => <div key={row.symbol} className={styles.contributionRow}><span>{row.symbol}</span><div className={styles.barTrack}><div className={styles.bar} style={{ width: `${Math.abs(row.dayChange!) / maxContribution * 50}%`, left: row.dayChange! < 0 ? `${50 - Math.abs(row.dayChange!) / maxContribution * 50}%` : "50%", background: row.dayChange! < 0 ? "#e53935" : "#00875a" }} /></div><span className={tone(row.dayChange)}>{pkr(row.dayChange, true)}</span></div>) : <p className={styles.empty}>Stored holding day changes are unavailable.</p>}<p className={styles.source}>Contribution to portfolio (PKR) · stored holding day change</p></section>
       <p className={styles.source}>{summary.portfolio.source_mode} · {summary.data_source ?? "Source unavailable"}</p>
     </aside>
     <div data-portfolio-panel="content" className={styles.main}>
-      <div className={`${styles.notice} ${status === "BREACH" ? styles.bad : status === "PASS" && !notices.length ? styles.ok : ""}`} role="status">
-        <span><b>Mandate:</b> {status === "PASS" ? "Within IPS limits" : status === "BREACH" ? `IPS breach${compliance?.violations.length ? ` (${compliance.violations.length})` : ""}` : status === "NOT_EVALUATED" ? "Not evaluated (IPS data missing)" : "Compliance unavailable"}</span>
-        <span><b>Prices:</b> {summary.data_freshness_date ? `as of ${formatDate(summary.data_freshness_date)}` : "date unavailable"} · {summary.data_source ?? "source unavailable"}</span>
-        {notices.map(note => <span key={note}>{note}</span>)}
-      </div>
-
-      <section>
-        <div className={styles.heroTop}>
-          <div className={styles.ranges} role="group" aria-label="Chart basis"><button aria-pressed={basis === "value"} onClick={() => setBasis("value")}>Value</button><button aria-pressed={basis === "twr"} onClick={() => setBasis("twr")}>TWR</button></div>
-          <div className={styles.ranges} role="group" aria-label="Chart range">
-            {overviewRanges.map(([label]) => <button key={label} aria-pressed={range === label} onClick={() => setRange(label)}>{label}</button>)}
-          </div>
-        </div>
-        <div className={styles.chart}>{chartPoints.length >= 2 ? <IndexChart points={chartPoints} name={basis === "value" ? "Portfolio value" : "Cumulative time-weighted return (%)"} /> : <p className={styles.empty}>{basis === "value" ? "Value history" : "TWR history"} unavailable for this range. At least two stored observations are needed.</p>}</div>
-      </section>
-      <section className={styles.contribution}><h3>Latest session contribution</h3>{contributions.length ? contributions.map(row => <div key={row.symbol} className={styles.contributionRow}><span>{row.symbol}</span><div className={styles.barTrack}><div className={styles.bar} style={{ width: `${Math.abs(row.dayChange!) / maxContribution * 50}%`, left: row.dayChange! < 0 ? `${50 - Math.abs(row.dayChange!) / maxContribution * 50}%` : "50%", background: row.dayChange! < 0 ? "#e53935" : "#00875a" }} /></div><span className={tone(row.dayChange)}>{pkr(row.dayChange, true)}</span></div>) : <p className={styles.empty}>Stored holding day changes are unavailable.</p>}<p className={styles.source}>Contribution to portfolio (PKR) · stored holding day change</p></section>
+      {notices.length ? <div className={`${styles.notice} ${styles.bad}`} role="status">{notices.map(note => <span key={note}>{note}</span>)}</div> : null}
+      <AIBriefCard title="Portfolio brief" hideHeader state={briefState} quotes={quotes} fallback={brief ? { headline: brief.title, summary: "" } : null} onAsk={text => assistant?.open(text)} />
 
       <section className={styles.holdings}>
         <div className={styles.tableHead}>
@@ -91,7 +84,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
     </div>
 
     <aside data-portfolio-panel="context" className={styles.rail} aria-label="Portfolio brief">
-      <AIBriefCard title="Portfolio brief" state={briefState} quotes={quotes} fallback={brief ? { headline: brief.title, summary: brief.text } : null} onAsk={text => assistant?.open(text)} />
+      {briefState.view?.brief?.summary ? <p className={styles.railSummary}>{briefState.view.brief.summary}</p> : null}
       <section><h3>Top contributors</h3><Movers rows={contributors} websites={extras.websites} empty="No holdings with a positive stored day change." /></section>
       <section><h3>Top detractors</h3><Movers rows={detractors} websites={extras.websites} empty="No holdings with a negative stored day change." /></section>
       <section>

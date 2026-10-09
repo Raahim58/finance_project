@@ -16,6 +16,8 @@ export type BriefProps = {
   /** Deterministic headline and summary used until an AI brief exists. */
   fallback?: Fallback | null;
   onAsk?: (text: string) => void;
+  /** Hide the "Market brief · date" line when the page already labels the block. */
+  hideHeader?: boolean;
 };
 
 /** Loads the cached brief once; share the result between components that show parts of it. */
@@ -32,7 +34,7 @@ export function useBrief(load: (retry: boolean) => Promise<AIBriefView>): BriefS
   return { view, error, retry: () => void run(true) };
 }
 
-export function AIBriefCard({ title, state, quotes, fallback, onAsk }: BriefProps) {
+export function AIBriefCard({ title, state, quotes, fallback, onAsk, hideHeader }: BriefProps) {
   const { view, error } = state;
   const brief = view?.brief?.sections ? view.brief : null;
   const note = error ? "Brief unavailable right now."
@@ -45,7 +47,7 @@ export function AIBriefCard({ title, state, quotes, fallback, onAsk }: BriefProp
   const facts = new Map((view?.facts ?? []).map(f => [f.id, f]));
   const headline = brief?.headline ?? fallback?.headline;
   return <section className={styles.card} aria-label={title}>
-    <header><span className={styles.eyebrow}>{title}</span>{view?.generated_at ? <small>AI summary of stored data · {formatDate(view.generated_at)}{view.current ? "" : " · out of date"}</small> : null}</header>
+    {hideHeader ? null : <header><span className={styles.eyebrow}>{title}</span>{view?.generated_at ? <small>{formatDate(view.generated_at)}{view.current ? "" : " · out of date"}</small> : null}</header>}
     {headline ? <h2 className={styles.headline}>{headline}</h2> : null}
     {!brief && fallback?.summary ? <p className={styles.summary}>{fallback.summary}</p> : null}
     {brief ? brief.sections.map((sec, i) => <article className={styles.point} key={i}>
