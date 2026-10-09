@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { useMemo } from "react";
 import { useAssistantWorkspace } from "@/components/AssistantWorkspace";
 import { Icon } from "@/components/Icon";
 import type { MarketOverview } from "@/lib/api";
@@ -21,15 +22,14 @@ export function MarketRail({ market, events, loading,onSector }: {onSector?:(sec
   const seen = new Set<string>();
   const evidence = events.filter(event => { const key = `${event.evidence[0]?.source_name}:${event.event_type}`; if (seen.has(key)) return false; seen.add(key); return true; }).slice(0, 3);
   const ask = (text: string) => assistant?.open(text);
+  const quotes = useMemo(() => Object.fromEntries((market?.prices ?? [...(market?.top_gainers ?? []), ...(market?.top_losers ?? []), ...(market?.top_volume ?? [])]).map(row => [row.symbol, numeric(row.change_percent)])), [market]);
+  const lead = market ? <>
+    <span>{formatDate(market.trade_date)}{market.observed_at ? ` · ${timeAgo(market.observed_at)}` : ""}</span>
+    {breadth ? <><span><b className={styles.positive}>{breadth.up}</b> advancing</span><span><b className={styles.negative}>{breadth.down}</b> declining</span><span><b>{breadth.flat}</b> unchanged</span></> : null}
+  </> : null;
+  const fallback = percent == null ? null : { headline: `KSE-100 ${percent < 0 ? "down" : percent > 0 ? "up" : "unchanged"}${percent === 0 ? "" : ` ${Math.abs(percent).toFixed(2)}%`}`, summary: `${market?.priced_securities ?? "—"} securities across ${market?.sectors.length ?? 0} sectors are available in the ${market?.price_basis === "intraday" ? "observed intraday snapshot" : "stored daily session"}.` };
   return <aside className={styles.rail} aria-label="Market context and Assistant">
-    <AIBriefCard title="Market brief" load={getMarketBrief} />
-    <section className={styles.digest}>
-      <h3>{percent == null ? "Your market view, in context" : `KSE-100 ${percent < 0 ? "down" : percent > 0 ? "up" : "unchanged"}${percent === 0 ? "" : ` ${Math.abs(percent).toFixed(2)}%`}`}</h3>
-      <p>{market ? `${market.priced_securities ?? "—"} securities across ${market.sectors.length} sectors are available in the ${market.price_basis === "intraday" ? "observed intraday snapshot" : "stored daily session"}.` : "The digest appears when a dated market snapshot is available."}</p>
-      <p className={styles.time}>{formatDate(market?.trade_date)}{market?.observed_at ? ` · ${timeAgo(market.observed_at)}` : ""}</p>
-      {breadth ? <div className={styles.breadth}><span><b className={styles.positive}>{breadth.up}</b> advancing</span><span><b className={styles.negative}>{breadth.down}</b> declining</span><span><b>{breadth.flat}</b> unchanged</span></div> : null}
-      {(market?.top_gainers ?? []).slice(0, 3).length ? <div className={styles.tickerChips}>{market!.top_gainers.slice(0, 3).map(row => <Link href={`/companies/${row.symbol}` as never} key={row.symbol}><CompanyLogo symbol={row.symbol} size={18} /><span>{row.symbol}</span><b className={styles.positive}>{formatPercent(row.change_percent)}</b></Link>)}</div> : null}
-    </section>
+    <AIBriefCard title="Market brief" load={getMarketBrief} quotes={quotes} lead={lead} fallback={fallback} question="Why does this matter?" onAsk={ask} />
     {leader ? <section className={styles.railSection}><h3>Sector in focus</h3><p>{onSector?<button onClick={()=>onSector(leader.sector)}>{leader.sector} ›</button>:leader.sector}</p><strong className={Number(leader.average_change_percent) < 0 ? styles.negative : styles.positive}>{formatPercent(leader.average_change_percent)} <small>average quoted move</small></strong><p className={styles.source}>A simple average of observed stocks in the sector.</p></section> : null}
     <section className={styles.railSection}><div className={styles.railHead}><h3>Research evidence</h3><Link href="/research">View all <span aria-hidden="true">↗</span></Link></div>
       {evidence.map(event => <article className={styles.evidenceItem} key={event.event_key}>

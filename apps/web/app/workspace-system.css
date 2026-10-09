@@ -40,9 +40,9 @@
 .workspace-header-tabs [aria-selected="true"],.ptabs a[aria-current="page"] {
   font-weight:650;
   color:var(--ink);
-  border-bottom-color:transparent;
+  border-bottom-color:var(--ink);
 }
-.ptabs a[aria-current="page"]::after { display:none; }
+.ptabs a[aria-current="page"]::after { display:block; }
 .workspace-page-header > .workspace-header-action { margin-left:0; flex-shrink:0; }
 .workstation-shell .app-topbar > .workspace-header-utilities {
   display:flex;
@@ -68,14 +68,10 @@
   font-family:var(--font-heading);
   font-weight:600;
   letter-spacing:-.025em;
-  line-height:1.35;
+  line-height:1.3;
 }
-.workstation-shell main h1 { font-size:24px!important; }
-.workstation-shell main h2 { font-size:18px!important; }
-.workstation-shell main :is(h3,h4) { font-size:15px!important; }
+/* Deliberately no global heading-size or table-cell overrides: page modules own the scale. */
 .workstation-shell :is(main,.assistant-drawer) :is(table,dl) { font-variant-numeric:tabular-nums; }
-.workstation-shell main :is(th) { font-size:12px; font-weight:500; }
-.workstation-shell main :is(td) { font-size:13px; }
 .workstation-shell [data-portfolio-panel="content"]:has(> .workspace-data-notices) {
   display:flex; flex-direction:column;
 }

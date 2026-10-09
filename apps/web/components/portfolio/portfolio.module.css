@@ -17,7 +17,7 @@
 .menu button:hover, .menu a:hover { background: #f6f7f8; }
 .menu button[aria-selected="true"] { font-weight: 600; background: transparent; }
 .menu a { color: #00875a; border-bottom: 0; }
-.menu small { color: #70757d; font-size: 11px; }
+.menu small { color: #70757d; font-size:12px; }
 .goal { max-width: 720px; margin-bottom: 4px; color: #70757d; font-size: 13px; }
 .tabs { display: flex; gap: 6px; margin: 14px 0 26px; border-bottom: 1px solid var(--line); overflow-x: auto; }
 .tabs a { position: relative; flex-shrink: 0; padding: 12px 14px 13px; color: #555d69; font-size: 14px; }

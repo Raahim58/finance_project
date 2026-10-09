@@ -11,6 +11,7 @@ import { indexLatest, timeAgo } from "@/lib/markets";
 import { formatDate, formatNumber, formatPercent, humanize, numeric } from "@/lib/overview";
 import { activityLine, briefHeadline, holdingRows, movers, overviewRanges, rangeSlice, valuePoints, type HoldingRow, type OverviewRange } from "@/lib/portfolio-overview";
 import { useOverviewExtras } from "./overview/useOverviewExtras";
+import { useAssistantWorkspace } from "@/components/AssistantWorkspace";
 import { AIBriefCard } from "@/components/AIBriefCard";
 import { getPortfolioBrief } from "@/lib/api/research";
 import styles from "./overview/overview.module.css";
@@ -27,6 +28,8 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
   const [query, setQuery] = useState("");
   const rows = useMemo(() => summary ? holdingRows(summary, extras.history) : [], [summary, extras.history]);
   const points = useMemo(() => valuePoints(data.performance), [data.performance]);
+  const assistant = useAssistantWorkspace();
+  const quotes = useMemo(() => Object.fromEntries(rows.map(row => [row.symbol, row.dayPercent])), [rows]);
   const loadBrief = useCallback((retry: boolean) => getPortfolioBrief(portfolioId, retry), [portfolioId]);
   if (!summary) return <p className={styles.empty}>Portfolio summary unavailable. The API did not return a database valuation.</p>;
 
@@ -56,7 +59,6 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
       <p className={styles.source}>{summary.portfolio.source_mode} · {summary.data_source ?? "Source unavailable"}</p>
     </aside>
     <div data-portfolio-panel="content" className={styles.main}>
-      <AIBriefCard title="Portfolio brief" load={loadBrief} />
       <div className={`${styles.notice} ${status === "BREACH" ? styles.bad : status === "PASS" && !notices.length ? styles.ok : ""}`} role="status">
         <span><b>Mandate:</b> {status === "PASS" ? "Within IPS limits" : status === "BREACH" ? `IPS breach${compliance?.violations.length ? ` (${compliance.violations.length})` : ""}` : status === "NOT_EVALUATED" ? "Not evaluated (IPS data missing)" : "Compliance unavailable"}</span>
         <span><b>Prices:</b> {summary.data_freshness_date ? `as of ${formatDate(summary.data_freshness_date)}` : "date unavailable"} · {summary.data_source ?? "source unavailable"}</span>
@@ -77,7 +79,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
       <section className={styles.holdings}>
         <div className={styles.tableHead}>
           <h3>Holdings</h3>
-          <label className={styles.search}><Icon name="search" size={15} /><input aria-label="Search holdings" placeholder="Search holdings…" value={query} onChange={event => setQuery(event.target.value)} /></label>
+          <label className={styles.search}><Icon name="search" size={15} /><input aria-label="Filter holdings" placeholder="Filter holdings" value={query} onChange={event => setQuery(event.target.value)} /></label>
         </div>
         {shown.length ? <div className={styles.tableWrap}><table className={styles.table}>
           <thead><tr><th>Symbol</th><th>Name</th><th className={styles.num}>Value</th><th className={styles.num}>Weight</th><th className={styles.num}>Price</th><th className={styles.num}>Day %</th><th className={styles.num}>1Y %</th><th>Trend</th></tr></thead>
@@ -88,11 +90,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
     </div>
 
     <aside data-portfolio-panel="context" className={styles.rail} aria-label="Portfolio brief">
-      <section>
-        <h3>Brief</h3>
-        {brief ? <><p className={styles.lead}>{brief.title}</p><p className={styles.leadText}>{brief.text}</p></> : <p className={styles.empty}>Day change is unavailable, so no brief can be generated.</p>}
-        <p className={styles.time}>{benchmark?.percent != null ? `${benchmark.name} as of ${formatDate(benchmark.date)}` : extras.index.failed ? "Benchmark comparison unavailable" : `As of ${formatDate(summary.data_freshness_date)}`}</p>
-      </section>
+      <AIBriefCard title="Portfolio brief" load={loadBrief} quotes={quotes} lead={<span>{benchmark?.percent != null ? `${benchmark.name} as of ${formatDate(benchmark.date)}` : extras.index.failed ? "Benchmark comparison unavailable" : `As of ${formatDate(summary.data_freshness_date)}`}</span>} fallback={brief ? { headline: brief.title, summary: brief.text } : null} question="How does this affect my portfolio?" onAsk={text => assistant?.open(text)} />
       <section><h3>Top contributors</h3><Movers rows={contributors} websites={extras.websites} empty="No holdings with a positive stored day change." /></section>
       <section><h3>Top detractors</h3><Movers rows={detractors} websites={extras.websites} empty="No holdings with a negative stored day change." /></section>
       <section>

@@ -24,21 +24,21 @@
 .kpiDelta { display: block; margin-top: 2px; font-size: 12px; color: #747b87; }
 .positive { color: #00875a; }
 .negative { color: #df303e; }
-.basis { margin-top: 12px; color: #747b87; font-size: 11px; line-height: 1.5; }
+.basis { margin-top: 12px; color: #747b87; font-size:12px; line-height: 1.5; }
 .railTitle { font-family: inherit; font-size: 17px; font-weight: 600; margin: 0 0 12px; }
 .railSection + .railSection { margin-top: 28px; }
 .rows { margin: 0; }
 .row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
 .row dt { color: #747b87; }
 .row dd { margin: 0; text-align: right; font-weight: 500; }
-.row small { display: block; margin-top: 2px; color: #747b87; font-size: 11px; font-weight: 400; }
-.readonly { margin-top: 8px; color: #747b87; font-size: 11px; line-height: 1.5; }
+.row small { display: block; margin-top: 2px; color: #747b87; font-size:12px; font-weight: 400; }
+.readonly { margin-top: 8px; color: #747b87; font-size:12px; line-height: 1.5; }
 .compare { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .compare label { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 4px 10px; align-items: start; padding: 8px 0; cursor: pointer; font-size: 13px; }
 .compare label[data-disabled="true"] { cursor: default; opacity: .62; }
 .compare input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: #00875a; }
 .compareName { display: inline-flex; align-items: center; gap: 8px; }
-.compareNote { grid-column: 2; color: #747b87; font-size: 11px; line-height: 1.4; }
+.compareNote { grid-column: 2; color: #747b87; font-size:12px; line-height: 1.4; }
 .exportWrap { position: relative; margin-top: 24px; }
 .exportBtn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 42px; border: 0; border-radius: 5px; background: #16181b; color: #fff; font-size: 13px; cursor: pointer; }
 .exportBtn:disabled { opacity: .45; cursor: default; }
@@ -47,18 +47,18 @@
 .exportMenu button:last-child { border-bottom: 0; }
 .exportMenu button:hover:not(:disabled) { background: #f4f5f7; }
 .exportMenu button:disabled { color: #747b87; cursor: default; }
-.exportHint { margin-top: 8px; text-align: center; color: #747b87; font-size: 11px; }
+.exportHint { margin-top: 8px; text-align: center; color: #747b87; font-size:12px; }
 .state { display: grid; align-content: center; justify-items: start; gap: 6px; min-height: 220px; padding: 12px 0; color: #747b87; font-size: 12px; line-height: 1.6; }
 .state strong { color: #16181b; font-size: 14px; font-weight: 600; }
 .state button { margin-top: 6px; height: 32px; padding: 0 14px; border: 1px solid #dfe3e9; border-radius: 5px; background: var(--canvas); cursor: pointer; font-size: 12px; }
 .skeleton { height: 340px; border-radius: 6px; background: linear-gradient(90deg, #f6f7f8, #f6f7f8, #f6f7f8); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 @keyframes shimmer { to { background-position: -200% 0; } }
-.notes { margin: 14px 0 0; padding: 0; list-style: none; font-size: 11px; line-height: 1.6; color: #747b87; }
-.notes li { padding: 3px 0 3px 12px; border-left: 2px solid #f6dcb0; }
+.notes { margin: 14px 0 0; padding: 0; list-style: none; font-size:12px; line-height: 1.6; color: #747b87; }
+.notes li { padding: 3px 0 3px 12px; border-left: 2px solid var(--line); }
 .budget { margin-top: 26px; overflow-x: auto; }
 .budget h3 { margin-bottom: 4px; font-family: inherit; font-size: 18px; font-weight: 500; }
-.budget table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.budget th { padding: 9px 6px; text-align: right; color: #747b87; font-size: 11px; font-weight: 400; border-bottom: 1px solid var(--line); }
+.budget table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.budget th { padding: 9px 6px; text-align: right; color: #747b87; font-size:12px; font-weight: 400; border-bottom: 1px solid var(--line); }
 .budget td { padding: 8px 6px; border-bottom: 1px solid var(--line); text-align: right; }
 .budget th:first-child, .budget td:first-child { text-align: left; font-weight: 600; }
 @media (max-width: 1100px) {
@@ -68,7 +68,7 @@
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 0; }
   .kpi:nth-child(odd) { padding-left: 0; border-left: 0; }
 }
-.link { border: 0; background: transparent; padding: 0; color: #00875a; font-size: 11px; cursor: pointer; text-decoration: underline; }
+.link { border: 0; background: transparent; padding: 0; color: #00875a; font-size:12px; cursor: pointer; text-decoration: underline; }
 .portfolioRail { min-width: 0; padding: 26px 20px; border-right: 1px solid var(--line); }
 .portfolioRail h2 { margin: 14px 0 8px; font-size: 17px; font-weight: 500; line-height: 1.4; }
 .eyebrow { margin: 0; color: #747b87; font-size: 12px; line-height: 1.6; }
@@ -93,9 +93,9 @@
 .subtabs button { padding: 18px 0 13px; font-size: 12px; }
 .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); padding-top: 0; border-top: 0; margin-top: 16px; gap: 16px 0; }
 .kpi { padding: 0 8px; }
-.kpi dt { font-size: 11px; line-height: 1.5; }
+.kpi dt { font-size:12px; line-height: 1.5; }
 .kpiValue { font-size: 20px; }
-.kpiDelta { font-size: 11px; line-height: 1.5; }
+.kpiDelta { font-size:12px; line-height: 1.5; }
 .kpi:nth-child(4) { padding-left: 0; border-left: 0; }
 .railSection + .railSection { margin-top: 23px; border-top: 1px solid var(--line); padding-top: 22px; }
 .row { grid-template-columns: 105px minmax(0, 1fr); border-bottom: 0; padding: 7px 0; }
@@ -106,7 +106,7 @@
 @media (max-width: 720px) { .layout { display: block; } .portfolioRail { padding: 18px; border-right: 0; border-bottom: 1px solid var(--line); } .holdingSection { display: none; } .cashSection { padding: 16px 0 0; border-bottom: 0; } .main { padding: 0 18px 20px; } .subtabs { margin: 0 -18px; padding: 0 18px; gap: 24px; } .viewHeading h1 { font-size: 26px; } .rail { padding: 22px 18px; } }
 .askControls { display: flex; justify-content: flex-end; margin: -6px 0 20px; }
 .viewTitle{font-size:32px!important;font-weight:600;letter-spacing:-.035em}.railTitle{font-size:20px}.assumptions{font-size:13px;line-height:1.65}.caption{font-size:13px;line-height:1.6}.rail{padding:25px 20px}.portfolioFacts{font-size:14px}.subtabs{gap:24px}.subtabs button{font-size:13px;min-height:54px;padding:15px 0}.description{font-size:14px;line-height:1.65}
-.main h1{font-size:34px!important;letter-spacing:-.04em;font-weight:600}.row{font-size:13px;grid-template-columns:108px minmax(0,1fr);gap:8px;padding:10px 0}.row small{font-size:11px;line-height:1.6}.readonly,.compareNote{font-size:12px;line-height:1.6}
+.main h1{font-size:34px!important;letter-spacing:-.04em;font-weight:600}.row{font-size:13px;grid-template-columns:108px minmax(0,1fr);gap:8px;padding:10px 0}.row small{font-size:12px;line-height:1.6}.readonly,.compareNote{font-size:12px;line-height:1.6}
 
 .metricsBlock { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); }
 .metricsBlock .railTitle { font-size: 15px; font-weight: 650; margin: 0 0 4px; }

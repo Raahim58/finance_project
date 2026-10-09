@@ -157,7 +157,7 @@ function StocksPanel({ companies, query, setQuery, changes, prices,onCompany,onS
   const rows = (companies.data ?? []).filter(company => !needle || company.symbol.toLowerCase().includes(needle) || company.name.toLowerCase().includes(needle) || company.sector.toLowerCase().includes(needle));
   return <section className={styles.sectors}>
     <div className={styles.moversBar}><h2>{rows.length} companies</h2>
-      <div className={styles.search}><Icon name="search" size={15} /><input aria-label="Filter stocks" placeholder="Filter by symbol, name or sector…" value={query} onChange={event => setQuery(event.target.value)} /></div></div>
+      <div className={styles.search}><Icon name="search" size={15} /><input aria-label="Filter stocks" placeholder="Filter stocks" value={query} onChange={event => setQuery(event.target.value)} /></div></div>
     {rows.length ? <div className={styles.directory}><table><thead><tr><th>Symbol</th><th>Company</th><th>Sector</th><th>Price (PKR)</th><th>Day %</th><th>Volume</th><th>Quote date</th></tr></thead>
       <tbody>{rows.slice(0, visible).map(company => <tr key={company.symbol} aria-selected={selected===company.symbol}>
         <td><button onClick={()=>onCompany(company.symbol)} className={styles.symbol}><CompanyLogo symbol={company.symbol} website={company.official_website}/><b>{company.symbol}</b></button></td>
