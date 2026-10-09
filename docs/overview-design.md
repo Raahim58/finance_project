@@ -1,7 +1,9 @@
 # Overview workspace
 
-Only `/dashboard` adopts the approved warm editorial design. Its shell overrides
-are route-scoped; the other workspaces retain their styling and workflows.
+`/dashboard` uses the same Inter typography, near-white surfaces, and gray rules as
+the other workspaces. The shared fixed header retains search, global portfolio
+selection, and notifications. See `docs/design/UI_CONSISTENCY_AUDIT.md` for the
+current layout and verification commands.
 
 ## Data contract
 

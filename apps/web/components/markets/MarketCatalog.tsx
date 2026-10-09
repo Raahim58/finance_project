@@ -19,7 +19,7 @@ export function MarketCatalog({ view, select, market, freshness, companies, char
   const bySymbol = new Map(companies.map(row => [row.symbol, row]));
   const watched = (market?.prices ?? market?.top_volume ?? []).slice().sort((a,b) => b.volume - a.volume).slice(0, 6);
   const percent = numeric(snapshot?.index_change_percent);
-  return <aside className={styles.catalog} aria-label="Market navigation">
+  return <aside data-workspace-left-panel className={styles.catalog} aria-label="Market navigation">
 
     {chart}
     <div className={styles.catalogList}><h2>Observed quotes <small>by volume</small></h2>{watched.map(row => <button key={row.symbol} onClick={()=>onCompany(row.symbol)}>

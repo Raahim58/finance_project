@@ -63,7 +63,7 @@ export function chartOptions(bars: TechnicalBar[], settings: ChartSettings, zoom
                         };
                     }).data.signal; return `<div style="max-width:230px;white-space:normal;font-size:11px">${escapeHtml(signal.label)}<br/>${escapeHtml(signal.date)}<br/>${escapeHtml(signal.description)}</div>`; } } });
     }
-    return { animation: false, aria: { enabled: true }, textStyle: { fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif' }, grid: grids, axisPointer: { link: [{ xAxisIndex: "all" }] },
+    return { animation: false, aria: { enabled: true }, textStyle: { fontFamily: "Inter, sans-serif" }, grid: grids, axisPointer: { link: [{ xAxisIndex: "all" }] },
         tooltip: { trigger: "axis", confine: true, backgroundColor: "#fff", borderColor: c.line, padding: 8, textStyle: { color: c.ink }, axisPointer: { type: "cross" }, formatter: (params: unknown) => {
                 const p = (Array.isArray(params) ? params : [params]) as Array<{
                     dataIndex: number;

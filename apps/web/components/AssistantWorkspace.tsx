@@ -556,7 +556,7 @@ export function AssistantWorkspaceProvider({
           aria-label="Assistant"
           className={`assistant-drawer${expanded && !fullPage ? " assistant-expanded" : ""}${marketWorkspace ? " assistant-market-overlay" : ""}${fullPage ? " assistant-full-page" : ""}`}
         >
-          {fullPage?<aside className="assistant-conversation-list" aria-label="Conversations">
+          {fullPage?<aside data-workspace-left-panel className="assistant-conversation-list" aria-label="Conversations">
             <div><h1>Chats</h1><button type="button" onClick={()=>void newChat()}>＋ New chat</button></div>
             <nav aria-label="Saved chat threads">{chats.map(chat=><button key={chat.id} aria-current={selected===chat.id?"true":undefined} onClick={()=>{setSelected(chat.id);nearBottom.current=true;}}><strong>{chat.title}</strong><span>{chat.latest_activity?formatDate(chat.latest_activity):"—"}{chat.active_run?" · Generating":""}</span></button>)}</nav>
             {!chats.length?<p>No saved chats yet.</p>:null}{chatCursor?<button type="button" onClick={()=>void refreshChats(chatCursor)}>More chats</button>:null}

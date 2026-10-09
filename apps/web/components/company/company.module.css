@@ -1,4 +1,4 @@
-.workspace { display:grid; grid-template-columns:320px minmax(0,1fr) 340px; min-height:calc(100vh - 46px); background:#fff; color:var(--ink); font-family:var(--font-ui); }
+.workspace { display:grid; grid-template-columns:320px minmax(0,1fr) 340px; min-height:calc(100vh - 46px); background:var(--paper); color:var(--ink); font-family:var(--font-ui); }
 .workspace button,.workspace select,.workspace textarea { font:inherit; }
 .identity { min-width:0; border-right:1px solid var(--line); padding:26px 20px; }
 .companyHeading { display:flex; gap:12px; align-items:center; }.companyHeading > div { min-width:0; }.companyHeading strong { font-size:25px; letter-spacing:-.04em; line-height:1.1; display:block; }.companyHeading span { font-size:12px; line-height:1.4; color:#5b616b; display:block; margin-top:5px; }
@@ -34,7 +34,7 @@
 .sidebarChart { margin:14px 0 8px; }.sidebarChart .ranges { margin-top:8px; }.sidebarChart .ranges button { border-radius:0; }.sidebarChart .ranges button[aria-pressed=true] { background:none; box-shadow:none;font-weight:600; }.identity { padding-top:22px; }.right { padding-top:0; }.workspace { min-height:calc(100vh - var(--workspace-header-height)); }
 @media(max-width:720px) { .sidebarChart { display:block; }.sidebarChart .ranges { max-width:none; } }
 
-.identity .relevance { margin-top:18px; padding-top:16px; border-top:1px solid var(--line); }.identity .relevance h3 { font-size:11px; font-weight:400; color:var(--muted); margin:0 0 9px; }.identity .relevance select { width:100%; border:1px solid var(--line); border-radius:6px; background:#fff; font-size:12px; padding:8px; }.identity .holdingStats { display:grid; gap:8px; margin:12px 0 8px; }
+.identity .relevance { margin-top:18px; padding-top:16px; border-top:1px solid var(--line); }.identity .relevance h3 { font-size:11px; font-weight:400; color:var(--muted); margin:0 0 9px; }.identity .relevance select { width:100%; border:1px solid var(--line); border-radius:6px; background:var(--paper); font-size:12px; padding:8px; }.identity .holdingStats { display:grid; gap:8px; margin:12px 0 8px; }
 .brief { padding-top:2px; }.rightBody { padding-top:20px; }
 
 .identity{padding-top:14px}.content{padding-top:34px}.rightBody{padding-top:34px}

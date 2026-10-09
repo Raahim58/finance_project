@@ -10,6 +10,7 @@ import { PortfolioContextPicker } from "@/components/PortfolioContextPicker";
 import { CompanyQuickSearch } from "./CompanyQuickSearch";
 import { NotificationBell } from "@/components/NotificationBell";
 import { AccountMenu } from "@/components/AccountMenu";
+import { useWorkspaceHeaderPanel } from "./useWorkspaceHeaderPanel";
 import { PortfolioTabs, portfolioRoute } from "@/components/PortfolioTabs";
 
 type NavEntry = [string, string, IconName];
@@ -111,6 +112,7 @@ function MobileNavDrawer({ pathname, onClose }: { pathname: string; onClose: () 
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  useWorkspaceHeaderPanel(pathname);
   const publicRoute = pathname === "/" || pathname === "/login" || pathname === "/signup" || pathname === "/onboarding";
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectedPortfolioId,setSelectedPortfolioId]=useState<string|undefined>();
@@ -140,13 +142,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
       <div className="app-main">
         <header className="app-topbar">
-          <div className="flex min-w-0 items-center gap-3">
+          <div className="workspace-header-center">
             <button type="button" ref={menuTriggerRef} className="mobile-menu-btn icon-btn" aria-label="Open primary navigation" aria-haspopup="dialog" aria-expanded={menuOpen} aria-controls="mobile-nav-drawer" onClick={() => setMenuOpen(true)}>
               <Icon name="menu" />
             </button>
             <div id="workspace-header-content" data-portfolio-id={portfolioRoute(pathname)?.id} className="workspace-header-content"><div className="workspace-header-fallback">{portfolioRoute(pathname)?null:<h1>{currentScope(pathname)}</h1>}{portfolioRoute(pathname)?<PortfolioTabs/>:null}</div></div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="workspace-header-utilities">
             <CompanyQuickSearch />
             <PortfolioContextPicker />
             <NotificationBell />

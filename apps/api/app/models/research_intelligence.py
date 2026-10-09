@@ -151,3 +151,18 @@ class CompanyDigest(ResearchArtifact, Base):
     model: Mapped[str] = mapped_column(String(100), nullable=False)
     snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
     brief_json: Mapped[str | None] = mapped_column(Text)
+
+
+class AIBrief(ResearchArtifact, Base):
+    """Cached AI market or portfolio brief. Reads never generate; a new input_hash (new trading day,
+    market close, new event or changed holdings) is what makes a brief stale."""
+    __tablename__ = "ai_briefs"
+    __table_args__ = (UniqueConstraint("user_id", "scope", "scope_key", "input_hash", name="uq_ai_brief"),)
+    scope: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    scope_key: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="running", nullable=False)
+    brief_json: Mapped[str | None] = mapped_column(Text)
+    facts_json: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(String(60))

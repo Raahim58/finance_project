@@ -24,7 +24,7 @@ export function RunResult({ result, extra, extrasNote, templates, names, website
   const chips = shockChips(extra?.shocks);
   const unmapped = holdings.filter(row => row.unmapped).map(row => row.symbol);
   const vol = extra?.volatility_change;
-  return <section className={styles.results} aria-label="Results">
+  return <section data-portfolio-panel="content" className={styles.results} aria-label="Results">
     <div className={styles.resultHead}>
       <div><h2 className={styles.h2}>Results</h2><div className={styles.runTitle}>{result.name}</div></div>
       <div className={styles.meta}><span className={styles.badge}>Deterministic</span><span>{when ? `Run on ${when}` : `Data as of ${result.data_cutoff}`}</span></div>
@@ -85,7 +85,7 @@ export function ReplayResult({ replay, websites }: { replay: HistoricalReplay; w
   const rows = replay.positions.map(row => ({ symbol: String(row.symbol ?? ""), sector: typeof row.sector === "string" ? row.sector : null, available: row.available === true, reason: typeof row.reason === "string" ? row.reason : null, start: numeric(row.start_value), end: numeric(row.end_value), pnl: numeric(row.pnl), ret: numeric(row.return) }));
   const values = replay.path.map(point => point.value), low = Math.min(...values), high = Math.max(...values);
   const points = values.map((value, index) => `${values.length > 1 ? index / (values.length - 1) * 300 : 0},${high === low ? 50 : 50 - (value - low) / (high - low) * 46}`).join(" ");
-  return <section className={styles.results} aria-label="Historical replay results">
+  return <section data-portfolio-panel="content" className={styles.results} aria-label="Historical replay results">
     <div className={styles.resultHead}>
       <div><h2 className={styles.h2}>Results</h2><div className={styles.runTitle}>Historical replay · {replay.start_date} to {replay.end_date}</div></div>
       <div className={styles.meta}><span className={styles.badge}>{replay.counterfactual ? "Counterfactual replay" : "Ledger replay"}</span><span>Not saved to history</span></div>
@@ -111,5 +111,5 @@ export function ReplayResult({ replay, websites }: { replay: HistoricalReplay; w
 }
 
 export function EmptyResult({ text }: { text: string }) {
-  return <section className={styles.results}><h2 className={styles.h2}>Results</h2><div className={styles.empty} style={{ marginTop: 16 }}><strong>No scenario selected</strong><span>{text}</span></div></section>;
+  return <section data-portfolio-panel="content" className={styles.results}><h2 className={styles.h2}>Results</h2><div className={styles.empty} style={{ marginTop: 16 }}><strong>No scenario selected</strong><span>{text}</span></div></section>;
 }

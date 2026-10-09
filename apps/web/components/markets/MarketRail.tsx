@@ -7,6 +7,8 @@ import type { ResearchEventView } from "@/lib/api/research";
 import { formatDate, formatNumber, formatPercent, humanize, numeric } from "@/lib/overview";
 import { timeAgo } from "@/lib/markets";
 import { CompanyLogo } from "./CompanyLogo";
+import { AIBriefCard } from "@/components/AIBriefCard";
+import { getMarketBrief } from "@/lib/api/research";
 import styles from "./markets.module.css";
 
 export function MarketRail({ market, events, loading,onSector }: {onSector?:(sector:string)=>void; market: MarketOverview | null; events: ResearchEventView[]; loading: boolean }) {
@@ -20,7 +22,7 @@ export function MarketRail({ market, events, loading,onSector }: {onSector?:(sec
   const evidence = events.filter(event => { const key = `${event.evidence[0]?.source_name}:${event.event_type}`; if (seen.has(key)) return false; seen.add(key); return true; }).slice(0, 3);
   const ask = (text: string) => assistant?.open(text);
   return <aside className={styles.rail} aria-label="Market context and Assistant">
-    <div className={styles.railHead}><h2>Market brief</h2><span>From market data</span></div>
+    <AIBriefCard title="Market brief" load={getMarketBrief} />
     <section className={styles.digest}>
       <h3>{percent == null ? "Your market view, in context" : `KSE-100 ${percent < 0 ? "down" : percent > 0 ? "up" : "unchanged"}${percent === 0 ? "" : ` ${Math.abs(percent).toFixed(2)}%`}`}</h3>
       <p>{market ? `${market.priced_securities ?? "—"} securities across ${market.sectors.length} sectors are available in the ${market.price_basis === "intraday" ? "observed intraday snapshot" : "stored daily session"}.` : "The digest appears when a dated market snapshot is available."}</p>

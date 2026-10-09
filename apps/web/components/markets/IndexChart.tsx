@@ -22,6 +22,7 @@ export function IndexChart({ points, name, liveDate, height = 245, compactAxis =
   return <div ref={node} role="img" aria-label={`${name} ${liveDate ? "daily closes and latest observed level" : "closing level"} from ${formatDate(points[0].date)} to ${formatDate(points[points.length - 1].date)}`}>
     <ReactECharts ref={chart} notMerge style={{ height, width: "100%" }} option={{
       animation: false,
+      textStyle: { fontFamily: "Inter, sans-serif" },
       grid: { left: 3, right: 5, top: 19, bottom: 9, containLabel: true },
       tooltip: { trigger: "axis", valueFormatter: (value: number) => formatNumber(value), backgroundColor: "#ffffff", borderColor: "#eceef1", textStyle: { color: "#141619", fontSize: 12 }, axisPointer: { type: "line", lineStyle: { color: "#b6bcc4", width: 1 } } },
       xAxis: { type: "category", boundaryGap: false, data: points.map(point => point.date), axisTick: { show: false }, axisLine: { show: false }, axisLabel: { hideOverlap: true, color: "#70757d", fontSize: 11, formatter: (value: string) => formatDate(value).slice(0, 6) } },

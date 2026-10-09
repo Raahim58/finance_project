@@ -1,0 +1,123 @@
+/* Shared workspace geometry and visual tokens. Imported after legacy page styles. */
+.workstation-shell { --workspace-left-width:0px; --sidebar:80px; }
+.workstation-shell:has(.ptabs ~ .workspace-header-tabs) { --workspace-header-height:92px; }
+.workstation-shell .app-topbar,
+.workstation-shell[data-workspace="portfolio"] .app-topbar {
+  left:calc(var(--sidebar) + var(--workspace-left-width));
+  padding:0 18px;
+  gap:0;
+  background:var(--canvas);
+}
+.workstation-shell .app-sidebar,
+.workstation-shell .app-main { background:var(--canvas); }
+.workstation-shell [data-workspace-left-panel][data-header-raised="true"] {
+  position:relative;
+  margin-top:calc(-1 * var(--workspace-header-height));
+  min-height:100dvh;
+  align-self:stretch;
+  background:var(--canvas);
+  border-right:1px solid var(--line);
+}
+.workstation-shell .app-topbar > .workspace-header-center {
+  position:relative;
+  justify-content:center;
+  overflow:hidden;
+}
+.workspace-header-content { justify-content:center; }
+.workspace-page-header,.workspace-header-fallback {
+  justify-content:center;
+  gap:20px;
+}
+.workspace-page-header:has(.workspace-header-tabs) > h1 { display:none; }
+.workspace-header-tabs,.ptabs { justify-content:safe center; gap:22px; }
+.workspace-header-tabs { height:100%; align-self:center; }
+.workspace-header-tabs button,.workspace-header-tabs a,.ptabs a {
+  font-family:var(--font-ui);
+  font-size:14px;
+  font-weight:400;
+}
+.workspace-header-tabs [aria-current="page"],
+.workspace-header-tabs [aria-selected="true"],.ptabs a[aria-current="page"] {
+  font-weight:650;
+  color:var(--ink);
+  border-bottom-color:transparent;
+}
+.ptabs a[aria-current="page"]::after { display:none; }
+.workspace-page-header > .workspace-header-action { margin-left:0; flex-shrink:0; }
+.workstation-shell .app-topbar > .workspace-header-utilities {
+  display:flex;
+  align-items:center;
+  gap:4px;
+  padding-left:14px;
+  margin-left:14px;
+  height:34px;
+  border-left:1px solid var(--line);
+}
+.workstation-shell .app-topbar .portfolio-context { max-width:220px; }
+.workstation-shell .app-topbar .portfolio-context select { max-width:220px; font-size:13px; }
+.workspace-page-header:has(.ptabs):has(.workspace-header-tabs) {
+  flex-wrap:wrap; align-content:center; gap:0;
+}
+.workspace-page-header:has(.ptabs):has(.workspace-header-tabs) .ptabs { height:30px; width:100%; }
+.workspace-page-header .ptabs ~ .workspace-header-tabs { height:25px; width:100%; gap:18px; }
+.workspace-page-header .ptabs ~ .workspace-header-tabs button { font-size:12px; }
+
+/* Keep hierarchy consistent without flattening financial headline values. */
+.workstation-shell :is(main,.assistant-drawer) { font-family:var(--font-ui); font-size:14px; }
+.workstation-shell :is(main,.assistant-drawer) :is(h1,h2,h3,h4) {
+  font-family:var(--font-heading);
+  font-weight:600;
+  letter-spacing:-.025em;
+  line-height:1.35;
+}
+.workstation-shell main h1 { font-size:24px!important; }
+.workstation-shell main h2 { font-size:18px!important; }
+.workstation-shell main :is(h3,h4) { font-size:15px!important; }
+.workstation-shell :is(main,.assistant-drawer) :is(table,dl) { font-variant-numeric:tabular-nums; }
+.workstation-shell main :is(th) { font-size:12px; font-weight:500; }
+.workstation-shell main :is(td) { font-size:13px; }
+.workstation-shell [data-portfolio-panel="content"]:has(> .workspace-data-notices) {
+  display:flex; flex-direction:column;
+}
+.workspace-data-notices { order:-1; }
+.workstation-shell :is(.panel,.panel-head,.notice,.assistant-drawer,.assistant-composer,.assistant-toolbar,.workspace-search-popover,.account-menu-pop) {
+  background:var(--paper);
+  border-color:var(--line);
+}
+.workstation-shell :is(.field,.rx-input,.rx-select,.rx-btn-outline) { background-color:var(--paper); }
+.workstation-shell main :is([class*="__workspace"],[class*="__layout"],[class*="__page"],[class*="__root"],[class*="__main"],[class*="__center"],[class*="__content"],[class*="__rail"],[class*="__right"],[class*="__left"]) { background-color:var(--canvas); }
+.assistant-drawer { background:var(--paper); font-family:var(--font-ui); border-color:var(--line); }
+.assistant-conversation-list,.assistant-evidence-context { background:var(--canvas); }
+.assistant-user { background:var(--surface); }
+.assistant-launcher { background:var(--paper); }
+.assistant-scope-bar { border-bottom:1px solid var(--line); }
+.workspace-header-tabs :focus-visible,.ptabs a:focus-visible {
+  outline:2px solid var(--focus); outline-offset:-3px;
+}
+
+@media(min-width:721px) {
+  .assistant-drawer.assistant-full-page {
+    inset:0 0 0 80px; height:100dvh;
+  }
+  .assistant-full-page .assistant-conversation-list[data-header-raised="true"] { margin-top:0; }
+  .assistant-full-page .assistant-conversation-column,
+  .assistant-full-page .assistant-evidence-context { padding-top:var(--workspace-header-height); }
+}
+@media(max-width:1150px) {
+  .workspace-header-tabs,.ptabs { gap:16px; }
+  .workstation-shell .app-topbar .portfolio-context,
+  .workstation-shell .app-topbar .portfolio-context select { max-width:160px; }
+}
+@media(max-width:720px) {
+  .workstation-shell { --sidebar:0px; }
+  .workstation-shell .app-topbar,
+  .workstation-shell[data-workspace="portfolio"] .app-topbar { left:0; padding:0 10px; }
+  .workstation-shell .workspace-header-center { gap:8px; }
+  .workstation-shell .app-topbar > .workspace-header-utilities { padding-left:7px; margin-left:7px; gap:0; }
+  .workstation-shell .app-topbar .portfolio-context,
+  .workstation-shell .app-topbar .portfolio-context select { max-width:100px; }
+  .workspace-header-tabs,.ptabs { justify-content:flex-start; gap:16px; }
+  .workspace-page-header { gap:12px; }
+  .workspace-header-tabs button,.workspace-header-tabs a,.ptabs a { font-size:13px; }
+  .workstation-shell .mobile-menu-btn { flex-shrink:0; }
+}

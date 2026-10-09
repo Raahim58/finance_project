@@ -79,11 +79,9 @@ def dependency_hash(db, instrument):
     versions = {
         'facts': select_periods(financial_rows(db, instrument)),
         'secondary_gap':secondary_financial_gap(db,instrument.id),
-        'prices': [tuple(r) for r in db.execute(select(MarketObservation.id, MarketObservation.effective_at,
-            MarketObservation.values_json, MarketObservation.artifact_id).where(MarketObservation.instrument_id == instrument.id,
+        'prices': [str(r[0].date() if hasattr(r[0],'date') else r[0]) for r in db.execute(select(MarketObservation.effective_at).where(MarketObservation.instrument_id == instrument.id,
             MarketObservation.is_selected.is_(True)).order_by(MarketObservation.effective_at.desc(),MarketObservation.id).limit(1))],
-        'legacy_prices': [tuple(r) for r in db.execute(select(MarketPrice.id, MarketPrice.trade_date, MarketPrice.close,
-            MarketPrice.previous_close, MarketPrice.volume).where(MarketPrice.symbol == instrument.symbol).order_by(MarketPrice.trade_date.desc(),MarketPrice.id).limit(1))],
+        'legacy_prices': [str(r[0]) for r in db.execute(select(MarketPrice.trade_date).where(MarketPrice.symbol == instrument.symbol).order_by(MarketPrice.trade_date.desc(),MarketPrice.id).limit(1))],
         'screening': [tuple(r) for r in db.execute(select(CompanyScreeningSnapshot.id, CompanyScreeningSnapshot.metrics_json)
             .where(CompanyScreeningSnapshot.instrument_id == instrument.id).order_by(CompanyScreeningSnapshot.as_of_date.desc()).limit(1))],
         'macro': [tuple(r) for r in db.execute(select(MacroObservation.id, MacroObservation.value, MacroObservation.revision,

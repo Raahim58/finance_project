@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { CompanyLogo } from "@/components/markets/CompanyLogo";
@@ -11,6 +11,8 @@ import { indexLatest, timeAgo } from "@/lib/markets";
 import { formatDate, formatNumber, formatPercent, humanize, numeric } from "@/lib/overview";
 import { activityLine, briefHeadline, holdingRows, movers, overviewRanges, rangeSlice, valuePoints, type HoldingRow, type OverviewRange } from "@/lib/portfolio-overview";
 import { useOverviewExtras } from "./overview/useOverviewExtras";
+import { AIBriefCard } from "@/components/AIBriefCard";
+import { getPortfolioBrief } from "@/lib/api/research";
 import styles from "./overview/overview.module.css";
 
 const tone = (value: number | null) => value == null || value === 0 ? "" : value > 0 ? styles.positive : styles.negative;
@@ -25,6 +27,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
   const [query, setQuery] = useState("");
   const rows = useMemo(() => summary ? holdingRows(summary, extras.history) : [], [summary, extras.history]);
   const points = useMemo(() => valuePoints(data.performance), [data.performance]);
+  const loadBrief = useCallback((retry: boolean) => getPortfolioBrief(portfolioId, retry), [portfolioId]);
   if (!summary) return <p className={styles.empty}>Portfolio summary unavailable. The API did not return a database valuation.</p>;
 
   const total = numeric(summary.total_value), cash = numeric(summary.cash_balance), dayChange = numeric(summary.day_change), dayPercent = numeric(summary.day_change_percent);
@@ -45,7 +48,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
   ].filter(Boolean);
 
   return <div className={styles.layout}>
-    <aside className={styles.facts} aria-label="Portfolio valuation and holdings">
+    <aside data-workspace-left-panel className={styles.facts} aria-label="Portfolio valuation and holdings">
       <p className={styles.muted}>Portfolio value</p><strong className={styles.level}>{pkr(total)}</strong>
       <p className={`${styles.change} ${tone(dayPercent)}`}>{formatPercent(dayPercent)}<small>Latest stored session · {formatDate(summary.data_freshness_date)}</small></p>
       <dl className={styles.capital}><Stat label="Cash" value={pkr(cash)} note={share(cash)} /><Stat label="Invested" value={pkr(invested)} note={share(invested)} /></dl>
@@ -53,6 +56,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
       <p className={styles.source}>{summary.portfolio.source_mode} · {summary.data_source ?? "Source unavailable"}</p>
     </aside>
     <div data-portfolio-panel="content" className={styles.main}>
+      <AIBriefCard title="Portfolio brief" load={loadBrief} />
       <div className={`${styles.notice} ${status === "BREACH" ? styles.bad : status === "PASS" && !notices.length ? styles.ok : ""}`} role="status">
         <span><b>Mandate:</b> {status === "PASS" ? "Within IPS limits" : status === "BREACH" ? `IPS breach${compliance?.violations.length ? ` (${compliance.violations.length})` : ""}` : status === "NOT_EVALUATED" ? "Not evaluated (IPS data missing)" : "Compliance unavailable"}</span>
         <span><b>Prices:</b> {summary.data_freshness_date ? `as of ${formatDate(summary.data_freshness_date)}` : "date unavailable"} · {summary.data_source ?? "source unavailable"}</span>

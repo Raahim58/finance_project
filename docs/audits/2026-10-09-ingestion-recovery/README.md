@@ -55,3 +55,19 @@ DATABASE_URL='sqlite+pysqlite:///:memory:' EMBEDDING_BACKEND=hash apps/api/.venv
 ```
 
 65 tests passed, including first-seen/listing separation, verified-date bounds, complete/partial period proof, monthly boundaries, idempotent enqueue, public payload isolation and advancement past terminal source gaps.
+
+## Follow-up release and canaries
+
+The ingestion repair was released as `ced33a6`, followed by the minimal missing-import build fix `ceb6d13`. Oracle rollout [37899240011](https://github.com/Raahim58/finance_project/actions/runs/37899240011) completed successfully. API and heavy worker report `financial-layout-v5-local-units`; readiness remains healthy. The corrected frontend release also passed an isolated production build. 92 targeted backend tests passed.
+
+The versioned replay preserves original facts with zero active confidence and source/previous-confidence audit metadata. It installs new rows only from source-hash-verified deterministic extraction. Complete/partial extraction coverage only skips a document when its extractor version matches the installed version. Native-empty retained reports now use bounded OCR and explicitly label the limited OCR page coverage.
+
+Live report canaries:
+
+- LUCK, retained PDF `https://financials.psx.com.pk/lib/DownloadPDF.php?id=282262`: 42 active v5 facts; all 42 original rows retained inactive for audit.
+- SYS, retained PDF `https://financials.psx.com.pk/lib/DownloadPDF.php?id=277949`: 20 active v5 facts; 16 original rows retained inactive for audit.
+- MARI, retained PDF `https://financials.psx.com.pk/lib/DownloadPDF.php?id=275583`: explicit duplicate-year/date-column and accounting-basis ambiguities produced no admissible replacement rows. Eight legacy rows were retained but quarantined from active reads; extraction coverage is partial. The multi-period statement layout needs further repair before ratios can rely on that report.
+
+Macro ingestion was already enabled, but its dedicated scheduler/worker were not running. Both were restored. Reactivating `PK_TBILL_3M` in the catalog and refreshing the official SBP provider yielded observed dates of September 30 (T-bill), October 8 (KIBOR) and October 9 (policy snapshot). No policy/KIBOR substitution for the T-bill input was introduced.
+
+At the post-release check, 422 monthly price jobs had completed, one source gap was dead-lettered, and 298 were queued/running. Recovery remained active throughout the deployment. This is not a claim of completed universe-wide history, full statement coverage, resolved MARI layout, or complete corporate-action history. No production demo reseed was performed.
