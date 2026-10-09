@@ -18,7 +18,7 @@ type NavEntry = [string, string, IconName];
 const groups: Array<{ label: string; items: NavEntry[] }> = [
   { label: "Workspace", items: [["Today", "/dashboard", "grid"]] },
   { label: "Investment", items: [
-    ["Markets", "/markets", "market"],
+    ["Markets", "/market", "market"],
     ["Portfolios", "/portfolios", "briefcase"],
     ["Research", "/research", "document"],
   ] },
@@ -32,7 +32,7 @@ const groups: Array<{ label: string; items: NavEntry[] }> = [
 function isActive(pathname: string, href: string) {
   return pathname === href
     || (href !== "/dashboard" && pathname.startsWith(href))
-    || (href === "/markets" && (pathname.startsWith("/market") || pathname.startsWith("/companies")));
+    || (href === "/market" && (pathname.startsWith("/market") || pathname.startsWith("/companies")));
 }
 
 function NavItem({ item, pathname, selectedPortfolioId }: { item: NavEntry; pathname: string; selectedPortfolioId?:string }) {
@@ -122,7 +122,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (publicRoute) return <>{children}</>;
 
   return (
-    <AssistantWorkspaceProvider><div className="app-shell workstation-shell" data-page={pathname === "/dashboard" ? "today" : "workspace"} data-workspace={pathname === "/market" || pathname === "/markets" ? "markets" : pathname.startsWith("/portfolios") ? "portfolio" : "default"}>
+    <AssistantWorkspaceProvider><div className="app-shell workstation-shell" data-page={pathname === "/dashboard" ? "today" : "workspace"} data-workspace={pathname === "/market" ? "markets" : pathname.startsWith("/portfolios") ? "portfolio" : "default"}>
       <aside className="app-sidebar" aria-label="Primary navigation">
         <Link href="/dashboard" className="workstation-brand" aria-label="RAAHIM home">R</Link>
         <nav className="rail-navigation" aria-label="Workspace navigation">

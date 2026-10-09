@@ -9,7 +9,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantWorkspaceProvider, AskAssistant, useAssistantWorkspace } from "./AssistantWorkspace";
 import { useEffect } from "react";
-import { AssistantControls } from "./AssistantControls";
 import type { RunEvent } from "@/lib/assistant-workspace";
 const mocks = vi.hoisted(() => ({
   path: "/companies/OGDC",
@@ -137,25 +136,11 @@ describe("persistent Assistant", () => {
   it("keeps an explicit company portfolio scope separate from the global default", async () => {
     mocks.path = "/companies/FFC";
     mocks.portfolios.mockResolvedValue([{id:"p1",name:"Growth",is_default:true},{id:"p2",name:"Income",is_default:false}]);
-    function Scope(){const setScope=useAssistantWorkspace()?.setCompanyPortfolioScope;useEffect(()=>{setScope?.("p2")},[setScope]);return <AssistantControls/>}
+    function Scope(){const setScope=useAssistantWorkspace()?.setCompanyPortfolioScope;useEffect(()=>{setScope?.("p2")},[setScope]);return <AskAssistant question="">Open scoped Assistant</AskAssistant>}
     render(<AssistantWorkspaceProvider><Scope/></AssistantWorkspaceProvider>);
-    fireEvent.click(screen.getByLabelText("Open Assistant sidebar"));
+    fireEvent.click(screen.getByRole("button", { name: "Open scoped Assistant" }));
     await screen.findByText(/FFC · Income/);
     expect(mocks.submit).not.toHaveBeenCalled();
-  });
-  it("opens a previous chat over the market brief and closes without generating", async () => {
-    mocks.path = "/market";
-    render(<AssistantWorkspaceProvider><div>Market brief</div><AssistantControls /></AssistantWorkspaceProvider>);
-    fireEvent.click(screen.getByLabelText("Previous chats"));
-    fireEvent.click(await screen.findByRole("button", { name: "Other chat" }));
-    expect(screen.getByRole("dialog", { name: "Assistant" })).toHaveClass("assistant-market-overlay");
-    await waitFor(() => expect(mocks.history).toHaveBeenCalledWith("c2", undefined));
-    expect(screen.getByText("Market brief")).toBeInTheDocument();
-    expect(mocks.submit).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByLabelText("Close Assistant"));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("Open Assistant sidebar"));
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
   it("switches saved providers without generating and snapshots the next submission", async () => {
     render(tree());

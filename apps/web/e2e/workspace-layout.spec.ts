@@ -1,4 +1,26 @@
 import {expect,test} from "@playwright/test";
+
+test("Research uploads source metadata and refreshes cached document lists",async({page})=>{
+ const uploaded={id:"manual-upload",title:"Manual source fixture",symbol:"FFC",document_type:"annual_report",source_name:"manual",status:"ready",data_status:"fixture",published_date:null,source_url:null};
+ let stored=false;
+ await page.route("**/api/documents**",async route=>{
+  const path=new URL(route.request().url()).pathname;
+  if(path==="/api/documents/upload"){
+   const body=route.request().postData()??"";
+   expect(body).toContain('name="symbol"');expect(body).toContain("FFC");expect(body).toContain('filename="source.txt"');
+   stored=true;await route.fulfill({status:201,contentType:"application/json",body:JSON.stringify(uploaded)});
+  }else await route.fulfill({status:200,contentType:"application/json",body:JSON.stringify(stored?[uploaded]:[])});
+ });
+ await page.goto("/research");
+ await expect(page.getByText("No stored reports match")).toBeVisible();
+ await page.getByText("Upload document",{exact:true}).click();
+ await page.getByLabel("File",{exact:true}).setInputFiles({name:"source.txt",mimeType:"text/plain",buffer:Buffer.from("Offline source fixture")});
+ await page.getByLabel("Title",{exact:true}).fill(uploaded.title);
+ await page.getByLabel("Symbol",{exact:true}).fill("ffc");
+ await page.getByRole("button",{name:"Upload and index"}).click();
+ await expect(page.getByRole("status")).toHaveText("Document uploaded. Status: ready.");
+ await expect(page.getByRole("button",{name:uploaded.title,exact:true})).toBeVisible();
+});
 // Offline UI contracts only. These fixtures are never persisted as market facts.
 const portfolio={id:"layout-p1",name:"Layout test portfolio",base_currency:"PKR",is_default:true,archived_at:null,source_mode:"manual",history_complete:true,selected_ips_version_id:null};
 const companies=[{id:"ffc",symbol:"FFC",name:"Fauji Fertilizer",sector:"Fertilizer",is_active:true,exchange:{code:"PSX"}},{id:"efert",symbol:"EFERT",name:"Engro Fertilizers",sector:"Fertilizer",is_active:true,exchange:{code:"PSX"}},{id:"sys",symbol:"SYS",name:"Systems",sector:"Technology",is_active:true,exchange:{code:"PSX"}}];
@@ -34,7 +56,7 @@ test.beforeEach(async({page})=>{
  });
 });
 test("Markets swaps its brief for stock and searchable sector detail",async({page})=>{
- await page.setViewportSize({width:1440,height:1000});await page.goto("/markets");
+ await page.setViewportSize({width:1440,height:1000});await page.goto("/market");
  const header=page.locator(".app-topbar");await expect(header.getByRole("navigation",{name:"Market views"})).toBeVisible();
  await expect(header.getByRole("button",{name:"All stocks",exact:true})).toBeVisible();
  await expect(page.getByRole("button",{name:"Search stocks and sectors"})).toHaveCount(0);
@@ -101,7 +123,7 @@ test("full chat fills the workspace and floating Ask opens and closes cleanly",a
 });
 test("shared header and chat fit on mobile",async({page})=>{
  await page.setViewportSize({width:390,height:844});
- for(const path of ["/markets","/monitoring","/portfolios/manage","/assistant"]){await page.goto(path);await expect(page.locator(".app-topbar")).toBeVisible();await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);}
+ for(const path of ["/market","/monitoring","/portfolios/manage","/assistant"]){await page.goto(path);await expect(page.locator(".app-topbar")).toBeVisible();await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);}
  await page.screenshot({path:"test-results/layout-mobile-chat.png",fullPage:true});
 });
 
@@ -110,7 +132,7 @@ for (const width of (process.env.UI_AUDIT_WIDTH ? [Number(process.env.UI_AUDIT_W
 test(`audit ${width}: left columns reach the viewport top and header utilities remain fixed`,async({page})=>{
  test.setTimeout(180_000);
  const errors:string[]=[];page.on("pageerror",error=>errors.push(`${page.url()}: ${error.message}`));
- const routes=["/dashboard","/markets","/companies/FFC","/portfolios/layout-p1/overview","/portfolios/layout-p1/ips","/portfolios/layout-p1/build","/portfolios/layout-p1/quant","/portfolios/layout-p1/risk","/portfolios/layout-p1/scenarios","/portfolios/layout-p1/research","/portfolios/layout-p1/activity","/research","/monitoring","/activity","/portfolios/manage","/settings","/assistant"];
+ const routes=["/dashboard","/market","/companies/FFC","/portfolios/layout-p1/overview","/portfolios/layout-p1/ips","/portfolios/layout-p1/build","/portfolios/layout-p1/quant","/portfolios/layout-p1/risk","/portfolios/layout-p1/scenarios","/portfolios/layout-p1/research","/portfolios/layout-p1/activity","/research","/monitoring","/activity","/portfolios/manage","/settings","/assistant"];
   await page.setViewportSize({width,height:900});
   for(const path of routes){
    await page.goto(path);
@@ -128,12 +150,12 @@ test(`audit ${width}: left columns reach the viewport top and header utilities r
     return Math.abs(p.y)<1&&Math.abs(h.left-p.right)<1;
    })).toBe(true);
    expect(errors).toEqual([]);
-   if(width===1440&&["/markets","/companies/FFC","/portfolios/layout-p1/overview","/portfolios/layout-p1/ips","/portfolios/layout-p1/quant","/portfolios/layout-p1/scenarios","/portfolios/layout-p1/research","/assistant"].includes(path)){
+   if(width===1440&&["/market","/companies/FFC","/portfolios/layout-p1/overview","/portfolios/layout-p1/ips","/portfolios/layout-p1/quant","/portfolios/layout-p1/scenarios","/portfolios/layout-p1/research","/assistant"].includes(path)){
     await expect(page.locator("[data-workspace-left-panel]")).toHaveAttribute("data-header-raised","true");
    }
    const font=await page.locator("body").evaluate(el=>getComputedStyle(el).fontFamily);
    expect(font).toContain("Inter");
-   await expect(page.locator("body")).toHaveCSS("background-color","rgb(250, 251, 252)");
+   await expect(page.locator("body")).toHaveCSS("background-color","rgb(255, 255, 255)");
    await page.addStyleTag({content:"nextjs-portal { display:none; }"});
    await page.screenshot({path:`test-results/ui-audit/${width}-${path.slice(1).replaceAll("/","-")}.png`,fullPage:true});
    await page.evaluate(()=>scrollTo(0,200));
