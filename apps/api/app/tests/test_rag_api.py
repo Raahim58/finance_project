@@ -1,6 +1,7 @@
 
 from sqlalchemy import select
 
+from app.tests.support.portfolios import ingest_text
 from app.db.session import SessionLocal
 from app.models.document import Citation, DocumentChunk, DocumentPage
 from app.tests.support.market import _seed_companies
@@ -26,10 +27,7 @@ def test_ingest_text_document_and_search_returns_citations(client):
         "and branch network expansion. Dividend policy remains dependent on capital buffers. "
     ) * 12
 
-    ingest = client.post(
-        "/documents/ingest-text",
-        headers=headers,
-        json={
+    ingest = ingest_text(client, headers, {
             "title": "MEBL Annual Report Snippet",
             "document_type": "annual_report",
             "symbol": "MEBL",
@@ -78,10 +76,7 @@ def test_ingest_text_document_and_search_returns_citations(client):
 def test_rag_filters_and_empty_results(client):
     _seed_companies()
     headers = _auth_headers(client)
-    response = client.post(
-        "/documents/ingest-text",
-        headers=headers,
-        json={
+    response = ingest_text(client, headers, {
             "title": "SYS Quarterly Snippet",
             "document_type": "quarterly_report",
             "symbol": "SYS",
@@ -112,10 +107,7 @@ def test_rag_filters_and_empty_results(client):
 def test_document_list_and_detail(client):
     _seed_companies()
     headers = _auth_headers(client)
-    created = client.post(
-        "/documents/ingest-text",
-        headers=headers,
-        json={
+    created = ingest_text(client, headers, {
             "title": "FFC Investor Note",
             "document_type": "investor_presentation",
             "symbol": "FFC",
@@ -140,7 +132,7 @@ def test_private_documents_do_not_cross_users(client):
     owner = _auth_headers(client)
     other_signup = client.post("/auth/signup", json={"email": "rag-other@example.com", "password": "password123"})
     other = {"Authorization": f"Bearer {other_signup.json()['access_token']}"}
-    created = client.post("/documents/ingest-text", headers=owner, json={"title": "Private note", "document_type": "note", "symbol": "MEBL", "source_name": "User", "text": "private liquidity concern evidence"})
+    created = ingest_text(client, owner, {"title": "Private note", "document_type": "note", "symbol": "MEBL", "source_name": "User", "text": "private liquidity concern evidence"})
     assert created.status_code == 201
     assert created.json()["visibility"] == "private"
     assert client.get(f"/documents/{created.json()['id']}", headers=other).status_code == 404

@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.rag import DocumentIngestRequest, DocumentResponse
-from app.services.rag_service import get_document, ingest_text_document, ingest_upload, list_documents
+from app.schemas.rag import DocumentResponse
+from app.services.rag_service import get_document, ingest_upload, list_documents
 
 router = APIRouter()
 
@@ -22,15 +22,6 @@ def documents(
     db: Session = Depends(get_db),
 ) -> list[DocumentResponse]:
     return list_documents(db, current_user, symbol=symbol, document_type=document_type, limit=limit, order=order)
-
-
-@router.post("/ingest-text", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
-def post_text_document(
-    payload: DocumentIngestRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> DocumentResponse:
-    return ingest_text_document(db, current_user, payload)
 
 
 @router.post("/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)

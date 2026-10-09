@@ -58,8 +58,6 @@ def test_index_month_deduplicates_exact_rows_but_rejects_conflicting_duplicates(
                 Client(HTML.replace('</table>',conflicting+'</table>')),LocalArtifactStore(tmp_path))
 
 
-
-
 def test_split_view_removes_mechanical_jump_without_mutating_raw_prices():
     with SessionLocal() as db:
         action=seed_split(db)
@@ -80,23 +78,6 @@ def test_split_ratios_compound_and_invalid_ratios_fail():
         assert split_adjusted_price_series(db,'TEST')[0].close==Decimal(50)
         action.details_json=json.dumps({'old_shares':'0','new_shares':'5','verification':'source_reviewed'})
         with pytest.raises(ValueError):split_adjusted_price_series(db,'TEST')
-
-
-def test_recorded_split_requires_matching_source_quote_and_is_idempotent():
-    from app.models.document import Document,DocumentPage
-    from app.jobs.record_sourced_split import record_split
-    with SessionLocal() as db:
-        action=seed_split(db);db.delete(action);db.flush()
-        quote='A 5-for-1 share split was successfully executed on January 2, 2026, improving liquidity.'
-        doc=Document(symbol='TEST',document_type='annual_report',title='Synthetic test report',source_name='test fixture',source_url='https://example.com/fixture',content_hash='fixture',artifact_id=action.artifact_id)
-        db.add(doc);db.flush();db.add(DocumentPage(document_id=doc.id,page_number=1,text=quote));db.flush()
-        with pytest.raises(ValueError,match='quote'):
-            record_split(db,doc.id,1,'TEST',date(2026,1,2),1,5,'Not present in this retained report page at all.')
-        with pytest.raises(ValueError,match='ratio'):
-            record_split(db,doc.id,1,'TEST',date(2026,1,2),1,4,quote)
-        first=record_split(db,doc.id,1,'TEST',date(2026,1,2),1,5,quote)
-        second=record_split(db,doc.id,1,'TEST',date(2026,1,2),1,5,quote)
-        assert first.id==second.id and json.loads(first.details_json)['split_multiplier']=='5'
 
 
 def test_invalid_ohlc_does_not_destroy_a_valid_index_close(tmp_path):

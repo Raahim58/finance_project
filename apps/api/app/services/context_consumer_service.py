@@ -101,27 +101,6 @@ def assistant_context_request(
     )
 
 
-def build_assistant_context(
-    db: Session,
-    user: User,
-    instrument_id: str,
-    *,
-    intent: str,
-    portfolio_id: str | None,
-    question: str,
-) -> tuple[IntelligenceContextRequest, IntelligenceContext]:
-    instrument = db.get(Instrument, instrument_id)
-    if instrument is None:
-        raise HTTPException(status_code=404, detail="Instrument not found")
-    request = assistant_context_request(
-        instrument.symbol,
-        intent=intent,
-        portfolio_id=portfolio_id,
-        question=question,
-    )
-    return request, build_intelligence_context(db, user, request)
-
-
 def consume_context(
     db: Session,
     user: User,
@@ -186,80 +165,6 @@ def consume_company_research(
         consumer_type="company_research",
         consumer_key=key,
         active=active,
-    )
-
-
-def persist_built_assistant_context(
-    db: Session,
-    user: User,
-    request: IntelligenceContextRequest,
-    context: IntelligenceContext,
-    *,
-    conversation_id: str,
-    message_id: str,
-    output_id: str | None = None,
-    active: bool = True,
-) -> ConsumedContext:
-    visible, refresh = ContextDeficiencyBridge.production(
-        db, user, publish=False
-    ).record_and_schedule(
-        db,
-        user,
-        request,
-        context,
-        active=active,
-        consumer_type="assistant",
-        consumer_key=conversation_id,
-        source_message_id=message_id,
-        output_id=output_id or message_id,
-    )
-    receipt = db.scalar(
-        select(IntelligenceContextReceiptRecord).where(
-            IntelligenceContextReceiptRecord.user_id == user.id,
-            IntelligenceContextReceiptRecord.output_id == (output_id or message_id),
-        )
-    )
-    if receipt is None:  # pragma: no cover - persistence invariant
-        raise RuntimeError("Assistant context receipt was not persisted")
-    return ConsumedContext(visible, receipt, refresh)
-
-
-def context_evidence(context: IntelligenceContext) -> list[dict[str, object]]:
-    """Flatten the canonical evidence registry without manufacturing new IDs."""
-
-    return [
-        {
-            **item.model_dump(mode="json"),
-            "section": section.name.value,
-        }
-        for section in context.sections.values()
-        for item in section.evidence
-    ]
-
-
-def context_citations(context: IntelligenceContext) -> list[dict[str, object]]:
-    section = context.sections.get(ContextSectionName.RAG_EVIDENCE.value)
-    if section is None or not isinstance(section.data, list):
-        return []
-    return [
-        {
-            **dict(chunk.get("citation") or {}),
-            "symbol": chunk.get("symbol"),
-            "relevance_score": chunk.get("score"),
-        }
-        for chunk in section.data
-        if chunk.get("citation_eligible") is True and isinstance(chunk.get("citation"), dict)
-    ]
-
-
-def context_uncertainty(context: IntelligenceContext) -> list[str]:
-    return list(
-        dict.fromkeys(
-            [
-                *[item.reason for item in context.deficiencies],
-                *[error for section in context.sections.values() for error in section.errors],
-            ]
-        )
     )
 
 

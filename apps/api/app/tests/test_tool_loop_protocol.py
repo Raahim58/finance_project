@@ -3,6 +3,7 @@
 import json
 import pytest
 from sqlalchemy import select
+from app.tests.support.portfolios import ingest_text
 from app.ai.providers.base import ProviderRequestError
 from app.ai.providers.http_placeholders import AnthropicProvider, GeminiProvider
 from app.ai.tool_loop import ToolExecution
@@ -20,10 +21,7 @@ def test_native_anthropic_loop_dispatches_parallel_tools_and_persists_transcript
 ):
     headers, user_id = _auth_with_anthropic(client, monkeypatch)
     monkeypatch.setattr(diagnostics, "sampled", lambda _identifier: True)
-    document = client.post(
-        "/documents/ingest-text",
-        headers=headers,
-        json={
+    document = ingest_text(client, headers, {
             "title": "MEBL annual report note",
             "document_type": "annual_report",
             "symbol": "MEBL",

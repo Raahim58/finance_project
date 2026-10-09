@@ -781,3 +781,16 @@ def classify_document_type(source_key, title, content_type):
         if any(term in lowered for term in ('quarter','interim','half year')): return 'quarterly_report'
         return 'announcement'
     return 'news'
+
+
+def source_for_candidate(db: Session, candidate_id: str):
+    """Return the registered source adapter and the stored candidate row."""
+    from app.ingestion.evidence_catalog import build_pass1_registry
+
+    row = db.get(DiscoveryCandidate, candidate_id)
+    if row is None:
+        raise ValueError("Evidence candidate not found")
+    source_key = db.scalar(
+        select(EvidenceSourceConfig.source_key).where(EvidenceSourceConfig.id == row.source_config_id)
+    )
+    return build_pass1_registry().get(source_key), row

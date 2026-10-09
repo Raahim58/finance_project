@@ -16,7 +16,7 @@ QUEUES={'briefing':'pipeline_heavy','discover':'pipeline_discovery','fetch':'pip
     'index':'pipeline_heavy','sections':'pipeline_parse','link':'pipeline_parse','extract':'pipeline_enrich','classify':'pipeline_enrich',
     'events':'pipeline_enrich','intelligence':'pipeline_intelligence','enrich':'pipeline_model',
     'secondary_tables':'pipeline_numeric','prices':'pipeline_numeric','reports':'pipeline_discovery','report_fetch':'pipeline_fetch',
-    'report_index':'pipeline_heavy','report_extract':'pipeline_heavy','history_prices':'pipeline_numeric','market_daily':'pipeline_numeric','maintenance':'pipeline_parse'}
+    'report_index':'pipeline_heavy','report_extract':'pipeline_heavy','history_prices':'pipeline_numeric','broad_fundamentals':'pipeline_numeric','market_daily':'pipeline_numeric','maintenance':'pipeline_parse'}
 
 class DeferredStage(Exception): pass
 
@@ -64,9 +64,8 @@ def perform(db,run):
             children.append(('discover',run.subject_key,dict(p,cursor=cursor,page=int(p.get('page',0))+1)))
         return asdict(result),children
     if stage in ('fetch','parse','index'):
-        from app.jobs.evidence_tasks import _source_for_candidate
-        from app.services.evidence_operations import fetch_stage,parse_stage,index_stage
-        source,row=_source_for_candidate(db,p['candidate_id'])
+        from app.services.evidence_operations import fetch_stage,parse_stage,index_stage,source_for_candidate
+        source,row=source_for_candidate(db,p['candidate_id'])
         if p.get('revision',0)!=json.loads(row.metadata_json or '{}').get('pipeline_revision',0):
             return {'status':'superseded_stage_input'},[]
         if stage=='fetch':
@@ -170,7 +169,7 @@ def perform(db,run):
             mode='historical' if run.mode=='historical' or item.posting_date<datetime.now(UTC).date()-timedelta(days=14) else 'live'
             children.append(('report_fetch','report:'+item.report_id,{'report':payload,'capture_bucket':p.get('bucket') or p.get('as_of')},mode))
         return {'catalog_items':len(items),'scope':'all_accessible_catalog' if run.mode=='historical' else 'recent_catalog'},children
-    if stage in ('report_fetch','report_extract','history_prices'):
+    if stage in ('report_fetch','report_extract','history_prices','broad_fundamentals'):
         from app.jobs import phase2_tasks
         from app.services.pipeline.retention import capacity,daily_allowance
         if stage=='report_fetch':
@@ -188,12 +187,16 @@ def perform(db,run):
                 artifact.response_metadata_json=json.dumps({**json.loads(artifact.response_metadata_json or '{}'),'ingestion_mode':run.mode})
             return result,successor(db,run,'report_extract',dict(p,document_id=result.get('document_id')))
         if stage=='report_extract':
-            item=phase2_tasks._item(p['report'])
             from app.models.document import Document
-            doc=db.get(Document,p['document_id']) if p.get('document_id') else db.scalar(select(Document).where(Document.source_url==item.report_url,Document.status!='superseded').order_by(Document.created_at.desc()).limit(1))
+            doc=db.get(Document,p['document_id']) if p.get('document_id') else None
+            if doc is None and p.get('report'):
+                item=phase2_tasks._item(p['report'])
+                doc=db.scalar(select(Document).where(Document.source_url==item.report_url,Document.status!='superseded').order_by(Document.created_at.desc()).limit(1))
             if not doc: raise ValueError('report_document_missing')
             result=phase2_tasks.financial_extract(doc.id)
             return result,[('report_index','document:'+doc.id,{'document_id':doc.id})]
+        if stage=='broad_fundamentals':
+            return phase2_tasks.broad_fundamentals(p['symbol']),[]
         return phase2_tasks.dps_history(p['symbol'],p['year'],p['month']),[]
     if stage=='maintenance':
         from app.services.pipeline.retention import capacity,purge_attempt_payloads,prune_unpromoted_raw,demote_vectors

@@ -20,8 +20,6 @@ from app.schemas.workstation import (
     PortfolioComparisonResponse,
     ProfileVersionResponse,
     RecommendationResponse,
-    RebalanceRequest,
-    RebalanceResponse,
     ReturnDistributionResponse,
     RiskBudgetResponse,
     RollingRiskResponse,
@@ -47,9 +45,6 @@ from app.services.workstation_service import (
     list_recommendations,
     list_scenario_runs,
     portfolio_quant,
-    rebalance_preview,
-    security_quant,
-    efficient_frontier,
     run_optimizer,
     run_scenario,
     save_ips_version,
@@ -99,9 +94,6 @@ def quant(portfolio_id: str, covariance_shrinkage: float = Query(default=0.20, g
     return portfolio_quant(db, current_user, portfolio_id, covariance_shrinkage)
 
 
-@router.get("/quant/security/{instrument_id}")
-def quant_security(instrument_id: str, db: Session = Depends(get_db)):
-    return security_quant(db, instrument_id)
 
 
 @router.get("/portfolios/{portfolio_id}/frontier", response_model=EfficientFrontierResponse)
@@ -139,15 +131,8 @@ def risk_budget(portfolio_id: str, current_user: User = Depends(get_current_user
     return risk_budget_analysis(db, current_user, portfolio_id)
 
 
-@router.get("/portfolios/{portfolio_id}/risk", response_model=PortfolioQuantResponse)
-def risk(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return portfolio_quant(db, current_user, portfolio_id)
 
 
-@router.get("/portfolios/{portfolio_id}/risk-contributions")
-def contributions(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    result = portfolio_quant(db, current_user, portfolio_id)
-    return {"portfolio_id": portfolio_id, "data_cutoff": result["data_cutoff"], "risk_contributions": result["risk_contributions"], "run_id": result["run_id"]}
 
 
 @router.post("/portfolios/{portfolio_id}/optimizer-runs", response_model=OptimizerResponse, status_code=201)
@@ -160,9 +145,6 @@ def optimizer_history(portfolio_id: str, current_user: User = Depends(get_curren
     return list_optimizer_runs(db, current_user, portfolio_id)
 
 
-@router.post("/portfolios/{portfolio_id}/rebalance-preview", response_model=RebalanceResponse)
-def rebalance(portfolio_id: str, payload: RebalanceRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return rebalance_preview(db, current_user, portfolio_id, payload)
 
 
 @router.post("/portfolios/{portfolio_id}/scenario-runs", response_model=ScenarioResponse, status_code=201)
@@ -183,3 +165,4 @@ def monitoring_rule(portfolio_id: str, payload: MonitoringRuleCreate, current_us
 @router.get("/recommendations", response_model=list[RecommendationResponse])
 def recommendations(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return list_recommendations(db, current_user)
+

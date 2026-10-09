@@ -467,7 +467,7 @@ def get_market_freshness(db: Session) -> MarketFreshnessResponse:
             stale_warning="No successful market ingestion has completed yet.",
             backup_warning=None,
             ingestion_age_seconds=None,
-            provider_mode_warning="Current market data mode is mock. Use psxdata, yahoo, or auto mode for live/current ingestion." if settings.market_data_mode == "mock" else None,
+            provider_mode_warning="Current market data mode is mock. Use dps mode for live/current ingestion." if settings.market_data_mode == "mock" else None,
             ingestion_staleness_warning="No successful market ingestion has completed yet.",
             fallback_provider_active=False,
             trade_date_status="unknown",
@@ -483,9 +483,7 @@ def get_market_freshness(db: Session) -> MarketFreshnessResponse:
     # Backward-compatible combined message; prefer the split fields above for new UI.
     warning = provider_mode_warning or ingestion_staleness_warning
     backup_warning: str | None = None
-    fallback_provider_active = bool(latest_run and latest_run.attempted_provider in {"auto", "psxdata"} and latest_run.used_provider == "yahoo")
-    if fallback_provider_active:
-        backup_warning = "Primary PSX source was unavailable. Yahoo Finance fallback data is currently in use."
+    fallback_provider_active = False
 
     return MarketFreshnessResponse(
         market_data_mode=settings.market_data_mode,

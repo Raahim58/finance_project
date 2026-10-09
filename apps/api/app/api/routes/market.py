@@ -13,7 +13,6 @@ from app.schemas.market import (
     MarketFreshnessResponse,
     MarketOverviewResponse,
     MarketPriceResponse,
-    MarketSnapshotResponse,
     SectorDailyStatsResponse,
 )
 from app.services.market_service import (
@@ -22,12 +21,7 @@ from app.services.market_service import (
     get_index_history,
     get_market_freshness,
     get_market_overview,
-    get_market_snapshot,
-    get_sectors,
     get_sector_performance,
-    get_top_gainers,
-    get_top_losers,
-    get_top_volume,
     search_companies,
 )
 
@@ -51,46 +45,9 @@ def freshness(db: Session = Depends(get_db)):
     return get_market_freshness(db)
 
 
-@router.get("/snapshot", response_model=MarketSnapshotResponse | None)
-def snapshot(date_: date | None = Query(default=None, alias="date"), db: Session = Depends(get_db)):
-    return get_market_snapshot(db, date_)
-
-
 @router.get("/overview", response_model=MarketOverviewResponse)
 def overview(date_: date | None = Query(default=None, alias="date"), db: Session = Depends(get_db)):
     return get_market_overview(db, date_)
-
-
-@router.get("/top-gainers", response_model=list[MarketPriceResponse])
-def top_gainers(
-    date_: date | None = Query(default=None, alias="date"),
-    limit: int = Query(default=10, ge=1, le=50),
-    db: Session = Depends(get_db),
-):
-    return get_top_gainers(db, date_, limit)
-
-
-@router.get("/top-losers", response_model=list[MarketPriceResponse])
-def top_losers(
-    date_: date | None = Query(default=None, alias="date"),
-    limit: int = Query(default=10, ge=1, le=50),
-    db: Session = Depends(get_db),
-):
-    return get_top_losers(db, date_, limit)
-
-
-@router.get("/top-volume", response_model=list[MarketPriceResponse])
-def top_volume(
-    date_: date | None = Query(default=None, alias="date"),
-    limit: int = Query(default=10, ge=1, le=50),
-    db: Session = Depends(get_db),
-):
-    return get_top_volume(db, date_, limit)
-
-
-@router.get("/sectors", response_model=list[SectorDailyStatsResponse])
-def sectors(date_: date | None = Query(default=None, alias="date"), db: Session = Depends(get_db)):
-    return get_sectors(db, date_)
 
 
 @router.get("/sectors/{sector}/performance", response_model=list[SectorDailyStatsResponse])

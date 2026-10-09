@@ -161,9 +161,9 @@ class Settings(BaseSettings):
     @classmethod
     def validate_market_data_mode(cls, value: str) -> str:
         normalized = value.lower().strip()
-        if normalized not in {"mock", "psxdata", "yahoo", "auto", "dps", "vendor"}:
+        if normalized not in {"mock", "dps"}:
             raise ValueError(
-                "MARKET_DATA_MODE must be one of: mock, psxdata, yahoo, auto, dps, vendor"
+                "MARKET_DATA_MODE must be one of: mock, dps"
             )
         return normalized
 

@@ -4,6 +4,7 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.db.session import SessionLocal
+from app.tests.support import portfolios as ledger
 from app.models.market import MarketPrice
 from app.models.workstation import CorporateAction, Instrument, PortfolioCashSnapshot, PortfolioPositionSnapshot
 from app.services.ledger_service import apply_recorded_corporate_actions
@@ -81,7 +82,7 @@ def test_twr_removes_deposits_and_keeps_fully_sold_symbols_in_history(client):
         }
     )
 
-    assert client.get(f"/portfolios/{portfolio_id}/positions", headers=headers).json() == []
+    assert ledger.positions(client, headers, portfolio_id) == []
     points = client.get(f"/portfolios/{portfolio_id}/performance?limit=30", headers=headers).json()
     assert {point["value_date"] for point in points} >= {first.trade_date.isoformat(), last.trade_date.isoformat()}
     middle_point = next(point for point in points if point["value_date"] == middle.trade_date.isoformat())
@@ -168,7 +169,7 @@ def test_stock_split_preserves_total_cost_basis(client):
     ):
         response = client.post(f"/portfolios/{portfolio_id}/transactions", headers=headers, json=payload)
         assert response.status_code == 201, response.text
-    position = client.get(f"/portfolios/{portfolio_id}/positions", headers=headers).json()[0]
+    position = ledger.positions(client, headers, portfolio_id)[0]
     assert Decimal(position["quantity"]) == Decimal("20")
     assert Decimal(position["average_cost"]) == Decimal("50")
     assert Decimal(position["quantity"]) * Decimal(position["average_cost"]) == Decimal("1000")
@@ -191,6 +192,6 @@ def test_recorded_corporate_action_is_applied_idempotently(client):
         second = apply_recorded_corporate_actions(db, action_date)
     assert first["applied"] == 1
     assert second["applied"] == 0
-    position = client.get(f"/portfolios/{portfolio_id}/positions", headers=headers).json()[0]
+    position = ledger.positions(client, headers, portfolio_id)[0]
     assert Decimal(position["quantity"]) == Decimal("20")
     assert Decimal(position["average_cost"]) == Decimal("50")

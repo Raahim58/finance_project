@@ -515,18 +515,6 @@ def recovered_response(operation, provider, model, messages):
     return None
 
 
-def consume_retry():
-    identifier = execution_id.get()
-    if identifier is None:
-        return False
-    with SessionLocal.begin() as db:
-        row = db.get(AssistantExecution, identifier, with_for_update=True)
-        if row.retry_count >= 1:
-            return False
-        row.retry_count += 1
-        return True
-
-
 def begin_stage(operation):
     from app.models.assistant_execution import AssistantStage
 

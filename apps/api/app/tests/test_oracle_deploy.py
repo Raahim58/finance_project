@@ -22,9 +22,11 @@ def test_additive_migrations_pass_and_destructive_ones_are_flagged():
     assert breaking_ops("def upgrade():\n    op.create_table('t')\n\ndef downgrade():\n    op.drop_table('t')\n") == []
 
 
-def test_this_branch_routing_migration_is_additive_on_top_of_production_revision():
+def test_baseline_is_a_noop_at_its_retained_revision_and_rejects_older_databases():
     script = load_script()
-    assert pending_breaking(script, '0035_pipeline_text_index') == []
+    assert pending_breaking(script, '0039_ai_briefs') == []
+    with pytest.raises(RuntimeError, match="Do not stamp an older database"):
+        pending_breaking(script, '0035_pipeline_text_index')
 
 
 @pytest.fixture

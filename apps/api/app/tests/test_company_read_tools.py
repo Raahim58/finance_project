@@ -23,7 +23,6 @@ def test_company_sections_preserve_period_unit_source_and_have_no_side_effects(m
         prohibited_calls.append(True)
         raise AssertionError("prohibited side effect")
 
-    monkeypatch.setattr("app.services.ingestion_service.refresh_company_research", prohibited)
     monkeypatch.setattr("app.ai.providers.http_placeholders.AnthropicProvider.chat", prohibited)
     _, user_id = _seed(monkeypatch)
     with SessionLocal.begin() as db:

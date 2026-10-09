@@ -90,34 +90,7 @@ docker compose -f compose.oracle.yml exec -T postgres \
 docker compose -f compose.oracle.yml run --rm api alembic upgrade head
 ```
 
-Convert legacy absolute filesystem paths to private content-addressed MinIO
-URIs. First run a read-only inventory; then apply; then independently verify:
-
-```bash
-docker compose -f compose.oracle.yml run --rm api \
-  python -m app.jobs.migrate_artifacts \
-  --path-map '/Users/Raahim/Documents/LUMS/Junior/summer_semester/Tintash/finance_project/apps/api/data/artifacts=/import/host-artifacts' \
-  --path-map '/data/artifacts=/import/volume-artifacts' \
-  --scan-root /import/host-artifacts --scan-root /import/volume-artifacts
-
-docker compose -f compose.oracle.yml run --rm api \
-  python -m app.jobs.migrate_artifacts --apply \
-  --path-map '/Users/Raahim/Documents/LUMS/Junior/summer_semester/Tintash/finance_project/apps/api/data/artifacts=/import/host-artifacts' \
-  --path-map '/data/artifacts=/import/volume-artifacts' \
-  --scan-root /import/host-artifacts --scan-root /import/volume-artifacts \
-  --manifest /backups/artifact-migration-manifest.json
-
-docker compose -f compose.oracle.yml run --rm api \
-  python -m app.jobs.migrate_artifacts --verify \
-  --scan-root /import/host-artifacts --scan-root /import/volume-artifacts
-```
-
-The apply command hashes the source, compares it with `source_artifacts.sha256`,
-uploads to `sha256/<first-two>/<full-hash>`, reads the object back, verifies it,
-and only then commits that row's `s3://` URI. It is safe to rerun. A missing or
-mismatched source exits non-zero and is never silently accepted.
-`--scan-root` also uploads physical files with no database reference, but does
-not invent provenance rows for them.
+The one-off legacy filesystem-to-MinIO artifact migration job has been removed; artifacts are written to MinIO directly.
 
 ## 4. Create the initial development snapshot
 
@@ -188,9 +161,8 @@ From the Oracle repository checkout:
 ```bash
 ./ops/ingestion status
 ./ops/ingestion run market
-./ops/ingestion start phase2
 ./ops/ingestion start macro
-./ops/ingestion start evidence
+./ops/ingestion start pipeline
 ./ops/ingestion stop all
 ```
 
@@ -198,8 +170,8 @@ From the Oracle repository checkout:
 explicit action, for example:
 
 ```bash
-docker compose -f compose.oracle.yml --profile scheduling up -d phase2-scheduler
-docker compose -f compose.oracle.yml --profile scheduling stop phase2-scheduler
+docker compose -f compose.oracle.yml --profile pipeline up -d pipeline-scheduler
+docker compose -f compose.oracle.yml --profile pipeline stop pipeline-scheduler
 ```
 
 Start the matching workers before a scheduler. Stop the scheduler first, allow

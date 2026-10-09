@@ -3,7 +3,6 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.celery_app import celery_app
 from app.db.session import SessionLocal
 from app.models.market import Company
 from app.models.workstation import IngestionCoverage, Instrument, StandardizedFinancialFact
@@ -12,7 +11,6 @@ from app.providers.fundamentals.extraction import extract_facts, parse_financial
 from app.services.market_ingestion import sync_observed_dps_universe
 from app.services.screening_service import compute_screening_snapshots, deep_instrument_ids
 from app.services.coverage_service import is_queueable, reserve_and_publish
-from app.services.phase2_orchestration import incremental_catalog_dispatch_key
 import pytest
 
 
@@ -240,9 +238,9 @@ def test_history_catches_up_open_month_without_repointing_observations(tmp_path,
             ]
 
     monkeypatch.setattr("app.jobs.phase2_tasks.DpsMarketDataProvider", Provider)
-    result = dps_history.run("AAA", 2025, 1)
+    result = dps_history("AAA", 2025, 1)
     assert result["rows"] == 1 and not result.get("idempotent")
-    assert dps_history.run("AAA", 2025, 1)["idempotent"]
+    assert dps_history("AAA", 2025, 1)["idempotent"]
     with SessionLocal() as db:
         observation = db.scalar(select(MarketObservation))
         artifact = db.get(SourceArtifact, observation.artifact_id)
@@ -335,12 +333,6 @@ def test_phase2_reservation_rejects_a_stale_producer_snapshot():
         assert task.called is False
 
 
-def test_incremental_catalog_dispatch_uses_six_hour_buckets():
-    first = incremental_catalog_dispatch_key(datetime(2026, 8, 15, 13, 25, tzinfo=UTC))
-    same = incremental_catalog_dispatch_key(datetime(2026, 8, 15, 17, 59, tzinfo=UTC))
-    next_bucket = incremental_catalog_dispatch_key(datetime(2026, 8, 15, 18, 0, tzinfo=UTC))
-    assert first == same
-    assert first != next_bucket
 
 
 def test_blank_pdf_is_classified_for_selective_ocr_without_facts():
@@ -393,6 +385,10 @@ def test_image_only_financial_statement_uses_ocr_with_lower_confidence():
     assert not any("remain unavailable" in message for message in fact_diagnostics)
 
 
+
+
 def test_worker_delivery_is_acknowledged_after_execution_and_not_prefetched():
+    from app.celery_app import celery_app
+
     assert celery_app.conf.task_acks_late is True
     assert celery_app.conf.worker_prefetch_multiplier == 1

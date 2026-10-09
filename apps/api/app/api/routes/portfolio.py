@@ -8,10 +8,8 @@ from app.models.user import User
 from app.schemas.portfolio import (
     AllocationSetCreate,
     AllocationSetResponse,
-    CashBalanceResponse,
     HoldingCreate,
     HoldingResponse,
-    HoldingUpdate,
     PortfolioCreate,
     PortfolioDuplicateRequest,
     PortfolioExposureResponse,
@@ -20,10 +18,8 @@ from app.schemas.portfolio import (
     PortfolioRiskFlagsResponse,
     PortfolioSummaryResponse,
     PortfolioUpdate,
-    PositionResponse,
     TransactionCreate,
     TransactionResponse,
-    TransactionUpdate,
 )
 from app.schemas.event_intelligence import PortfolioEventsResponse
 from app.services.event_intelligence_service import portfolio_event_exposure
@@ -33,28 +29,21 @@ from app.services.portfolio_service import (
     archive_portfolio,
     create_allocation_set,
     create_portfolio,
-    delete_holding,
     delete_portfolio,
-    delete_transaction,
     duplicate_portfolio,
-    get_cash,
     get_portfolio_exposure,
     get_portfolio_or_404,
     get_portfolio_performance,
     get_portfolio_risk_flags,
     get_portfolio_summary,
-    get_positions,
     list_allocation_sets,
     rename_allocation_set,
     list_holdings,
     list_portfolios,
     list_transactions,
-    restore_portfolio,
     select_default_portfolio,
     serialize_portfolio,
-    update_holding,
     update_portfolio,
-    update_transaction,
 )
 
 router = APIRouter()
@@ -130,24 +119,9 @@ def archive(portfolio_id: str, current_user: User = Depends(get_current_user), d
     return archive_portfolio(db, current_user, portfolio_id)
 
 
-@router.post("/{portfolio_id}/restore", response_model=PortfolioResponse)
-def restore(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return restore_portfolio(db, current_user, portfolio_id)
-
-
 @router.post("/{portfolio_id}/select-default", response_model=PortfolioResponse)
 def select_default(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return select_default_portfolio(db, current_user, portfolio_id)
-
-
-@router.get("/{portfolio_id}/positions", response_model=list[PositionResponse])
-def positions(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return get_positions(db, current_user, portfolio_id)
-
-
-@router.get("/{portfolio_id}/cash", response_model=CashBalanceResponse)
-def cash(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return get_cash(db, current_user, portfolio_id)
 
 
 @router.get("/{portfolio_id}/allocations", response_model=list[AllocationSetResponse])
@@ -237,26 +211,6 @@ def post_holding(
     return add_holding(db, current_user, portfolio_id, payload)
 
 
-@router.patch("/holdings/{holding_id}", response_model=HoldingResponse)
-def patch_holding(
-    holding_id: str,
-    payload: HoldingUpdate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> HoldingResponse:
-    return update_holding(db, current_user, holding_id, payload)
-
-
-@router.delete("/holdings/{holding_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_holding(
-    holding_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> Response:
-    delete_holding(db, current_user, holding_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
 @router.get("/{portfolio_id}/transactions", response_model=list[TransactionResponse])
 def get_transactions(
     portfolio_id: str,
@@ -276,32 +230,3 @@ def post_transaction(
     return add_transaction(db, current_user, portfolio_id, payload)
 
 
-@router.patch("/transactions/{transaction_id}", response_model=TransactionResponse)
-def patch_transaction(
-    transaction_id: str,
-    payload: TransactionUpdate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> TransactionResponse:
-    return update_transaction(db, current_user, transaction_id, payload)
-
-
-@router.delete("/transactions/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_transaction(
-    transaction_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> Response:
-    delete_transaction(db, current_user, transaction_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-    AllocationSetCreate,
-    AllocationSetResponse,
-    CashBalanceResponse,
-    archive_portfolio,
-    create_allocation_set,
-    duplicate_portfolio,
-    get_cash,
-    get_positions,
-    list_allocation_sets,
-    restore_portfolio,
-    select_default_portfolio,

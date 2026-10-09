@@ -78,6 +78,15 @@ def _raw_event(
         return event.id
 
 
+def _company_events(client, headers, instrument_id):
+    from app.models.user import User
+    from app.services.context_consumer_service import company_research_response, consume_company_research
+
+    with SessionLocal() as db:
+        user = db.get(User, client.get("/auth/me", headers=headers).json()["id"])
+        return json.loads(json.dumps(company_research_response(consume_company_research(db, user, instrument_id))["intelligence_events"], default=str))
+
+
 def _auth(client):
     response = client.post(
         "/auth/signup",
@@ -289,10 +298,9 @@ def test_company_and_portfolio_apis_surface_only_direct_subjects_with_exact_weig
         instrument_id = instrument.id
 
     headers = _auth(client)
-    company = client.get(f"/companies/{instrument_id}/intelligence-events", headers=headers)
-    assert company.status_code == 200
-    assert [row["event_type"] for row in company.json()] == ["dividend"]
-    assert company.json()[0]["impact"]["status"] == "not_calculated"
+    company = _company_events(client, headers, instrument_id)
+    assert [row["event_type"] for row in company] == ["dividend"]
+    assert company[0]["impact"]["status"] == "not_calculated"
 
     portfolio_id = client.post(
         "/portfolios", headers=headers, json={"name": "Event portfolio"}
@@ -332,9 +340,7 @@ def test_sector_subject_alone_never_becomes_direct_company_event(client):
         db.commit()
         instrument_id = instrument.id
 
-    response = client.get(f"/companies/{instrument_id}/intelligence-events", headers=_auth(client))
-    assert response.status_code == 200
-    assert response.json() == []
+    assert _company_events(client, _auth(client), instrument_id) == []
 
 
 @pytest.mark.usefixtures("database")

@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.ingestion.evidence import Candidate, DiscoveryBatch, RawContent
 from app.models.document import Document
-from app.models.evidence import DiscoveryCandidate, EvidenceRefreshRequest, EvidenceSourceState
+from app.models.evidence import DiscoveryCandidate, EvidenceSourceState
 from app.models.workstation import EventSource, Instrument
 from app.services.evidence_operations import (
     EvidenceSpool,
@@ -17,55 +17,11 @@ from app.services.evidence_operations import (
     index_stage,
     parse_stage,
 )
-from app.services.evidence_pipeline import ensure_source_config, persist_candidate
-from app.services.evidence_scheduler_service import (
-    create_deep_historical_requests,
-    run_evidence_scheduler_once,
-)
-from app.tests.support.users import signup_user as _auth
 
 
 NOW = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
 
 
-@pytest.mark.usefixtures("database")
-def test_disabled_publisher_backlog_does_not_block_or_get_scheduled(monkeypatch, tmp_path):
-    monkeypatch.setattr(settings, "evidence_source_allowlist", "dawn")
-    monkeypatch.setattr(settings, "evidence_fetch_queue_target", 1)
-    monkeypatch.setattr(settings, "evidence_spool_root", str(tmp_path))
-    published = []
-    from app.jobs import evidence_tasks
-
-    for task in (
-        evidence_tasks.discover,
-        evidence_tasks.fetch,
-        evidence_tasks.parse,
-        evidence_tasks.pdf,
-        evidence_tasks.index,
-        evidence_tasks.historical_hydrate,
-        evidence_tasks.targeted_refresh,
-    ):
-        monkeypatch.setattr(task, "apply_async", lambda **kwargs: published.append(kwargs))
-    with SessionLocal() as db:
-        _, config, _ = ensure_source_config(db, "mof_pakistan")
-        for i in range(3):
-            persist_candidate(
-                db,
-                config,
-                Candidate(
-                    "mof_pakistan",
-                    f"https://www.finance.gov.pk/{i}",
-                    "Fiscal budget",
-                    "MOF",
-                    datetime.now(UTC),
-                    "listing",
-                ),
-            )
-        db.commit()
-        result = run_evidence_scheduler_once(db)
-        assert result.discovery_queued == 1
-        assert result.fetch_queued == 0
-        assert published[0]["args"][0] == "dawn"
 
 
 class StagedDawnSource:
@@ -146,193 +102,15 @@ def test_source_circuit_opens_after_configured_failures(monkeypatch):
         assert diagnostics["circuit_open_until"] is not None
 
 
-@pytest.mark.usefixtures("database")
-def test_scheduler_reconstructs_live_before_historical_from_postgres(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "source_artifact_root", str(tmp_path / "artifacts"))
-    monkeypatch.setattr(settings, "evidence_fetch_queue_target", 10)
-    monkeypatch.setattr(settings, "evidence_candidate_retention_days", 45)
-    published = []
-
-    def capture(*, args, queue, priority):
-        published.append((args[0], queue, priority))
-
-    from app.jobs import evidence_tasks
-
-    for task in (
-        evidence_tasks.discover,
-        evidence_tasks.fetch,
-        evidence_tasks.parse,
-        evidence_tasks.pdf,
-        evidence_tasks.index,
-        evidence_tasks.targeted_refresh,
-        evidence_tasks.historical_hydrate,
-    ):
-        monkeypatch.setattr(task, "apply_async", capture)
-
-    with SessionLocal() as db:
-        _, config, _ = ensure_source_config(db, "dawn")
-        candidates = []
-        for suffix, priority in (("historical", "historical"), ("live", "live")):
-            candidate = Candidate(
-                "dawn",
-                f"https://www.dawn.com/news/{suffix}",
-                f"Pakistan policy rate {suffix}",
-                "Dawn",
-                datetime.now(UTC),
-                "rss_atom",
-                external_id=suffix,
-                metadata={"priority_class": priority},
-            )
-            row, _ = persist_candidate(db, config, candidate)
-            candidates.append(row)
-        db.commit()
-        for state in db.scalars(select(EvidenceSourceState)):
-            state.next_poll_at = datetime.now(UTC) + timedelta(days=1)
-        db.commit()
-        result = run_evidence_scheduler_once(db)
-
-        fetch_messages = [item for item in published if item[1] == "evidence_fetch"]
-        assert result.fetch_queued == 2
-        assert [item[2] for item in fetch_messages] == [0, 8]
-        assert all(db.get(DiscoveryCandidate, row.id).lease_expires_at for row in candidates)
-
-
-@pytest.mark.usefixtures("database")
-def test_deferred_fetch_backlog_does_not_suppress_due_discovery(monkeypatch):
-    """Tomorrow's budget-deferred work must not make today's scheduler idle."""
-
-    monkeypatch.setattr(settings, "evidence_fetch_queue_target", 1)
-    published = []
-    from app.jobs import evidence_tasks
-
-    for task in (
-        evidence_tasks.discover,
-        evidence_tasks.fetch,
-        evidence_tasks.parse,
-        evidence_tasks.pdf,
-        evidence_tasks.index,
-        evidence_tasks.targeted_refresh,
-        evidence_tasks.historical_hydrate,
-    ):
-        monkeypatch.setattr(
-            task,
-            "apply_async",
-            lambda *, args, queue, priority: published.append((args, queue, priority)),
-        )
-
-    with SessionLocal() as db:
-        _, config, _ = ensure_source_config(db, "dawn")
-        row, _ = persist_candidate(
-            db,
-            config,
-            Candidate(
-                "dawn",
-                "https://www.dawn.com/news/deferred-budget-row",
-                "Pakistan policy rate deferred row",
-                "Dawn",
-                datetime.now(UTC),
-                "rss_atom",
-                external_id="deferred-budget-row",
-                metadata={"priority_class": "live"},
-            ),
-        )
-        row.next_attempt_at = datetime.now(UTC) + timedelta(days=1)
-        db.commit()
-
-        result = run_evidence_scheduler_once(db)
-
-        assert result.discovery_queued > 0
-        assert result.fetch_queued == 0
-        assert any(queue == "evidence_discovery" for _, queue, _ in published)
 
 
 
 
-def test_targeted_refresh_request_is_bounded_owned_and_reconstructable(client, monkeypatch):
-    from app.api.routes import ingestion
-
-    monkeypatch.setattr(ingestion.targeted_refresh, "apply_async", lambda **kwargs: None)
-    with SessionLocal() as db:
-        db.add(Instrument(symbol="HBL", name="Habib Bank Limited", sector="Commercial Banks"))
-        db.commit()
-    owner = _auth(client, "evidence-owner@example.com")
-    other = _auth(client, "evidence-other@example.com")
-    response = client.post(
-        "/ingestion/evidence/refresh",
-        headers=owner,
-        json={"scope_type": "symbol", "value": "hbl", "max_candidates": 20},
-    )
-    assert response.status_code == 202
-    payload = response.json()
-    assert payload["scope_key"] == "symbol:HBL"
-    assert payload["priority_class"] == "live"
-    assert len(client.get("/ingestion/evidence/requests", headers=owner).json()) == 1
-    assert client.get("/ingestion/evidence/requests", headers=other).json() == []
-    operations = client.get("/ingestion/evidence/operations", headers=owner)
-    assert operations.status_code == 200
-    assert "source_health" in operations.json()
-    with SessionLocal() as db:
-        row = db.get(EvidenceRefreshRequest, payload["id"])
-        assert "Habib Bank Limited" in row.query_text
 
 
-@pytest.mark.usefixtures("database")
-def test_old_nonterminal_candidate_expires_before_scheduler_dispatch(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "source_artifact_root", str(tmp_path / "artifacts"))
-    monkeypatch.setattr(settings, "evidence_candidate_retention_days", 1)
-    published = []
-    from app.jobs import evidence_tasks
-
-    monkeypatch.setattr(
-        evidence_tasks.fetch,
-        "apply_async",
-        lambda **kwargs: published.append(kwargs),
-    )
-    monkeypatch.setattr(evidence_tasks.discover, "apply_async", lambda **kwargs: None)
-    with SessionLocal() as db:
-        _, config, _ = ensure_source_config(db, "dawn")
-        candidate = Candidate(
-            "dawn",
-            "https://www.dawn.com/news/old",
-            "Pakistan old story",
-            "Dawn",
-            datetime.now(UTC) - timedelta(days=2),
-            "rss_atom",
-            external_id="old",
-        )
-        row, _ = persist_candidate(db, config, candidate)
-        db.commit()
-        result = run_evidence_scheduler_once(db)
-        assert result.expired == 1
-        assert db.get(DiscoveryCandidate, row.id).status == "expired"
-        assert published == []
 
 
-@pytest.mark.usefixtures("database")
-def test_deep_company_historical_request_is_bounded_and_idempotent():
-    with SessionLocal() as db:
-        instrument = Instrument(
-            symbol="DEEP",
-            name="Deep Company Limited",
-            sector="Technology",
-            metadata_json='{"deep_requested": true}',
-        )
-        db.add(instrument)
-        db.commit()
-        assert create_deep_historical_requests(db, max_new=5) == 1
-        assert create_deep_historical_requests(db, max_new=5) == 0
-        request = db.scalar(select(EvidenceRefreshRequest))
-        assert request.priority_class == "historical"
-        assert request.max_candidates == 100
-        assert "Deep Company Limited" in request.query_text
 
 
-def test_celery_routes_keep_phase2_and_evidence_queues_separate():
-    from app.celery_app import celery_app
 
-    routes = celery_app.conf.task_routes
-    assert routes["phase2.dps_history"]["queue"] == "dps_history"
-    assert routes["evidence.fetch"]["queue"] == "evidence_fetch"
-    assert routes["evidence.pdf"]["queue"] == "evidence_pdf"
-    assert routes["evidence.historical_hydrate"]["queue"] == "historical_hydrate"
-    assert celery_app.conf.worker_prefetch_multiplier == 1
+

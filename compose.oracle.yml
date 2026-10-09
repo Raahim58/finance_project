@@ -128,50 +128,9 @@ services:
       api:
         condition: service_healthy
 
-  worker-broad-fundamentals:
-    <<: *worker
-    command: celery -A app.celery_app worker -Q broad_fundamentals --concurrency=2 --loglevel=INFO
-
-  worker-dps-history:
-    <<: *worker
-    command: celery -A app.celery_app worker -Q dps_history --concurrency=4 --loglevel=INFO
-
-  worker-financial-download:
-    <<: *worker
-    command: celery -A app.celery_app worker -Q financial_download --concurrency=4 --loglevel=INFO
-
-  worker-extract:
-    <<: *worker
-    command: celery -A app.celery_app worker -Q financial_extract --concurrency=1 --loglevel=INFO
-
   worker-macro:
     <<: *worker
     command: celery -A app.celery_app worker -P threads -n macro@%h -Q macro --concurrency=1 --loglevel=INFO
-
-  worker-evidence-discovery:
-    <<: *evidence-worker
-    command: celery -A app.celery_app worker -n discovery@%h -Q evidence_discovery --concurrency=1 --loglevel=INFO
-
-  worker-evidence-fetch:
-    <<: *evidence-worker
-    command: celery -A app.celery_app worker -n fetch@%h -Q evidence_fetch --concurrency=2 --loglevel=INFO
-
-  worker-evidence-parse:
-    <<: *evidence-worker
-    command: celery -A app.celery_app worker -n parse@%h -Q evidence_parse --concurrency=1 --loglevel=INFO
-
-  worker-evidence-pdf:
-    <<: *evidence-worker
-    command: celery -A app.celery_app worker -n pdf@%h -Q evidence_pdf --concurrency=1 --loglevel=INFO
-
-  worker-evidence-index:
-    <<: *evidence-worker
-    # Shared OCR/embedding lane: do not also start worker-evidence-pdf.
-    command: celery -A app.celery_app worker -n index@%h -Q evidence_pdf,evidence_index --concurrency=1 --loglevel=INFO
-
-  worker-historical-hydrate:
-    <<: *evidence-worker
-    command: celery -A app.celery_app worker -n historical@%h -Q historical_hydrate --concurrency=1 --loglevel=INFO
 
   market-scheduler:
     <<: *api-image
@@ -186,17 +145,6 @@ services:
       minio:
         condition: service_started
 
-  phase2-scheduler:
-    <<: *api-image
-    profiles: ["scheduling"]
-    restart: "no"
-    command: python -m app.jobs.phase2_scheduler
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
   macro-scheduler:
     <<: *api-image
     profiles: ["scheduling"]
@@ -204,21 +152,6 @@ services:
     command: python -m app.jobs.macro_scheduler
     environment:
       MACRO_INGESTION_ENABLED: "true"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  evidence-scheduler:
-    <<: *api-image
-    profiles: ["scheduling"]
-    restart: unless-stopped
-    command: python -m app.jobs.evidence_scheduler
-    environment:
-      EVIDENCE_ENABLED: "true"
-    volumes:
-      - ${PSX_DATA_ROOT:-/srv/psx}/evidence-spool:/data/evidence-spool
     depends_on:
       postgres:
         condition: service_healthy
@@ -274,6 +207,3 @@ services:
       PIPELINE_ENRICHMENT_ENABLED: "true"
       PIPELINE_DATA_ROOT: /pipeline-data
     command: celery -A app.celery_app worker -n pipeline-model@%h -Q pipeline_model --concurrency=1 --loglevel=INFO
-
-volumes:
-  evidence_spool:

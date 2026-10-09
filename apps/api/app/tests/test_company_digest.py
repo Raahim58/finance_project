@@ -280,20 +280,3 @@ def test_queue_identifiers_fit_postgres_column_limits():
             assert len(job.dedup_key)<=160
 
 
-def test_migration_upgrade_and_downgrade_match_model():
-    import importlib.util
-    from pathlib import Path
-    from sqlalchemy import create_engine, inspect
-    from alembic.migration import MigrationContext
-    from alembic.operations import Operations
-    path=Path(__file__).resolve().parents[2]/'alembic/versions/0033_company_digests.py'
-    spec=importlib.util.spec_from_file_location('digest_migration',path)
-    migration=importlib.util.module_from_spec(spec);spec.loader.exec_module(migration)
-    engine=create_engine('sqlite+pysqlite:///:memory:')
-    with engine.begin() as connection:
-        migration.op=Operations(MigrationContext.configure(connection))
-        migration.upgrade()
-        assert set(inspect(connection).get_columns('company_digests')[i]['name'] for i in range(10))=={'id','user_id','instrument_id','input_hash','generated_at','prompt_version','provider','model','snapshot_json','brief_json'}
-        assert inspect(connection).get_unique_constraints('company_digests')[0]['name']=='uq_company_digest'
-        migration.downgrade()
-        assert 'company_digests' not in inspect(connection).get_table_names()

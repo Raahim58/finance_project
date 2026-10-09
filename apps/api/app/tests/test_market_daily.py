@@ -106,29 +106,6 @@ def test_company_history_exact_duplicates_and_conflicts():
 
 
 @pytest.mark.usefixtures("database")
-def test_reviewed_bonus_validates_date_ratio_and_is_idempotent(monkeypatch, tmp_path):
-    from hashlib import sha256
-    from types import SimpleNamespace
-    from app.jobs.reviewed_corporate_actions import import_reviewed_action
-    from app.ingestion.artifact_store import LocalArtifactStore
-    content = b'Synthetic pinned PDF'; quote = 'Synthetic issuer declared 800% (B); ex date 16-Sep-2024.'
-    monkeypatch.setattr('app.jobs.reviewed_corporate_actions.PdfReader', lambda *_: SimpleNamespace(pages=[SimpleNamespace(extract_text=lambda:quote)]))
-    monkeypatch.setattr('app.services.ingestion_persistence.get_artifact_store', lambda *_: LocalArtifactStore(tmp_path))
-    class PDFClient:
-        def get(self,url): return httpx.Response(200,content=content,request=httpx.Request('GET',url))
-    item = {'symbol':'TEST','action_type':'bonus_issue','ex_date':'2024-09-16', 'date_evidence':'16-Sep-2024',
-        'old_shares':'1','new_shares':'9','ratio_evidence':'800% (B)',
-        'evidence':[{'url':'https://dps.psx.com.pk/download/document/fixture.pdf','page':1,'quote':quote,'sha256':sha256(content).hexdigest()}]}
-    with SessionLocal() as db:
-        db.add(Instrument(symbol='TEST',name='Synthetic test'));db.commit()
-        action=import_reviewed_action(db,PDFClient(),item);db.commit()
-        assert action.id==import_reviewed_action(db,PDFClient(),item).id
-        with pytest.raises(ValueError,match='multiplier'):import_reviewed_action(db,PDFClient(),{**item,'new_shares':'8'})
-        with pytest.raises(ValueError,match='Ex date'):import_reviewed_action(db,PDFClient(),{**item,'ex_date':'2024-09-17'})
-        assert db.scalar(select(func.count()).select_from(CorporateAction))==1
-
-
-@pytest.mark.usefixtures("database")
 def test_same_date_capitalization_enriches_price_but_never_future(monkeypatch, tmp_path):
     from app.ingestion.artifact_store import LocalArtifactStore
     from app.services.market_ingestion import persist_market_data

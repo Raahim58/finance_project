@@ -79,11 +79,9 @@ are retained for failed executions and a deterministic 10% success sample for 14
 subject to `PHASE8_DIAGNOSTIC_PAYLOAD_BYTES` (default 1 GiB). Exports exclude prompts,
 response bodies, holdings, allocation amounts, documents, and credentials.
 
-Run the offline Phase 8 quality cases and focused conformance suites without provider
-credentials:
+Run the focused conformance suites without provider credentials:
 
 ```bash
-python -m app.jobs.evaluate_phase8
 pytest app/tests/test_context_builder.py app/tests/test_context_deficiencies.py app/tests/test_context_ingestion.py \
   app/tests/test_context_consumers.py \
   app/tests/test_assistant_execution.py app/tests/test_allocation_calculation.py app/tests/test_evidence_projection.py app/tests/test_tool_loop_*.py \
@@ -105,15 +103,6 @@ paid model calls:
 ```bash
 pytest app/tests/test_tool_loop_*.py \
   app/tests/test_llm_provider_usage.py app/tests/test_tool_registry.py -q
-```
-
-Live benchmark commands are intentionally disabled because they can incur provider cost:
-
-```bash
-ALLOW_PAID_PHASE8_BENCHMARKS=false PHASE8_BENCHMARK_PROVIDER=gemini \
-  python -m app.jobs.evaluate_phase8 --live
-ALLOW_PAID_PHASE8_BENCHMARKS=false PHASE8_BENCHMARK_PROVIDER=anthropic \
-  python -m app.jobs.evaluate_phase8 --live
 ```
 
 Seed the demo investor state (demo user, ledger-backed holdings and cash,
@@ -140,21 +129,16 @@ Never use `--with-mock-world` in an `auto`, `dps`, or other live-data database.
 Even if old mock rows exist, live modes exclude them from canonical prices,
 market screens, portfolio valuation, and quant inputs.
 
-Run the API, scheduler, and the four Phase 2 queues in separate worker pools:
+Run the API and the pipeline scheduler/workers (see [Pipeline restoration](PIPELINE_RESTORATION.md)
+for the stage-to-queue map; `compose.oracle.yml` is the reference deployment):
 
 ```bash
 uvicorn app.main:app --reload
-celery -A app.celery_app worker -Q broad_fundamentals --concurrency=20 --loglevel=INFO
-celery -A app.celery_app worker -Q dps_history --concurrency=24 --loglevel=INFO
-celery -A app.celery_app worker -Q financial_download --concurrency=12 --loglevel=INFO
-celery -A app.celery_app worker -Q financial_extract --concurrency=3 --loglevel=INFO
-python -m app.jobs.scheduler --once
-python -m app.jobs.scheduler
-python -m app.jobs.phase2_scheduler
+python -m app.jobs.pipeline_scheduler
+celery -A app.celery_app worker -n pipeline-parse@%h -Q pipeline_parse --concurrency=1 --loglevel=INFO
 ```
 
-Canonical macro ingestion has its own Postgres-led queue producer. It does not
-depend on the document/evidence scheduler:
+Canonical macro ingestion has its own Postgres-led queue producer:
 
 ```bash
 celery -A app.celery_app worker -P threads -n macro@%h -Q macro --concurrency=4 --loglevel=INFO
@@ -165,29 +149,17 @@ python -m app.jobs.macro_status
 Provider ladders, exact current coverage, fallbacks, and the bounded one-cycle
 command are documented in [Canonical Macro Ingestion](macro-ingestion.md).
 
-The live universe is synchronized from observed DPS symbol data; there is no configured stock list. Expensive history/report work is reconstructed from Postgres coverage rows after a Redis loss. Docker Compose persists Postgres, Redis AOF data, and source artifacts in named volumes. Its lightweight `phase2-scheduler` is the sole Phase 2 queue producer: it checks queue targets every two seconds, reserves coverage rows before publication, completes historical report-catalogue bootstrap once, and performs bucketed incremental current/prior-year catalogue refreshes every six hours. The five-minute market scheduler remains separate and never publishes Phase 2 tasks.
+The live universe is synchronized from observed DPS symbol data; there is no configured stock list. History and report work is recorded in the Postgres stage-run outbox (`ingestion_stage_runs`) and dispatched by `pipeline-scheduler`, so it survives a Redis loss. The market scheduler remains separate.
 
-`MARKET_DATA_MODE=mock` is development-only. `dps` uses the verified direct DPS adapter; `auto` tries DPS and uses Yahoo only as a labeled real-data fallback. A failed live refresh retains prior observed rows and records failure/staleness; it never generates mock replacements. NCCPL remains a manual CSV import because ordinary retrieval is blocked; no anti-bot bypass is implemented.
+`MARKET_DATA_MODE=mock` is development-only. `dps` uses the verified direct DPS adapter. A failed live refresh retains prior observed rows and records failure/staleness; it never generates mock replacements. NCCPL remains a manual CSV import because ordinary retrieval is blocked; no anti-bot bypass is implemented.
 
 DPS latest-price coverage uses the currently observed DPS ordinary-equity universe
 as its denominator. A response that omits any ordinary symbol is recorded as
-`partial` with the missing symbols and accepted/rejected counts; Yahoo or SCSTrade
+`partial` with the missing symbols and accepted/rejected counts; SCSTrade
 rows never satisfy DPS health. DPS standardized company-page facts are exposed as
 observed secondary fundamentals, while facts extracted from official filings retain
 precedence for the same metric and period.
 
-Enable and run the independent Global Evidence services with a shared artifact/spool
-volume:
-
-```bash
-EVIDENCE_ENABLED=true python -m app.jobs.evidence_scheduler
-celery -A app.celery_app worker -n discovery@%h -Q evidence_discovery --concurrency=4 --loglevel=INFO
-celery -A app.celery_app worker -n fetch@%h -Q evidence_fetch --concurrency=16 --loglevel=INFO
-celery -A app.celery_app worker -n parse@%h -Q evidence_parse --concurrency=6 --loglevel=INFO
-celery -A app.celery_app worker -n pdf@%h -Q evidence_pdf --concurrency=2 --loglevel=INFO
-celery -A app.celery_app worker -n index@%h -Q evidence_index --concurrency=4 --loglevel=INFO
-celery -A app.celery_app worker -n historical@%h -Q historical_hydrate --concurrency=2 --loglevel=INFO
-```
 
 Mettis is scheduled only through this evidence pipeline. It is intentionally not
 also run by the generic market/macro scheduler, which prevents duplicate ingestion
@@ -261,28 +233,13 @@ and the portfolio `stress` and `settings` aliases have been removed. Use
 `/portfolios/{id}/scenarios` and `/portfolios/{id}/ips` respectively.
 This UI cleanup requires no migration or new seed data.
 
-```bash
-cd apps/api
-python -m app.jobs.ingest_document --file ./sample.pdf --symbol MEBL --type annual_report
-python -m app.jobs.test_retrieval --query "deposit growth" --symbol MEBL
-```
-
-For production semantic retrieval, set `EMBEDDING_BACKEND=sentence_transformers`, install requirements, then run `python -m app.jobs.reindex_rag`. PostgreSQL stores 384-dimensional vectors with an indexed cosine search; SQLite stores vectors as JSON and scans only for tests/local use. Private uploads must be queried through their owner/portfolio scope.
+For production semantic retrieval, set `EMBEDDING_BACKEND=sentence_transformers` and install requirements. PostgreSQL stores 384-dimensional vectors with an indexed cosine search; SQLite stores vectors as JSON and scans only for tests/local use. Private uploads must be queried through their owner/portfolio scope.
 
 ## Event intelligence
 
-After Phase 5 evidence is indexed, apply the current migration and normalize retained
-announcements/news in bounded batches:
-
-```bash
-cd apps/api
-alembic upgrade head
-python -m app.jobs.normalize_events --rebuild --confirm-rebuild --all --limit 500
-```
-
-The command processes bounded batches until `scanned` is zero. New evidence processed by the background
-evidence-index worker is normalized automatically. See [Pipeline restoration](PIPELINE_RESTORATION.md)
-for event classification, deterministic boundaries, and read APIs.
+Classification and event normalization run as pipeline stages (`classify`, `events`); see
+[Pipeline restoration](PIPELINE_RESTORATION.md) for event classification, deterministic
+boundaries, and read APIs.
 
 ## Safety assumptions
 

@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from sqlalchemy import select
 from app.db.session import SessionLocal
-from app.models.evidence import EvidenceRefreshRequest
+from app.models.pipeline import IngestionStageRun
 from app.models.intelligence_context import (
     ContextDeficiencyRecord,
     ContextIngestionWork,
@@ -32,21 +32,8 @@ import pytest
 pytestmark = pytest.mark.usefixtures("database")
 
 
-def test_production_bridge_queues_existing_company_fact_workers_and_tracks_coverage(monkeypatch):
-    from app.services import context_ingestion_coordinator as production
-
+def test_production_bridge_queues_company_fact_stage_runs_and_tracks_coverage():
     user_id, instrument_id = _seed_user_and_market()
-    published: list[tuple[str, tuple]] = []
-    monkeypatch.setattr(
-        production.broad_fundamentals,
-        "delay",
-        lambda *args: published.append(("broad_fundamentals", args)),
-    )
-    monkeypatch.setattr(
-        production.financial_download_catalog,
-        "delay",
-        lambda *args: published.append(("financial_download_catalog", args)),
-    )
     request = _company_request(ContextSectionName.COMPANY_FACTS)
     with SessionLocal() as db:
         user = db.get(User, user_id)
@@ -55,25 +42,24 @@ def test_production_bridge_queues_existing_company_fact_workers_and_tracks_cover
         refreshing, refresh = bridge.record_and_schedule(db, user, request, context)
         assert refresh is not None
         assert refreshing.status == "refreshing"
-        assert {name for name, _args in published} == {
-            "broad_fundamentals",
-            "financial_download_catalog",
-        }
+        stage_runs = list(db.scalars(select(IngestionStageRun)))
+        assert {run.stage for run in stage_runs} == {"broad_fundamentals", "reports"}
         work = db.scalar(select(ContextIngestionWork))
         links = json.loads(work.linked_work_json)
         assert work.family == "company_reports"
-        assert {item["kind"] for item in links} == {"coverage"}
+        assert {item["kind"] for item in links} == {"coverage", "pipeline_run"}
         coverage_rows = list(
             db.scalars(
                 select(IngestionCoverage).where(
-                    IngestionCoverage.id.in_([item["id"] for item in links])
+                    IngestionCoverage.id.in_(
+                        [item["id"] for item in links if item["kind"] == "coverage"]
+                    )
                 )
             )
         )
-        assert {row.dataset_type for row in coverage_rows} == {
-            "standardized_fundamentals",
-            "report_catalog_dispatch",
-        }
+        assert {row.dataset_type for row in coverage_rows} == {"standardized_fundamentals"}
+        for run in stage_runs:
+            run.status = "completed"
 
         for row in coverage_rows:
             row.status = "complete"
@@ -161,16 +147,8 @@ def test_production_bridge_links_current_market_gap_to_next_live_scheduler_run()
         )
 
 
-def test_production_bridge_creates_existing_targeted_evidence_request(monkeypatch):
-    from app.services import context_ingestion_coordinator as production
-
+def test_production_bridge_queues_issuer_reports_stage_for_evidence_gap():
     user_id, _ = _seed_user_and_market()
-    published: list[str] = []
-    monkeypatch.setattr(
-        production.targeted_refresh,
-        "apply_async",
-        lambda *, args, queue, priority: published.append(args[0]),
-    )
     request = _company_request(ContextSectionName.EVENTS)
     with SessionLocal() as db:
         user = db.get(User, user_id)
@@ -179,29 +157,23 @@ def test_production_bridge_creates_existing_targeted_evidence_request(monkeypatc
             db, user, request, context
         )
         assert refresh is not None
-        evidence_request = db.scalar(select(EvidenceRefreshRequest))
-        assert evidence_request.scope_key == "symbol:MEBL"
-        assert evidence_request.status == "running"
-        assert published == [evidence_request.id]
+        stage_run = db.scalar(select(IngestionStageRun))
+        assert stage_run.stage == "reports"
+        assert stage_run.input["symbol"] == "MEBL"
+        assert stage_run.status == "queued"
         work = db.scalar(select(ContextIngestionWork))
-        evidence_request.status = "complete"
-        evidence_request.completed_at = datetime.now(UTC)
+        assert (
+            DatabaseIngestionCoordinator(db, user_id=user.id).status(work.id).state == "queued"
+        )
+        stage_run.status = "completed"
         db.commit()
         assert (
             DatabaseIngestionCoordinator(db, user_id=user.id).status(work.id).state == "succeeded"
         )
 
 
-def test_production_bridge_queues_existing_history_workers_and_waits_for_screening(monkeypatch):
-    from app.services import context_ingestion_coordinator as production
-
+def test_production_bridge_queues_history_stage_runs_and_waits_for_screening():
     user_id, instrument_id = _seed_user_and_market()
-    published: list[tuple] = []
-    monkeypatch.setattr(
-        production.dps_history,
-        "delay",
-        lambda *args: published.append(args),
-    )
     request = _company_request(ContextSectionName.MARKET_RISK)
     with SessionLocal() as db:
         user = db.get(User, user_id)
@@ -211,7 +183,7 @@ def test_production_bridge_queues_existing_history_workers_and_waits_for_screeni
             db, user, request, context
         )
         assert refresh is not None
-        assert len(published) >= 12
+        assert len(list(db.scalars(select(IngestionStageRun).where(IngestionStageRun.stage == "history_prices")))) >= 12
         work = db.scalar(
             select(ContextIngestionWork)
             .join(

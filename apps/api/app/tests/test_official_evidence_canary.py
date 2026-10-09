@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.ingestion.evidence import Candidate, DiscoveryBatch, RawContent
+from app.ingestion.evidence import Candidate, RawContent
 from app.ingestion.evidence_catalog import build_pass1_registry
 from app.models.evidence import DiscoveryCandidate
 from app.models.workstation import DataSource
@@ -44,60 +44,6 @@ def test_sec_registry_is_scoped_to_configured_ciks(monkeypatch):
     assert source.ciks == ("0000320193", "0000789019")
 
 
-@pytest.mark.usefixtures("database")
-def test_discovery_task_immediately_dispatches_new_candidates_to_fetch(monkeypatch):
-    """Smoke the worker hand-off without a broker, scheduler loop, or live HTTP."""
-
-    from app.jobs import evidence_tasks
-
-    class FixtureSource:
-        key = "secp_releases"
-
-        def discover_since(self, cursor, limit):
-            del cursor, limit
-            return DiscoveryBatch(
-                (
-                    Candidate(
-                        self.key,
-                        "https://www.secp.gov.pk/media-center/press-releases/fixture/",
-                        "Pakistan securities regulation update",
-                        "Securities and Exchange Commission of Pakistan",
-                        datetime.now(UTC),
-                        "listing_page",
-                        external_id="pass4-dispatch-smoke",
-                    ),
-                ),
-                {},
-            )
-
-    class FixtureRegistry:
-        @staticmethod
-        def get(source_key):
-            assert source_key == "secp_releases"
-            return FixtureSource()
-
-    published = []
-    monkeypatch.setattr(evidence_tasks, "build_pass1_registry", lambda: FixtureRegistry())
-    monkeypatch.setattr(
-        evidence_tasks.fetch,
-        "apply_async",
-        lambda **kwargs: published.append(kwargs),
-    )
-
-    result = evidence_tasks.discover.run("secp_releases", 1)
-
-    assert result["new"] == 1
-    assert result["queued"] == 1
-    assert published[0]["queue"] == "evidence_fetch"
-    with SessionLocal() as db:
-        row = db.scalar(
-            select(DiscoveryCandidate).where(
-                DiscoveryCandidate.external_id == "pass4-dispatch-smoke"
-            )
-        )
-        assert row is not None
-        assert row.status == "fetch_ready"
-        assert row.lease_expires_at is not None
 
 
 def test_generic_rss_and_listing_adapters_parse_official_fixtures():

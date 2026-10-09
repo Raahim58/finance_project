@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.document import Document
-from app.models.user import User
 from app.models.workstation import (
     Event,
     EventEntityLink,
@@ -21,14 +20,9 @@ from app.models.workstation import (
     MacroSeries,
     MacroSeriesProvider,
     SourceArtifact,
-    StandardizedFinancialFact,
 )
 from app.schemas.research import InstrumentResponse
-from app.services.portfolio_service import get_portfolio_summary
-from app.services.financial_evidence_eligibility import public_primary_financials, secondary_financial_gap
-from app.services.canonical_market_service import latest_price, price_series
-from app.services.company_event_service import sourced_company_events
-from app.services.event_intelligence_service import list_normalized_events
+from app.services.canonical_market_service import price_series
 from app.domain.quant import risk_metrics
 from app.domain.quant import market_model_event_study
 from app.schemas.research import EventStudyRequest
@@ -300,135 +294,6 @@ def macro_releases(db: Session, series_id: str | None = None):
             statement.order_by(MacroObservation.effective_date.desc()).limit(500)
         )
     ]
-
-
-def company_overview(db: Session, user: User, instrument_id: str, *, include_portfolio_relevance: bool = True):
-    instrument = db.get(Instrument, instrument_id)
-    if instrument is None: raise HTTPException(status_code=404, detail="Instrument not found")
-    latest = latest_price(db, instrument.symbol)
-    all_facts = list(db.scalars(select(FinancialFact).where(FinancialFact.instrument_id == instrument.id,public_primary_financials(),
-        or_(FinancialFact.confidence.is_(None), FinancialFact.confidence > 0)).order_by(FinancialFact.period_end.desc(), FinancialFact.version.desc()).limit(200)))
-    all_provenance = _document_provenance(db, {fact.document_id for fact in all_facts if fact.document_id})
-    observed_facts = [
-        fact
-        for fact in all_facts
-        if all_provenance.get(fact.document_id or "", {}).get("is_observed", False)
-    ]
-    facts = _display_facts(observed_facts)
-    standardized_facts = list(
-        db.scalars(
-            select(StandardizedFinancialFact)
-            .where(
-                StandardizedFinancialFact.instrument_id == instrument.id,
-                StandardizedFinancialFact.quality_status == "observed",
-            )
-            .order_by(StandardizedFinancialFact.period_end.desc(), StandardizedFinancialFact.retrieved_at.desc())
-            .limit(200)
-        )
-    )
-    provenance = _document_provenance(db, {fact.document_id for fact in facts if fact.document_id})
-    market_research = _market_research(db, instrument)
-    documents = _display_documents(list(db.scalars(select(Document).where(Document.symbol == instrument.symbol, Document.document_type != "synthetic_demo_facts", ~func.lower(Document.source_name).contains("demo"), or_(Document.source_url.is_(None), ~func.lower(Document.source_url).like("demo://%")), or_(Document.visibility == "public", Document.owner_user_id == user.id)).order_by(Document.published_date.desc(), Document.created_at.desc()).limit(50))))[:20]
-    company_events = sourced_company_events(db, instrument)
-    intelligence_events = list_normalized_events(
-        db, subject_type="instrument", subject_key=instrument.symbol,
-        view="company_relevant", limit=50,
-    )
-    relevance = []
-    from app.models.portfolio import Portfolio, PortfolioHolding
-    relevance_rows = db.execute(select(Portfolio, PortfolioHolding).join(PortfolioHolding, PortfolioHolding.portfolio_id == Portfolio.id).where(Portfolio.user_id == user.id, PortfolioHolding.symbol == instrument.symbol)) if include_portfolio_relevance else []
-    for portfolio, holding in relevance_rows:
-        summary = get_portfolio_summary(db, user, portfolio.id)
-        item = next((value for value in summary.holdings if value.symbol == instrument.symbol), None)
-        risk_context: dict[str, object] = {"available": False, "reason": "Portfolio quant inputs are unavailable."}
-        try:
-            from app.services.workstation_service import portfolio_quant
-            quant = portfolio_quant(db, user, portfolio.id)
-            symbols = quant["symbols"]
-            index = symbols.index(instrument.symbol)
-            covariance = np.asarray(quant["covariance"], dtype=float)
-            current_values = np.asarray([float(next(value.market_value for value in summary.holdings if value.symbol == symbol)) for symbol in symbols])
-            weights = current_values / current_values.sum()
-            without = np.delete(weights, index)
-            without /= without.sum() if without.sum() else 1
-            covariance_without = np.delete(np.delete(covariance, index, axis=0), index, axis=1)
-            risk_context = {
-                "available": True,
-                "component_risk_percent": quant["risk_contributions"].get(instrument.symbol),
-                "portfolio_volatility": float(np.sqrt(weights @ covariance @ weights)),
-                "volatility_without_position": float(np.sqrt(without @ covariance_without @ without)) if without.size else 0.0,
-                "method": "current_weights_same_covariance_remove_and_renormalize",
-            }
-        except (HTTPException, ValueError, StopIteration):
-            pass
-        relevance.append({"portfolio_id": portfolio.id, "portfolio_name": portfolio.name, "quantity": holding.quantity, "market_value": item.market_value if item else 0, "weight": float(item.market_value / summary.total_value) if item and summary.total_value else 0, "risk_context": risk_context})
-    return {
-        "instrument": serialize_instrument(instrument).model_dump(),
-        "market": None if latest is None else {"date": latest.trade_date, "close": latest.close, "volume": latest.volume, "change_percent": latest.change_percent, "source": latest.source, "source_url": latest.source_url, "artifact_id": latest.artifact_id, "artifact_sha256": latest.artifact_sha256, "quality_status": latest.quality_status, "adjustment_state": latest.adjustment_state},
-        "market_research": market_research,
-        "fundamentals": [{"taxonomy_key": fact.taxonomy_key, "period_type": fact.period_type, "period_start": fact.period_start, "accounting_basis": "consolidated" if fact.consolidated else "standalone", "period_end": fact.period_end, "filing_date": fact.filing_date, "value": fact.value, "unit": fact.unit, "currency": fact.currency, "document_id": fact.document_id, "page_number": fact.page_number, "classification": "filing_extracted", "source_url": provenance.get(fact.document_id or "", {}).get("source_url"), "provenance": _fact_provenance(provenance, fact.document_id)} for fact in facts],
-        "unverified_secondary_observations": [
-                {
-                    "taxonomy_key": fact.metric,
-                    "period_type": fact.period_type,
-                    "period_end": fact.period_end,
-                    "filing_date": None,
-                    "value": fact.value,
-                    "unit": fact.unit,
-                    "currency": fact.currency,
-                    "document_id": None,
-                    "page_number": None,
-                    "classification": "unverified_secondary_observation",
-                    "original_classification": fact.classification,
-                    "accounting_basis": None,
-                    "eligible_for_calculation": False,
-                    "source_url": fact.source_url,
-                    "provenance": {
-                        "source_name": fact.source.upper(),
-                        "document_type": "standardized_financials",
-                        "is_synthetic": False,
-                        "is_observed": True,
-                        "ingested_at": fact.retrieved_at,
-                    },
-                }
-                for fact in standardized_facts
-                if not any(
-                    _normalized_taxonomy(existing.taxonomy_key) == _normalized_taxonomy(fact.metric)
-                    and existing.period_type == fact.period_type
-                    and existing.period_end == fact.period_end
-                    for existing in facts
-                )
-        ],
-        "financial_evidence_gaps": [gap] if (gap:=secondary_financial_gap(db,instrument.id)) else [],
-        "derived_fundamentals": _derived_fundamentals(facts, provenance),
-        "documents": [{"id": document.id, "title": document.title, "document_type": document.document_type, "published_date": document.published_date, "source_url": document.source_url, "is_synthetic": document.document_type == "synthetic_demo_facts"} for document in documents],
-        "events": [
-            {
-                "id": event.id,
-                "title": event.title,
-                "event_type": event.event_type,
-                "occurred_at": event.occurred_at,
-                "direction": event.direction,
-                "confidence": event.confidence,
-                "sources": [
-                    {
-                        "source_name": source.source_name,
-                        "source_url": source.source_url,
-                        "published_at": source.published_at,
-                        "selection_status": source.selection_status,
-                    }
-                    for source in event_sources
-                ],
-            }
-            for row in company_events
-            for event in (row.event,)
-            for event_sources in (row.sources,)
-        ],
-        "intelligence_events": intelligence_events,
-        "portfolio_relevance": relevance,
-        "has_synthetic_data": False,
-        "excluded_synthetic_research": len(observed_facts) != len(all_facts),
-    }
 
 
 def list_events(

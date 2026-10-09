@@ -58,7 +58,7 @@ def is_queueable(row: IngestionCoverage, now: datetime, *, refresh_after: timede
     return False
 
 
-def reserve_and_publish(db: Session, row: IngestionCoverage, task, args: tuple, now: datetime) -> bool:
+def _reserve_and_submit(db: Session, row: IngestionCoverage, now: datetime, submit) -> bool:
     snapshot = (row.status, row.attempted_at, row.completed_at, row.retry_count)
     locked = db.scalar(
         select(IngestionCoverage)
@@ -75,10 +75,26 @@ def reserve_and_publish(db: Session, row: IngestionCoverage, task, args: tuple, 
     locked.error_message = None
     db.commit()
     try:
-        task.delay(*args)
+        submit()
     except Exception as exc:
+        db.rollback()
         db.refresh(locked)
         fail(locked, exc)
         db.commit()
         return False
     return True
+
+
+def reserve_and_enqueue(db: Session, row: IngestionCoverage, stage: str, subject_key: str, payload: dict, now: datetime) -> bool:
+    """Reserve coverage, then record a durable pipeline stage run for the scheduler to dispatch."""
+    from app.services.pipeline.runs import enqueue
+
+    def submit() -> None:
+        enqueue(db, stage, subject_key, payload, mode="live")
+        db.commit()
+
+    return _reserve_and_submit(db, row, now, submit)
+
+
+def reserve_and_publish(db: Session, row: IngestionCoverage, task, args: tuple, now: datetime) -> bool:
+    return _reserve_and_submit(db, row, now, lambda: task.delay(*args))

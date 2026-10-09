@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from app.core.config import settings
 from app.db.session import SessionLocal
+from app.tests.support import portfolios as ledger
 from app.services.market_ingestion import generate_mock_market_data
 from app.tests.support.users import signup_user as _signup
 
@@ -36,13 +37,8 @@ def test_portfolio_crud_summary_exposure_and_risk_flags(client):
     assert holding.status_code == 201
     holding_id = holding.json()["id"]
 
-    patched_holding = client.patch(
-        f"/portfolios/holdings/{holding_id}",
-        headers=headers,
-        json={"quantity": "12", "average_cost": "210"},
-    )
-    assert patched_holding.status_code == 200
-    assert patched_holding.json()["quantity"] == "12.000000"
+    patched_holding = ledger.update_holding(client, headers, holding_id, quantity="12", average_cost="210")
+    assert patched_holding["quantity"] == "12.000000"
 
     client.post(
         f"/portfolios/{portfolio_id}/holdings",
@@ -72,13 +68,8 @@ def test_portfolio_crud_summary_exposure_and_risk_flags(client):
     assert len(transactions.json()) == 4
     assert {row["source"] for row in transactions.json()} == {"holding_adjustment", "manual"}
 
-    patched_transaction = client.patch(
-        f"/portfolios/transactions/{transaction_id}",
-        headers=headers,
-        json={"notes": "Updated"},
-    )
-    assert patched_transaction.status_code == 200
-    assert patched_transaction.json()["notes"] == "Updated"
+    patched_transaction = ledger.update_transaction(client, headers, transaction_id, notes="Updated")
+    assert patched_transaction["notes"] == "Updated"
 
     summary = client.get(f"/portfolios/{portfolio_id}/summary", headers=headers)
     assert summary.status_code == 200
@@ -104,11 +95,9 @@ def test_portfolio_crud_summary_exposure_and_risk_flags(client):
     assert risk_flags.status_code == 200
     assert isinstance(risk_flags.json()["flags"], list)
 
-    deleted_transaction = client.delete(f"/portfolios/transactions/{transaction_id}", headers=headers)
-    assert deleted_transaction.status_code == 204
+    ledger.delete_transaction(client, headers, transaction_id)
 
-    deleted_holding = client.delete(f"/portfolios/holdings/{holding_id}", headers=headers)
-    assert deleted_holding.status_code == 204
+    ledger.delete_holding(client, headers, holding_id)
 
 
 def test_portfolio_routes_enforce_user_isolation(client):

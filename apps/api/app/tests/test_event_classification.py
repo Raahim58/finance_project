@@ -220,36 +220,6 @@ def test_model_classification_is_validated_and_never_overwritten_by_rules():
 
 
 @pytest.mark.usefixtures("database")
-def test_model_quota_falls_back_to_rules_and_stays_upgradeable():
-    from app.jobs.classify_backfill import pending
-    with SessionLocal() as db:
-        instruments(db)
-        doc = article(db, 'Lucky Cement Limited announced a dividend.')
-        run = model_ready(db)
-        result = classify(db, doc.id, run=run, allow_model=True, transport=catalog_and_completion({}, status=429))
-        assert result['method'] == 'rules' and 'free_provider_quota_or_capacity' in result['gaps']
-        assert [d.id for d in pending(db, target=MODEL_VERSION)] == [doc.id]
-        assert pending(db, target=RULES_VERSION) == []
-
-
-@pytest.mark.usefixtures("database")
-def test_backfill_queues_unclassified_documents_once():
-    from app.jobs.classify_backfill import enqueue_documents, pending
-    with SessionLocal() as db:
-        instruments(db)
-        parsed = article(db, 'Lucky Cement Limited announced a dividend.')
-        raw = create_document_from_pages(db, [ParsedPage(1, 'Lucky Cement Limited plans expansion.')], title='Raw',
-            document_type='news', source_name='Publisher', source_url='https://raw.test', published_date=date(2026, 10, 1), commit=False)
-        docs = pending(db, target=RULES_VERSION)
-        assert {d.id for d in docs} == {parsed.id, raw.id}
-        assert enqueue_documents(db, docs, target=RULES_VERSION) == {'classify': 1, 'sections': 1}
-        enqueue_documents(db, docs, target=RULES_VERSION)
-        assert db.scalar(select(func.count()).select_from(IngestionStageRun)) == 2
-        classify(db, parsed.id)
-        assert [d.id for d in pending(db, target=RULES_VERSION)] == [raw.id]
-
-
-@pytest.mark.usefixtures("database")
 def test_reads_filter_by_entity_and_type_and_rank(vectors):
     with SessionLocal() as db:
         instruments(db)

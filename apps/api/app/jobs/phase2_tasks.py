@@ -5,26 +5,21 @@ import json
 import hashlib
 from zoneinfo import ZoneInfo
 
-import httpx
 from sqlalchemy import select
 
-from app.celery_app import celery_app
 from app.db.session import SessionLocal
 from app.models.document import Document
-from app.models.workstation import FinancialFact, Instrument, MarketObservation, SourceArtifact, StandardizedFinancialFact
+from app.models.workstation import Instrument, MarketObservation, SourceArtifact, StandardizedFinancialFact
 from app.providers.fundamentals.dps_standardized import DpsStandardizedFundamentalsProvider
 from app.providers.fundamentals.psx_financials import PsxFinancialsProvider, ReportCatalogItem
 from app.providers.fundamentals.extraction import FINANCIAL_EXTRACTION_VERSION, extract_facts, parse_financial_pdf, parse_period_end
-from app.services.coverage_service import begin, complete, coverage, fail, is_queueable, reserve_and_publish
+from app.services.coverage_service import begin, complete, coverage, fail
 from app.services.ingestion_persistence import source, store_artifact
 from app.services.market_ingestion import persist_market_data
 from app.services.market_providers import DpsMarketDataProvider
-from app.services.rag_service import create_document_from_pages, parse_pdf
 from app.ingestion.artifact_store import get_artifact_store
 from app.core.config import settings
 
-
-RETRY = dict(autoretry_for=(httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError), retry_backoff=True, retry_backoff_max=900, retry_jitter=True, max_retries=3)
 
 
 def _instrument(db, symbol: str) -> Instrument:
@@ -34,7 +29,6 @@ def _instrument(db, symbol: str) -> Instrument:
     return row
 
 
-@celery_app.task(name="phase2.broad_fundamentals", **RETRY)
 def broad_fundamentals(symbol: str) -> dict[str, object]:
     with SessionLocal() as db:
         instrument = _instrument(db, symbol)
@@ -67,7 +61,6 @@ def broad_fundamentals(symbol: str) -> dict[str, object]:
             db.rollback(); state = coverage(db, instrument.id, "standardized_fundamentals", "current", "dps"); fail(state, exc); db.commit(); raise
 
 
-@celery_app.task(name="phase2.dps_history", **RETRY)
 def dps_history(symbol: str, year: int, month: int) -> dict[str, object]:
     period_key = f"{year:04d}-{month:02d}"
     with SessionLocal() as db:
@@ -116,59 +109,8 @@ def _item(payload: dict[str, object]) -> ReportCatalogItem:
     return ReportCatalogItem(symbol=str(payload["symbol"]), report_type=str(payload["report_type"]), period_ended=str(payload["period_ended"]), posting_date=date.fromisoformat(str(payload["posting_date"])), report_url=str(payload["report_url"]), report_id=str(payload["report_id"]))
 
 
-@celery_app.task(name="phase2.financial_download_catalog", **RETRY)
-def financial_download_catalog(symbol: str, mode: str = "incremental", as_of_year: int | None = None, dispatch_key: str | None = None) -> dict[str, object]:
-    if mode not in {"historical", "incremental"}:
-        raise ValueError("mode must be historical or incremental")
-    with SessionLocal() as db:
-        instrument = _instrument(db, symbol)
-        provider = PsxFinancialsProvider(); year = as_of_year or date.today().year
-        dispatch_key = dispatch_key or f"{mode}:{year}"
-        dispatch = coverage(db, instrument.id, "report_catalog_dispatch", dispatch_key, "psx_financials")
-        if dispatch.status == "complete":
-            return {"symbol": instrument.symbol, "mode": mode, "status": "complete", "idempotent": True}
-        begin(dispatch); db.commit()
-        years = range(year, year - 6, -1) if mode == "historical" else (year, year - 1)
-        discovered: dict[str, ReportCatalogItem] = {}
-        for catalog_year in years:
-            state = coverage(db, instrument.id, "report_catalog", str(catalog_year), "psx_financials")
-            if state.status == "complete" and mode == "historical":
-                cached = json.loads(state.diagnostics_json or "{}").get("items", [])
-                for payload in cached:
-                    item = _item(payload); discovered[item.report_id] = item
-                if cached:
-                    continue
-            begin(state); db.commit()
-            try:
-                items = provider.fetch_company_year_catalog(instrument.symbol, catalog_year)
-                for item in items: discovered[item.report_id] = item
-                complete(state, len(items))
-                state.diagnostics_json = json.dumps({"items": [{"symbol": item.symbol, "report_type": item.report_type, "period_ended": item.period_ended, "posting_date": item.posting_date.isoformat(), "report_url": item.report_url, "report_id": item.report_id} for item in items]}, sort_keys=True)
-                db.commit()
-            except Exception as exc:
-                db.rollback()
-                state = coverage(db, instrument.id, "report_catalog", str(catalog_year), "psx_financials"); fail(state, exc)
-                dispatch = coverage(db, instrument.id, "report_catalog_dispatch", dispatch_key, "psx_financials"); fail(dispatch, exc)
-                db.commit(); raise
-        selected: list[ReportCatalogItem] = []
-        annual = interim = 0
-        for item in sorted(discovered.values(), key=lambda value: value.posting_date, reverse=True):
-            is_annual = "annual" in item.report_type
-            if is_annual and annual < 5: selected.append(item); annual += 1
-            elif not is_annual and interim < 8: selected.append(item); interim += 1
-        queued = 0
-        for item in selected:
-            state = coverage(db, instrument.id, "financial_report", item.report_id, "psx_financials")
-            payload = {"symbol": item.symbol, "report_type": item.report_type, "period_ended": item.period_ended, "posting_date": item.posting_date.isoformat(), "report_url": item.report_url, "report_id": item.report_id}
-            now = datetime.now(UTC)
-            if is_queueable(state, now) and reserve_and_publish(db, state, financial_download_pdf, (payload,), now):
-                queued += 1
-        dispatch = coverage(db, instrument.id, "report_catalog_dispatch", dispatch_key, "psx_financials")
-        complete(dispatch, len(selected)); db.commit()
-        return {"symbol": instrument.symbol, "mode": mode, "catalog_items": len(discovered), "selected": len(selected), "queued": queued}
 
 
-@celery_app.task(name="phase2.financial_download_pdf", **RETRY)
 def financial_download_pdf(payload: dict[str, object]) -> dict[str, object]:
     item = _item(payload)
     with SessionLocal() as db:
@@ -192,7 +134,6 @@ def financial_download_pdf(payload: dict[str, object]) -> dict[str, object]:
             db.rollback(); state = coverage(db, instrument.id, "financial_report", item.report_id, "psx_financials"); fail(state, exc); db.commit(); raise
 
 
-@celery_app.task(name="phase2.financial_extract")
 def financial_extract(document_id: str) -> dict[str, object]:
     with SessionLocal() as db:
         document = db.get(Document, document_id)
@@ -226,12 +167,9 @@ def financial_extract(document_id: str) -> dict[str, object]:
             complete(state, len(facts) if classification in {"text_native", "ocr"} else 0, diagnostics); db.commit()
             if document.status == "parsed":
                 try:
-                    if settings.pipeline_enabled:
-                        from app.services.pipeline.runs import enqueue
-                        enqueue(db,"report_index","document:"+document.id,{"document_id":document.id})
-                        db.commit()
-                        return {"document_id":document.id,"status":state.status,"classification":classification,"facts":state.item_count,"diagnostics":diagnostics}
-                    financial_index.apply_async(args=[document.id], queue="financial_extract")
+                    from app.services.pipeline.runs import enqueue
+                    enqueue(db,"report_index","document:"+document.id,{"document_id":document.id})
+                    db.commit()
                 except Exception:
                     diagnostics.append("Report narrative indexing could not be queued; exact facts remain saved.")
             return {"document_id": document.id, "status": state.status, "classification": classification, "facts": state.item_count, "diagnostics": diagnostics}
@@ -239,8 +177,4 @@ def financial_extract(document_id: str) -> dict[str, object]:
             db.rollback(); state = coverage(db, instrument.id, "financial_extract", document_id, "psx_financials"); fail(state, exc); db.commit(); raise
 
 
-@celery_app.task(name="phase2.financial_index")
-def financial_index(document_id: str):
-    from app.services.research_evidence_service import prepare_report
-    with SessionLocal() as db:
-        return prepare_report(db, document_id)
+
