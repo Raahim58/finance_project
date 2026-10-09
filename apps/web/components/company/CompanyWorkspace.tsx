@@ -13,7 +13,6 @@ import { TechnicalChart } from "./technical-chart/TechnicalChart";
 import { formatDate, formatNumber, formatPercent, humanize, numeric } from "@/lib/overview";
 import { companyFacts, factGroup, factValue, ratioDefinitions, ratioValue, type CompanyFact } from "@/lib/company";
 import { useCompanyData } from "./useCompanyData";
-import { CompanySearch } from "./CompanySearch";
 import { DecisionWorkbench } from "./DecisionWorkbench";
 import styles from "./company.module.css";
 
@@ -55,7 +54,7 @@ export function CompanyWorkspace({symbol}:{symbol:string}) {
   return <div className={styles.workspace}>
     <WorkspaceHeader title={symbol}><nav className="workspace-header-tabs" aria-label="Company sections">{views.map(([key,label])=><button key={key} aria-current={view===key?"page":undefined} onClick={()=>setView(key)}>{label}</button>)}</nav></WorkspaceHeader>
     <aside className={styles.identity} aria-label="Company navigation">
-      <div className={styles.companyHeading}><CompanyLogo symbol={symbol} size={48}/><div><strong>{symbol}</strong><span>{company?.name??"Loading company…"}</span></div><CompanySearch/></div>
+      <div className={styles.companyHeading}><CompanyLogo symbol={symbol} size={48}/><div><strong>{symbol}</strong><span>{company?.name??"Loading company…"}</span></div></div>
       <p className={styles.sector}>{company?.sector??"Sector unavailable"}</p>
       {data.errors.company?<p className={styles.error} role="alert">{data.errors.company}</p>:null}
       <div className={styles.quote}><strong>PKR {formatNumber(latest?.close)}</strong><p className={Number(latest?.change_percent)<0?styles.negative:styles.positive}>{formatPercent(latest?.change_percent)} <span>{formatDate(latest?.trade_date)}</span></p></div>
