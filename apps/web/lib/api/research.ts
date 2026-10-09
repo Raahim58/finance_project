@@ -26,4 +26,5 @@ export function getCompanyDigest(symbol:string,active=true){return request<Compa
 export function retryCompanyDigest(symbol:string){return request<CompanyDigest>(`/research/companies/${encodeURIComponent(symbol)}/digest/retry`,{method:"POST"},0)}
 export type AIBriefView = {status:"ready"|"generating"|"failed"|"not_generated"|"provider_unavailable"|"no_data";current:boolean;brief:{headline:string;summary:string;sections:{title:string;body:string;question:string;tickers:string[];fact_ids:string[]}[];events:string[]}|null;facts:{id:string;text:string;source:string}[];generated_at:string|null;provider:string|null;model:string|null;error_code?:string|null};
 export function getMarketBrief(retry=false){return request<AIBriefView>(`/research/briefs/market?retry=${retry}`,{},0)}
+export function getCompanyBrief(symbol:string,retry=false){return request<AIBriefView>(`/research/briefs/company/${encodeURIComponent(symbol)}?retry=${retry}`,{},0)}
 export function getPortfolioBrief(portfolioId:string,retry=false){return request<AIBriefView>(`/research/briefs/portfolio/${encodeURIComponent(portfolioId)}?retry=${retry}`,{},0)}

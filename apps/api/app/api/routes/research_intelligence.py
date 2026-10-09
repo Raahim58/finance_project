@@ -111,3 +111,9 @@ def portfolio_brief(portfolio_id: str, background: BackgroundTasks, retry: bool 
     from app.services.portfolio_access import get_portfolio_or_404
     get_portfolio_or_404(db, user, portfolio_id)
     return _brief("portfolio", portfolio_id, background, user, db, retry)
+
+
+@router.get("/research/briefs/company/{symbol}")
+def company_brief(symbol: str, background: BackgroundTasks, retry: bool = False, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.research_intelligence_service import resolve_company
+    return _brief("company", resolve_company(db, symbol).symbol.upper(), background, user, db, retry)

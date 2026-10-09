@@ -57,11 +57,28 @@ test("company sidebar retains its separate simple chart",async({page})=>{
  await page.screenshot({path:"test-results/layout-company.png",fullPage:true});
 });
 test("oversight pages share title and tabs in the header",async({page})=>{
- for(const [path,title] of [["/recommendations","Recommendations"],["/monitoring","Monitoring"],["/activity","Activity"]]){
+ for(const [path,title] of [["/monitoring","Monitoring"],["/activity","Activity"]]){
   await page.goto(path);await expect(page.locator(".app-topbar .workspace-page-header")).toBeVisible();
   await expect(page.locator("main h1")).toHaveCount(0);await page.screenshot({path:`test-results/layout-${title.toLowerCase()}.png`,fullPage:true});
  }
  await page.goto("/monitoring");await expect(page.locator(".app-topbar").getByRole("button",{name:"Acknowledged",exact:true})).toBeVisible();
+});
+test("Monitoring owns review actions and the standalone recommendations page is removed",async({page})=>{
+ await page.route("**/api/recommendations**",async route=>{
+  if(route.request().method()==="PATCH")return route.fulfill({contentType:"application/json",body:JSON.stringify({id:"review-fixture",status:"reviewed"})});
+  await route.fulfill({contentType:"application/json",body:JSON.stringify([{id:"review-fixture",portfolio_id:portfolio.id,status:"open",message:"Review stored concentration",evidence:{source:"Offline review fixture"},freshness:{market_as_of:"2026-10-09"},linked_allocation:{id:"allocation-fixture",version:1}}])});
+ });
+ await page.goto("/monitoring");
+ await expect(page.getByRole("link",{name:"Recommendations",exact:true})).toHaveCount(0);
+ await page.getByRole("button",{name:"Reviews",exact:true}).click();
+ await expect(page.getByRole("button",{name:"Review stored concentration",exact:true})).toBeVisible();
+ await expect(page.getByRole("link",{name:"Open linked proposal →"})).toHaveAttribute("href",`/portfolios/${portfolio.id}/build?recommendation=review-fixture`);
+ await page.getByRole("button",{name:"Mark reviewed",exact:true}).click();
+ await expect(page.getByLabel("Review status")).toContainText("reviewed");
+ await page.setViewportSize({width:390,height:844});
+ await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ await page.screenshot({path:"test-results/monitoring-reviews-mobile.png",fullPage:true});
+ const response=await page.goto("/recommendations");expect(response?.status()).toBe(404);
 });
 test("management replaces the legacy grid and opens inline creation",async({page})=>{
  await page.goto("/portfolios/manage?create=1");await expect(page.getByLabel("Portfolio name",{exact:true})).toBeVisible();
@@ -93,7 +110,7 @@ for (const width of (process.env.UI_AUDIT_WIDTH ? [Number(process.env.UI_AUDIT_W
 test(`audit ${width}: left columns reach the viewport top and header utilities remain fixed`,async({page})=>{
  test.setTimeout(180_000);
  const errors:string[]=[];page.on("pageerror",error=>errors.push(`${page.url()}: ${error.message}`));
- const routes=["/dashboard","/markets","/companies/FFC","/portfolios/layout-p1/overview","/portfolios/layout-p1/ips","/portfolios/layout-p1/build","/portfolios/layout-p1/quant","/portfolios/layout-p1/risk","/portfolios/layout-p1/scenarios","/portfolios/layout-p1/research","/portfolios/layout-p1/activity","/research","/recommendations","/monitoring","/activity","/portfolios/manage","/settings","/assistant"];
+ const routes=["/dashboard","/markets","/companies/FFC","/portfolios/layout-p1/overview","/portfolios/layout-p1/ips","/portfolios/layout-p1/build","/portfolios/layout-p1/quant","/portfolios/layout-p1/risk","/portfolios/layout-p1/scenarios","/portfolios/layout-p1/research","/portfolios/layout-p1/activity","/research","/monitoring","/activity","/portfolios/manage","/settings","/assistant"];
   await page.setViewportSize({width,height:900});
   for(const path of routes){
    await page.goto(path);

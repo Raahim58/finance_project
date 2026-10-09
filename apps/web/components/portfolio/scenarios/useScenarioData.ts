@@ -17,16 +17,17 @@ export function useScenarioData(portfolioId: string, initialRuns: ScenarioResult
   const [runs, setRuns] = useState<ScenarioResult[]>(initialRuns);
   const [loaded, setLoaded] = useState(false);
 
-  useEffect(() => setRuns(initialRuns), [initialRuns]);
+  useEffect(() => { if (initialRuns.length) setRuns(initialRuns); }, [initialRuns]);
   useEffect(() => {
     let live = true;
     setLoaded(false);
-    void Promise.allSettled([getScenarioTemplates(), getMacroRegime(portfolioId), getScenarioRunExtras(portfolioId), getCompanies()]).then(([t, r, e, c]) => {
+    void Promise.allSettled([getScenarioTemplates(), getMacroRegime(portfolioId), getScenarioRunExtras(portfolioId), getCompanies(), getScenarioRuns(portfolioId)]).then(([t, r, e, c, h]) => {
       if (!live) return;
       setTemplates(t.status === "fulfilled" ? { value: t.value, error: null } : { value: [], error: message(t.reason) });
       setRegime(r.status === "fulfilled" ? { value: r.value, error: null } : { value: null, error: message(r.reason) });
       setExtras(e.status === "fulfilled" ? { value: e.value, error: null } : { value: null, error: message(e.reason) });
       if (c.status === "fulfilled") setWebsites(Object.fromEntries(c.value.map(company => [company.symbol, company.official_website ?? null])));
+      if (h.status === "fulfilled") setRuns(h.value);
       setLoaded(true);
     });
     return () => { live = false; };

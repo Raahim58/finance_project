@@ -1,8 +1,9 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAssistantWorkspace } from "@/components/AssistantWorkspace";
-import { CompanyDigestPanel } from "@/components/CompanyDigest";
+import { AIBriefCard, useBrief } from "@/components/AIBriefCard";
+import { getCompanyBrief } from "@/lib/api/research";
 import { CompanyIntelligencePanel, CompanyPurposeEvidence } from "@/components/ResearchIntelligence";
 import { Icon, type IconName } from "@/components/Icon";
 import { CompanyLogo } from "@/components/markets/CompanyLogo";
@@ -21,6 +22,8 @@ const views:Array<[View,string,IconName]>=[["overview","Overview","document"],["
 type Data=ReturnType<typeof useCompanyData>;
 export function CompanyWorkspace({symbol}:{symbol:string}) {
   const data=useCompanyData(symbol), assistant=useAssistantWorkspace();
+  const loadBrief=useCallback((retry:boolean)=>getCompanyBrief(symbol,retry),[symbol]);
+  const briefState=useBrief(loadBrief);
   const [view,setView]=useState<View>("overview"),[range,setRange]=useState<ChartRange>("1M");
   const [statement,setStatement]=useState("ratios"),[period,setPeriod]=useState("latest"),[basis,setBasis]=useState("");
   const [metric,setMetric]=useState("cash_ratio"),[selectedFact,setSelectedFact]=useState<CompanyFact|null>(null);
@@ -66,7 +69,7 @@ export function CompanyWorkspace({symbol}:{symbol:string}) {
       <details className={styles.coverage}><summary>Data coverage</summary>{data.coverage?Object.entries(data.coverage).filter(([,row])=>typeof row==="object"&&row!==null&&"available" in row).map(([key,row])=><p key={key}>{humanize(key)} <span>{typeof row==="object"&&row!==null&&"available" in row&&row.available?"Available":"Missing"}</span></p>):<p>{data.errors.coverage??"Loading coverage…"}</p>}</details>
     </aside>
     <div className={styles.center}>
-      <div className={styles.content}>
+      <div className={`${styles.content} ${view==="fit"||view==="events"?styles.tight:""}`}>
         {data.errors.research?<p className={styles.error} role="alert">Company research: {data.errors.research}</p>:null}
         {data.research?.has_synthetic_data?<p className={styles.error}>Demo company facts are labelled and do not represent observed filings.</p>:null}
         {view==="overview"?<>
@@ -102,7 +105,7 @@ export function CompanyWorkspace({symbol}:{symbol:string}) {
         <p className={styles.caption}>{selectedFact?"Value":"Formula"}</p><p>{selectedFact?factValue(selectedFact.value,selectedFact.unit,selectedFact.currency):definition.formula}</p>
         {selectedFact?<><p className={styles.caption}>Period and accounting basis</p><p>{formatDate(selectedFact.period_end)} · {humanize(selectedFact.accounting_basis??"unknown")}</p><p className={styles.caption}>Source label</p><p>{selectedFact.source_label??selectedFact.provenance.source_name??"Source unavailable"}</p>{selectedFact.source_url?<a href={selectedFact.source_url} target="_blank" rel="noreferrer">Open source ↗</a>:<p className={styles.caption}>Source URL unavailable; use retained report evidence.</p>}</>:<><div className={styles.inputList}><h3>Required inputs</h3>{definition.inputs.map(key=>{const fact=filtered.find(row=>row.taxonomy_key===key);return <div key={key}><span>{humanize(key)}</span><span>{key==="price"&&latest?`PKR ${formatNumber(latest.close)}`:fact?"Stored · source review":"Missing eligible input"}</span></div>})}</div><div className={styles.inputList}><p>Period consistent? <span>{derived?.period_end?"Backend evaluated":"Not established"}</span></p><p>Calculation <span>{derived?"Returned by backend":"Unavailable"}</span></p></div></>}
       </section>:null}
-      <section className={styles.brief}><CompanyDigestPanel symbol={symbol} compact/></section></div>
+      <section className={styles.brief}><h2 className={styles.briefTitle}>Company brief</h2><AIBriefCard title="Company brief" hideHeader state={briefState} onAsk={text=>assistant?.open(text)}/></section></div>
     </aside>
   </div>;
 }

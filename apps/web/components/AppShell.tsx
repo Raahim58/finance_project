@@ -23,7 +23,6 @@ const groups: Array<{ label: string; items: NavEntry[] }> = [
     ["Research", "/research", "document"],
   ] },
   { label: "Oversight", items: [
-    ["Recommendations", "/recommendations", "lightbulb"],
     ["Monitoring", "/monitoring", "bell"],
     ["Activity", "/activity", "activity"],
   ] },

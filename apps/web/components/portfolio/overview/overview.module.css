@@ -98,7 +98,8 @@
 .facts{padding-top:10px}.rail,.main{padding-top:10px}
 .facts{padding-top:0!important}.facts>:first-child{margin-top:0;padding-top:16px}
 
-.railSummary{font-size:13px;line-height:1.6;color:var(--ink-2);margin:0 0 18px;padding-bottom:18px;border-bottom:1px solid var(--line)}
+.railTitle{margin:0 0 10px;font-size:20px;font-weight:600;letter-spacing:-.02em}
+.railSummary{font-size:15px;line-height:1.6;color:var(--ink);margin:0 0 18px;padding-bottom:18px;border-bottom:1px solid var(--line)}
 .facts .contribution{margin-top:22px}
 .facts .contribution h3{margin:0 0 10px}
 .facts .contributionRow{grid-template-columns:46px minmax(30px,1fr) auto;gap:8px}

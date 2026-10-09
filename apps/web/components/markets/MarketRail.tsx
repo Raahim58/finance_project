@@ -19,11 +19,10 @@ export function MarketRail({ market, events, loading, brief, onSector }: {brief:
   const seen = new Set<string>();
   const evidence = events.filter(event => { const key = `${event.evidence[0]?.source_name}:${event.event_type}`; if (seen.has(key)) return false; seen.add(key); return true; }).slice(0, 3);
   const ask = (text: string) => assistant?.open(text);
-  const total = breadth ? breadth.up + breadth.down + breadth.flat : 0;
-  const move = percent == null ? null : `${percent < 0 ? "down" : percent > 0 ? "up" : "unchanged"}${percent === 0 ? "" : ` ${Math.abs(percent).toFixed(2)}%`}`;
-  const summary = market?.snapshot ? `KSE-100 ${market.price_basis === "intraday" ? "is" : "closed"} ${move ?? "with no reported change"} across ${market.priced_securities ?? total} securities${breadth ? `: ${breadth.up} advancing, ${breadth.down} declining, ${breadth.flat} unchanged` : ""}.${leader ? ` ${leader.sector} leads at ${formatPercent(leader.average_change_percent)} on average.` : ""}` : null;
+  const summary = brief.view?.brief?.summary || null;
   return <aside className={styles.rail} aria-label="Market context and Assistant">
-    {summary ? <p className={styles.railSummary}>{summary}</p> : null}
+    <h2 className={styles.railTitle}>Market brief</h2>
+    {summary ? <p className={styles.railSummary}>{summary}</p> : <p className={styles.source}>{brief.error ? "Brief unavailable right now." : "Preparing brief…"}</p>}
     {breadth ? <div className={styles.breadthPills} aria-label="Market breadth"><span><b className={styles.positive}>{breadth.up}</b> Gainers</span><span><b className={styles.negative}>{breadth.down}</b> Losers</span><span><b>{breadth.flat}</b> Unchanged</span></div> : null}
     {leader ? <section className={styles.railSection}><h3>Sector in focus</h3><p>{onSector?<button onClick={()=>onSector(leader.sector)}>{leader.sector} ›</button>:leader.sector}</p><strong className={Number(leader.average_change_percent) < 0 ? styles.negative : styles.positive}>{formatPercent(leader.average_change_percent)} <small>average quoted move</small></strong><p className={styles.source}>A simple average of observed stocks in the sector.</p></section> : null}
     <section className={styles.railSection}><div className={styles.railHead}><h3>Research evidence</h3><Link href="/research">View all <span aria-hidden="true">↗</span></Link></div>

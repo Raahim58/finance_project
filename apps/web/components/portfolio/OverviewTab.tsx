@@ -84,7 +84,7 @@ export function OverviewTab({ portfolioId, data }: { portfolioId: string; data: 
     </div>
 
     <aside data-portfolio-panel="context" className={styles.rail} aria-label="Portfolio brief">
-      <p className={styles.railSummary}>{`Value ${pkr(total)} across ${rows.length} holding${rows.length === 1 ? "" : "s"}, ${formatPercent(dayPercent)} (${pkr(dayChange, true)}) in the latest session. ${share(cash) ? `Cash is ${share(cash)}` : "Cash unavailable"}${contributors[0] ? `; ${contributors[0].symbol} contributed most` : ""}${detractors[0] ? `, ${detractors[0].symbol} detracted most` : ""}.`}</p>
+      <h2 className={styles.railTitle}>Portfolio brief</h2>{briefState.view?.brief?.summary ? <p className={styles.railSummary}>{briefState.view.brief.summary}</p> : <p className={styles.source}>{briefState.error ? "Brief unavailable right now." : "Preparing brief…"}</p>}
       <section><h3>Top contributors</h3><Movers rows={contributors} websites={extras.websites} empty="No holdings with a positive stored day change." /></section>
       <section><h3>Top detractors</h3><Movers rows={detractors} websites={extras.websites} empty="No holdings with a negative stored day change." /></section>
       <section>

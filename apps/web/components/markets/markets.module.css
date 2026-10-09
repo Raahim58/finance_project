@@ -140,7 +140,8 @@
 /* Left panel starts flush under the header/tab bar. */
 .catalog{padding-top:0}.catalog .hero{padding-top:10px}.rail,.main{padding-top:10px}
 .catalog,.catalog .hero{padding-top:0!important}.catalog .hero,.catalog .heroTop,.catalog .heroTop>div,.catalog .heroTop>div>span{margin-top:0}.catalog .heroTop>div>span{display:block;padding-top:16px}
-.railSummary{font-size:13px;line-height:1.6;color:var(--ink-2);margin:0 0 18px}
+.railTitle{margin:0 0 10px;font-size:20px;font-weight:600;letter-spacing:-.02em}
+.railSummary{font-size:15px;line-height:1.6;color:var(--ink);margin:0 0 18px}
 
 .breadthPills{display:flex;flex-wrap:wrap;gap:9px;margin:0 0 20px}
 .breadthPills span{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border:1px solid var(--line);border-radius:30px;font-size:12px}

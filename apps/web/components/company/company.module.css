@@ -38,3 +38,36 @@
 .brief { padding-top:0; }
 
 .identity{padding-top:14px}.content{padding-top:34px}.rightBody{padding-top:16px}
+
+.briefTitle{margin:0 0 14px;font-size:20px;font-weight:600;letter-spacing:-.02em}
+
+/* Portfolio fit and Events reuse older shared components; restyle them to the workspace look. */
+.content :global(.eyebrow){color:var(--muted);font-size:13px;font-weight:600;letter-spacing:0;text-transform:none;margin:6px 0 0}
+.content :global(.btn){min-height:38px;border-radius:7px;font-size:13px;font-weight:600;box-shadow:none}
+.content :global(.btn-primary){background:var(--ink);color:#fff}
+.content :global(.btn-primary:hover){background:#2f3338}
+.content :global(.btn-secondary){border:1px solid var(--line);background:var(--paper);color:var(--ink)}
+.content :global(.btn-secondary:hover){background:var(--surface)}
+.content :global(.panel-head){min-height:0;padding:0 0 14px}
+.content :global(.panel-title){font-size:20px;font-weight:600;letter-spacing:-.02em}
+.content :global(.panel-body){padding:0}
+.content :global(.metric-strip){display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:0 32px;border:0;border-radius:0;background:none;box-shadow:none;margin-top:6px}
+.content :global(.metric){display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:11px 0;border:0;border-bottom:1px solid var(--line)}
+.content :global(.metric-label){font-size:13px;font-weight:400;letter-spacing:0;color:var(--muted)}
+.content :global(.metric-value){margin:0;font-size:15px;font-weight:600;letter-spacing:0}
+.content :global(.field){min-height:38px;border:1px solid var(--line);border-radius:7px;background:var(--paper);font-size:14px;padding:7px 10px}
+.content :global(.field:focus){border-color:var(--ink);box-shadow:none}
+.content :global(.field-label){font-size:12px;font-weight:500;color:var(--muted)}
+.content :global(.badge),.content :global(.badge-good),.content :global(.badge-warn){background:none;border:1px solid var(--line);border-radius:5px;padding:3px 7px;font-size:12px;font-weight:500;color:var(--ink);text-transform:capitalize}
+.content :global(.badge::before){display:none}
+.content :global(.notice){border-radius:7px;background:var(--surface);color:var(--ink-2);font-size:13px}
+.content :global(.notice-error){background:#fff7f6;color:#b42318}
+.content :global(.source-rail){border:1px solid var(--line);border-radius:7px;background:none;box-shadow:none}
+.content :global(.text-accent),.content summary :global(.text-accent){color:#0067db}
+.content :global(.data-table th){background:none;font-weight:500;letter-spacing:0}
+.content :global(details > summary){font-size:13px;font-weight:500;color:var(--ink)}
+.content :global(.mt-4){margin-top:22px}
+
+.content.tight{padding-top:20px}
+.content.tight>:first-child,.content.tight>:first-child :global(.mt-4){margin-top:0}
+.content.tight .description{margin-top:0}

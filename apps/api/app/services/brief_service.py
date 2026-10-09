@@ -61,6 +61,13 @@ PORTFOLIO_SYSTEM = (
     "(2) concentration and exposure: single names, sectors and cash, and the risk that creates, "
     "(3) events or data gaps affecting the holdings. Tickers must be holdings.\n\n" + STYLE
 )
+COMPANY_SYSTEM = (
+    "You are a sharp equity analyst writing a short brief on one Pakistan Stock Exchange company for an investor. "
+    + RULES.replace("a modest read of the whole picture", "a modest read of the company right now") + "\n\n"
+    "THEMES for the three sections: (1) what the latest price action and valuation context say about how the market is treating the stock, "
+    "(2) what the filed financials say about earnings quality, leverage or growth (words, not a data dump), "
+    "(3) which recent events or missing data matter next. Tickers, if any, must be the company's own symbol.\n\n" + STYLE
+)
 _NUM = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
 
 
@@ -152,7 +159,41 @@ def portfolio_facts(db, user, portfolio_id):
     return facts, key_inputs
 
 
+def company_facts(db, symbol):
+    from app.services.market_service import get_company_detail
+    from app.services.pipeline.event_reads import event_records
+    from app.services.company_snapshot import financial_rows
+    from app.services.research_intelligence_service import resolve_company
+    detail = get_company_detail(db, symbol)
+    facts = []
+    def add(text, source):
+        fid = f"f{len(facts) + 1}"; facts.append({"id": fid, "text": text, "source": source}); return fid
+    c, p = detail.company, detail.latest_price
+    if p:
+        add(f"{c.symbol} ({c.name}, sector {c.sector}) closed at {float(p.close):,.2f}, change {_pct(p.change_percent)}%, volume {p.volume:,}, dated {p.trade_date}.",
+            f"market prices {p.trade_date}")
+        if p.market_cap:
+            add(f"Reported market capitalization {float(p.market_cap):,.0f} PKR.", f"capitalization {p.trade_date}")
+    instrument = resolve_company(db, symbol)
+    latest = {}
+    for r in financial_rows(db, instrument):
+        key = r['metric']
+        if key not in latest or r['period_end'] > latest[key]['period_end']:
+            latest[key] = r
+    for r in sorted(latest.values(), key=lambda r: r['metric'])[:12]:
+        add(f"{r['metric'].replace('_', ' ')} was {float(r['value']):,.2f} {r['currency'] or r['unit'] or ''} for the {r['period_type']} period ending {r['period_end']} ({r['accounting_basis']}).".replace("  ", " "),
+            f"filed financials, {r.get('source_name') or 'source label unavailable'}")
+    events = event_records(db, symbols=[c.symbol], window_days=120, limit=5)
+    for e in events:
+        add(f"Event ({str(e['occurred_at'])[:10]}, {e['materiality']}): {e['title']}", "classified event " + e['event_key'])
+    key_inputs = {"price": str(p.trade_date) if p else None, "close": str(p.close) if p else None,
+                  "fin": sorted(f"{r['metric']}:{r['period_end']}" for r in latest.values()), "events": [e['event_key'] for e in events]}
+    return facts, key_inputs
+
+
 def _gather(db, user, scope, key):
+    if scope == 'company':
+        return company_facts(db, key)
     return market_facts(db) if scope == 'market' else portfolio_facts(db, user, key)
 
 
@@ -230,7 +271,7 @@ async def generate(user_id, scope, key, h):
                 return
             try:
                 facts, _ = await asyncio.to_thread(lambda: _gather_sync(user_id, scope, key))
-                messages = [{"role": "system", "content": PORTFOLIO_SYSTEM if scope == 'portfolio' else SYSTEM}, {"role": "user", "content": "FACTS\n" + canonical(facts)}]
+                messages = [{"role": "system", "content": PORTFOLIO_SYSTEM if scope == 'portfolio' else COMPANY_SYSTEM if scope == 'company' else SYSTEM}, {"role": "user", "content": "FACTS\n" + canonical(facts)}]
                 api_key, _rec = get_decrypted_key_for_call(db, user, row.provider)
                 symbols = set(re.findall(r'\b[A-Z][A-Z0-9]{1,9}\b', ' '.join(f['text'] for f in facts)))
                 brief = None

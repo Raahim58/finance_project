@@ -138,3 +138,17 @@
 .ptabs a[aria-current="page"]::after { display:none !important; }
 .workspace-header-tabs [aria-current="page"],
 .workspace-header-tabs [aria-selected="true"],.ptabs a[aria-current="page"] { border-bottom-color:transparent !important; text-decoration:none; }
+
+/* Chat page: the scope bar lives in the header row; only the right-hand utilities (search, portfolio, alerts) stay on top. */
+@media(min-width:721px) {
+  body:has(.assistant-full-page) .app-topbar { z-index:80; background:transparent; border-bottom:0; pointer-events:none; }
+  body:has(.assistant-full-page) .app-topbar > * { pointer-events:none; }
+  body:has(.assistant-full-page) .app-topbar > .workspace-header-utilities { pointer-events:auto; margin-left:auto; border-left:0; }
+  body:has(.assistant-full-page) .app-topbar > .workspace-header-utilities * { pointer-events:auto; }
+  .assistant-full-page .assistant-conversation-column { padding-top:0; }
+  .assistant-full-page .assistant-scope-bar { min-height:var(--workspace-header-height); box-sizing:border-box; padding:0 22px; align-items:center; }
+}
+@media(min-width:721px) { body:has(.assistant-full-page) .app-topbar > .workspace-header-center { display:none; } }
+
+@media(min-width:1251px) { .assistant-drawer.assistant-full-page { grid-template-columns:260px minmax(0,1fr) 340px; } }
+@media(min-width:1151px) and (max-width:1250px) { .assistant-drawer.assistant-full-page { grid-template-columns:260px minmax(0,1fr) 300px; } }
