@@ -193,9 +193,8 @@ Mettis is scheduled only through this evidence pipeline. It is intentionally not
 also run by the generic market/macro scheduler, which prevents duplicate ingestion
 paths with different entity-linking and story-deduplication behavior.
 
-The bounded Pass 4 official-source canary is disabled by default. Its `.venv`
-rollout, hard budgets, included source matrix, smoke test, and live status command
-are documented in [Global Evidence Pass 4: official-source canary](global-evidence-pass4-official.md).
+Historical official-source canary jobs remain disabled by default. Current pipeline
+operation and source controls are documented in [Pipeline restoration](PIPELINE_RESTORATION.md).
 
 Workers and schedulers are opt-in Compose profiles: `docker compose up -d` starts
 only PostgreSQL and Redis. Use `--profile ingestion` for explicitly selected
@@ -276,8 +275,8 @@ python -m app.jobs.normalize_events --rebuild --confirm-rebuild --all --limit 50
 ```
 
 The command processes bounded batches until `scanned` is zero. New evidence processed by the background
-evidence-index worker is normalized automatically. See `docs/event-intelligence.md` for
-the event contract, deterministic boundaries, and read APIs.
+evidence-index worker is normalized automatically. See [Pipeline restoration](PIPELINE_RESTORATION.md)
+for event classification, deterministic boundaries, and read APIs.
 
 ## Safety assumptions
 
@@ -302,6 +301,36 @@ npm run typecheck
 npm run build
 ```
 
-See `docs/phase8/revamp.md` for exact local recovery commands, allocation status meanings,
-unchanged budgets and the prepared but unexecuted live benchmark. No live provider call,
-external search or streaming is required for these offline checks.
+No live provider call, external search or streaming is required for these offline checks.
+
+
+## Local tokenizer assets
+
+Install the data-only tokenizer assets after installing the backend dependencies:
+
+```bash
+cd apps/api
+.venv/bin/python scripts/setup_glm_tokenizer.py
+```
+
+Docker installs these assets during the API image build. Missing assets use the
+explicit conservative counting fallback; no request-time model download is required.
+
+## Assistant finalization recovery
+
+For a failed serialization/rendering/persistence execution, run this server-side recovery
+from `apps/api` with the application's normal server configuration. Use the owning user ID
+and exact failed execution ID; the helper refuses uncertain attempts and non-final turns:
+
+```bash
+python - <<'PY'
+from app.db.session import SessionLocal
+from app.services.assistant_execution import queue_finalization_recovery
+with SessionLocal() as db:
+    queue_finalization_recovery(db, 'OWNING_USER_ID', 'FAILED_EXECUTION_ID')
+PY
+```
+
+The existing API maintenance loop schedules the queued execution. Expired provider-work
+deadlines do not block purely local finalization. No external attempt is scheduled during
+this recovery. Diagnostics expose safe failure locations in the execution's stage metadata.
