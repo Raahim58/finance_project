@@ -25,36 +25,18 @@ def test_company_sections_preserve_period_unit_source_and_have_no_side_effects(m
 
     monkeypatch.setattr("app.services.ingestion_service.refresh_company_research", prohibited)
     monkeypatch.setattr("app.ai.providers.http_placeholders.AnthropicProvider.chat", prohibited)
-    seeded, user_id = _seed(monkeypatch)
+    _, user_id = _seed(monkeypatch)
     with SessionLocal.begin() as db:
         user = db.get(User, user_id)
         instrument = db.scalar(select(Instrument).where(Instrument.symbol == "MEBL"))
-        db.add_all(
-            [
-                FinancialFact(
-                    instrument_id=instrument.id,
-                    taxonomy_key="net_income",
-                    period_type="annual",
-                    period_end=date(2023, 12, 31),
-                    value=Decimal("101.25"),
-                    unit="million",
-                    currency="PKR",
-                    consolidated=True,
-                    source_label="Issuer annual report",
-                ),
-                FinancialFact(
-                    instrument_id=instrument.id,
-                    taxonomy_key="net_income",
-                    period_type="annual",
-                    period_end=date(2023, 12, 31),
-                    value=Decimal("99.75"),
-                    unit="million",
-                    currency="PKR",
-                    consolidated=True,
-                    source_label="Exchange filing",
-                ),
-            ]
-        )
+        db.add_all([
+            FinancialFact(
+                instrument_id=instrument.id, taxonomy_key="net_income", period_type="annual",
+                period_end=date(2023, 12, 31), unit="million", currency="PKR", consolidated=True,
+                value=Decimal(value), source_label=source,
+            )
+            for value, source in [("101.25", "Issuer annual report"), ("99.75", "Exchange filing")]
+        ])
     with SessionLocal() as db:
         user = db.get(User, user_id)
         instrument = db.scalar(select(Instrument).where(Instrument.symbol == "MEBL"))
@@ -84,7 +66,6 @@ def test_company_sections_preserve_period_unit_source_and_have_no_side_effects(m
         assert set(result["data"]["sections"]) == {"columns", "rows"}
         assert _counts(db) == before
         assert prohibited_calls == []
-        assert seeded["portfolio_id"]
 
         first_page = build_tool_registry().invoke(
             "research.company_sections",

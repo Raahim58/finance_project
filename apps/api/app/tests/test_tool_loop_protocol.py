@@ -12,6 +12,7 @@ from app.models.assistant_execution import AssistantAttempt, AssistantExecution
 from app.services import assistant_diagnostics as diagnostics
 from app.tools.registry import tool_result
 from app.tests.support.assistant import _auth_with_anthropic, _auth_with_gemini
+from app.tests.support.assistant import anthropic_text, anthropic_turn
 
 
 def test_native_anthropic_loop_dispatches_parallel_tools_and_persists_transcript(
@@ -36,11 +37,8 @@ def test_native_anthropic_loop_dispatches_parallel_tools_and_persists_transcript
     provider = AnthropicProvider()
     captured = []
     responses = [
-        {
-            "id": "msg-tool-only",
-            "model": "claude-test",
-            "stop_reason": "tool_use",
-            "content": [
+        anthropic_turn(
+            [
                 {
                     "type": "tool_use",
                     "id": "call-discover",
@@ -54,20 +52,15 @@ def test_native_anthropic_loop_dispatches_parallel_tools_and_persists_transcript
                     "input": {},
                 },
             ],
-            "usage": {"input_tokens": 100, "output_tokens": 20},
-        },
-        {
-            "id": "msg-final",
-            "model": "claude-test",
-            "stop_reason": "end_turn",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "The filing proves the moon is green [[E1]].",
-                }
-            ],
-            "usage": {"input_tokens": 200, "output_tokens": 15},
-        },
+            identifier="msg-tool-only",
+            stop_reason="tool_use",
+            usage={"input_tokens": 100, "output_tokens": 20},
+        ),
+        anthropic_text(
+            "The filing proves the moon is green [[E1]].",
+            identifier="msg-final",
+            usage={"input_tokens": 200, "output_tokens": 15},
+        ),
     ]
 
     async def fake_post(_url, _key, payload):
@@ -310,16 +303,24 @@ def test_gemini_six_parallel_results_then_dependent_allocation_are_checkpointed(
     ("first_response", "expected_code"),
     [
         (
-            {
-                "id": "duplicate",
-                "model": "claude-test",
-                "stop_reason": "tool_use",
-                "content": [
-                    {"type": "tool_use", "id": "same", "name": "market__freshness", "input": {}},
-                    {"type": "tool_use", "id": "same", "name": "market__freshness", "input": {}},
+            anthropic_turn(
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "same",
+                        "name": "market__freshness",
+                        "input": {},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "same",
+                        "name": "market__freshness",
+                        "input": {},
+                    },
                 ],
-                "usage": {},
-            },
+                identifier="duplicate",
+                stop_reason="tool_use",
+            ),
             "duplicate_or_missing_tool_call_id",
         ),
     ],
@@ -361,13 +362,12 @@ def test_output_truncation_and_provider_errors_remain_distinct(client, monkeypat
     provider = AnthropicProvider()
 
     async def truncated(_url, _key, _payload):
-        return {
-            "id": "truncated",
-            "model": "claude-test",
-            "stop_reason": "max_tokens",
-            "content": [{"type": "text", "text": "Partial answer"}],
-            "usage": {"input_tokens": 5, "output_tokens": 4096},
-        }
+        return anthropic_text(
+            "Partial answer",
+            identifier="truncated",
+            stop_reason="max_tokens",
+            usage={"input_tokens": 5, "output_tokens": 4096},
+        )
 
     monkeypatch.setattr(provider, "_post", truncated)
     monkeypatch.setattr("app.ai.tool_loop.get_provider", lambda _name: provider)

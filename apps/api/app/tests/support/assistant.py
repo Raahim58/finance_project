@@ -113,3 +113,21 @@ def accepted(client, question="First question"):
             db, user, AssistantMessageCreate(question=question), str(uuid4())
         )
         return headers, user.id, run.id, run.conversation_id
+
+
+_OMITTED_USAGE = object()
+
+
+def anthropic_turn(content, *, identifier, stop_reason="end_turn", model="claude-test", usage=_OMITTED_USAGE):
+    """Native response envelope; each test supplies its own content and identity."""
+    return {
+        "id": identifier,
+        "model": model,
+        "stop_reason": stop_reason,
+        "content": content,
+        "usage": {} if usage is _OMITTED_USAGE else usage,
+    }
+
+
+def anthropic_text(text, **options):
+    return anthropic_turn([{"type": "text", "text": text}], **options)

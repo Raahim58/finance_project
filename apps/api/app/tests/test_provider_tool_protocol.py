@@ -5,6 +5,7 @@ from decimal import Decimal
 import pytest
 from app.ai.providers.base import ContentBlock, ProviderCallOptions, ProviderTool, ProviderTurn
 from app.ai.providers.http_placeholders import AnthropicProvider, GeminiProvider
+from app.tests.support.assistant import anthropic_text, anthropic_turn
 
 
 @pytest.mark.asyncio
@@ -12,12 +13,14 @@ async def test_anthropic_native_tools_preserve_parallel_call_ids_and_results(mon
     provider = AnthropicProvider()
     captured = []
     responses = [
-        {
-            "id": "msg-tools",
-            "model": "claude-test",
-            "stop_reason": "tool_use",
-            "content": [
-                {"type": "tool_use", "id": "call-1", "name": "market__freshness", "input": {}},
+        anthropic_turn(
+            [
+                {
+                    "type": "tool_use",
+                    "id": "call-1",
+                    "name": "market__freshness",
+                    "input": {},
+                },
                 {
                     "type": "tool_use",
                     "id": "call-2",
@@ -25,15 +28,15 @@ async def test_anthropic_native_tools_preserve_parallel_call_ids_and_results(mon
                     "input": {"query": "Meezan"},
                 },
             ],
-            "usage": {"input_tokens": 10, "output_tokens": 4},
-        },
-        {
-            "id": "msg-final",
-            "model": "claude-test",
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "Readable answer."}],
-            "usage": {"input_tokens": 20, "output_tokens": 3},
-        },
+            identifier="msg-tools",
+            stop_reason="tool_use",
+            usage={"input_tokens": 10, "output_tokens": 4},
+        ),
+        anthropic_text(
+            "Readable answer.",
+            identifier="msg-final",
+            usage={"input_tokens": 20, "output_tokens": 3},
+        ),
     ]
 
     async def fake_post(_url, _key, payload):

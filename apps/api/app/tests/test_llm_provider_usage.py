@@ -3,6 +3,7 @@
 import pytest
 from app.ai.providers.base import ProviderCallOptions
 from app.ai.providers.http_placeholders import AnthropicProvider, GeminiProvider, OpenAIProvider
+from app.tests.support.assistant import anthropic_text
 
 
 @pytest.mark.asyncio
@@ -145,18 +146,16 @@ async def test_anthropic_preserves_cache_and_finish_metadata(monkeypatch):
     provider = AnthropicProvider()
 
     async def fake_post(_url, _api_key, _payload):
-        return {
-            "id": "anthropic-request",
-            "model": "claude-test",
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "answer"}],
-            "usage": {
+        return anthropic_text(
+            "answer",
+            identifier="anthropic-request",
+            usage={
                 "input_tokens": 20,
                 "output_tokens": 4,
                 "cache_read_input_tokens": 6,
                 "cache_creation_input_tokens": 8,
             },
-        }
+        )
 
     monkeypatch.setattr(provider, "_post", fake_post)
     result = await provider.chat("secret", [{"role": "user", "content": "question"}])

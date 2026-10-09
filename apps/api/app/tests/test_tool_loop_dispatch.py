@@ -7,17 +7,15 @@ from app.ai.providers.http_placeholders import AnthropicProvider
 from app.ai.tool_loop import AssistantTerminalError, ToolExecution
 from app.tools.registry import tool_result
 from app.tests.support.assistant import _anthropic_tool_results, _mock_market, _auth_with_anthropic
+from app.tests.support.assistant import anthropic_text, anthropic_turn
 
 
 def test_parallel_tool_workers_are_bounded_to_four_and_keep_call_order(client, monkeypatch):
     headers, _ = _auth_with_anthropic(client, monkeypatch, email="bounded-tools@example.com")
     provider = AnthropicProvider()
     responses = [
-        {
-            "id": "five-tools",
-            "model": "claude-test",
-            "stop_reason": "tool_use",
-            "content": [
+        anthropic_turn(
+            [
                 {
                     "type": "tool_use",
                     "id": f"bounded-{index}",
@@ -26,15 +24,10 @@ def test_parallel_tool_workers_are_bounded_to_four_and_keep_call_order(client, m
                 }
                 for index in range(5)
             ],
-            "usage": {},
-        },
-        {
-            "id": "bounded-final",
-            "model": "claude-test",
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "Bounded work complete."}],
-            "usage": {},
-        },
+            identifier="five-tools",
+            stop_reason="tool_use",
+        ),
+        anthropic_text("Bounded work complete.", identifier="bounded-final"),
     ]
     active = 0
     peak = 0
@@ -102,29 +95,16 @@ def test_request_categories_use_real_registry_services_and_pagination(client, mo
         ),
     ]
     responses = [
-        {
-            "id": f"category-tool-{index}",
-            "model": "claude-test",
-            "stop_reason": "tool_use",
-            "content": [
-                {
-                    "type": "tool_use",
-                    "id": identifier,
-                    "name": name,
-                    "input": arguments,
-                }
-            ],
-            "usage": {},
-        }
+        anthropic_turn(
+            [{"type": "tool_use", "id": identifier, "name": name, "input": arguments}],
+            identifier=f"category-tool-{index}",
+            stop_reason="tool_use",
+        )
         for index, (identifier, name, arguments) in enumerate(calls)
     ] + [
-        {
-            "id": "category-final",
-            "model": "claude-test",
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "Comparison complete; missing data noted."}],
-            "usage": {},
-        },
+        anthropic_text(
+            "Comparison complete; missing data noted.", identifier="category-final"
+        ),
     ]
 
     # Keep six provider calls including the final answer: batch the final two reads.
@@ -167,11 +147,8 @@ def test_malformed_and_forbidden_calls_return_stable_associated_results(client, 
     provider = AnthropicProvider()
     captured = []
     responses = [
-        {
-            "id": "invalid-tools",
-            "model": "claude-test",
-            "stop_reason": "tool_use",
-            "content": [
+        anthropic_turn(
+            [
                 {
                     "type": "tool_use",
                     "id": "malformed",
@@ -191,15 +168,12 @@ def test_malformed_and_forbidden_calls_return_stable_associated_results(client, 
                     "input": {"instrument_id": "missing-instrument"},
                 },
             ],
-            "usage": {},
-        },
-        {
-            "id": "invalid-final",
-            "model": "claude-test",
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "The requested tools were unavailable."}],
-            "usage": {},
-        },
+            identifier="invalid-tools",
+            stop_reason="tool_use",
+        ),
+        anthropic_text(
+            "The requested tools were unavailable.", identifier="invalid-final"
+        ),
     ]
 
     async def fake_post(_url, _key, payload):
@@ -270,11 +244,8 @@ def test_allocation_tools_reject_overselling_and_ips_breaches(client, monkeypatc
     provider = AnthropicProvider()
     captured = []
     responses = [
-        {
-            "id": "allocation-tools",
-            "model": "claude-test",
-            "stop_reason": "tool_use",
-            "content": [
+        anthropic_turn(
+            [
                 {
                     "type": "tool_use",
                     "id": "oversell",
@@ -294,13 +265,11 @@ def test_allocation_tools_reject_overselling_and_ips_breaches(client, monkeypatc
                     },
                 }
             ],
-            "usage": {},
-        },
-        {
-            "id": "allocation-ips-tool",
-            "model": "claude-test",
-            "stop_reason": "tool_use",
-            "content": [
+            identifier="allocation-tools",
+            stop_reason="tool_use",
+        ),
+        anthropic_turn(
+            [
                 {
                     "type": "tool_use",
                     "id": "ips-breach",
@@ -320,23 +289,13 @@ def test_allocation_tools_reject_overselling_and_ips_breaches(client, monkeypatc
                     },
                 }
             ],
-            "usage": {},
-        },
-        {
-            "id": "allocation-final",
-            "model": "claude-test",
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "Both proposals were rejected."}],
-            "usage": {},
-        },
-        {
-            # The uncited final answer triggers exactly one no-tool citation repair.
-            "id": "allocation-repair",
-            "model": "claude-test",
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "Both proposals were rejected [[E1]]."}],
-            "usage": {},
-        },
+            identifier="allocation-ips-tool",
+            stop_reason="tool_use",
+        ),
+        anthropic_text("Both proposals were rejected.", identifier="allocation-final"),
+        anthropic_text(
+            "Both proposals were rejected [[E1]].", identifier="allocation-repair"
+        ),
     ]
 
     async def fake_post(_url, _key, payload):

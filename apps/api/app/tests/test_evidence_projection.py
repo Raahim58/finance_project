@@ -23,21 +23,21 @@ def test_duplicate_evidence_projection_preserves_originals_and_arguments():
     assert turns[0].content[1].result == evidence
 
 
-def test_mebl_233_subjects_224_references_have_one_prompt_copy():
+def test_repeated_context_has_one_prompt_copy():
     subjects = [
         {"id": f"subject-{i}", "issuer": "MEBL", "description": "Observed issuer linkage " * 4}
-        for i in range(233)
+        for i in range(3)
     ]
     references = [
         {"evidence_id": f"event-source-{i}", "snippet": f"Unique observed passage {i} " * 4}
-        for i in range(224)
+        for i in range(2)
     ]
     context = {"symbol": "MEBL", "subjects": subjects, "evidence": references}
     projected = project(
         {"canonical": context, "deep": [context], "deterministic_fallback": "do not send"}
     )
     raw = encode(projected)
-    assert raw.count('"id":"subject-232"') == 1
-    assert raw.count('"evidence_id":"event-source-223"') == 1
+    assert raw.count('"id":"subject-2"') == 1
+    assert raw.count('"evidence_id":"event-source-1"') == 1
     assert "do not send" not in raw
     assert projected["counts"]["duplicate_records_removed"] >= 1

@@ -2,6 +2,7 @@
 
 import json
 import asyncio
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.ai.providers.base import ContentBlock, ProviderTurn
@@ -22,6 +23,7 @@ from app.services import assistant_diagnostics as diagnostics
 from app.services.assistant_execution import accept
 from app.tools.registry import tool_result
 from app.tests.support.assistant import _mock_market, _auth_with_anthropic
+from app.tests.support.assistant import anthropic_text
 
 
 def test_restart_resumes_persisted_tool_turn_before_another_provider_call(client, monkeypatch):
@@ -55,13 +57,7 @@ def test_restart_resumes_persisted_tool_turn_before_another_provider_call(client
 
     async def final_after_resume(_url, _key, request):
         captured.append(request)
-        return {
-            "id": "resumed-final",
-            "model": "claude-test",
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "Freshness checked after restart."}],
-            "usage": {},
-        }
+        return anthropic_text("Freshness checked after restart.", identifier="resumed-final")
 
     monkeypatch.setattr(provider, "_post", final_after_resume)
     monkeypatch.setattr("app.ai.tool_loop.get_provider", lambda _name: provider)
@@ -86,111 +82,12 @@ def test_restart_resumes_persisted_tool_turn_before_another_provider_call(client
     assert checkpoint["completed_tool_call_ids"] == ["restart-tool"]
 
 
-def test_checkpoint_persistence_failure_has_specific_durable_terminal_code(client, monkeypatch):
-    headers, user_id = _auth_with_anthropic(
-        client, monkeypatch, email="checkpoint-failure@example.com"
-    )
-    provider = AnthropicProvider()
-
-    async def final_response(_url, _key, _request):
-        return {
-            "id": "persistence-final",
-            "model": "claude-test",
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "This turn cannot be checkpointed."}],
-            "usage": {},
-        }
-
-    from app.ai import tool_loop
-
-    original_save = tool_loop._save_checkpoint
-    saves = 0
-
-    def fail_after_attempt(identifier, checkpoint):
-        nonlocal saves
-        saves += 1
-        if checkpoint.get("provider_turn_complete"):
-            raise AssistantTerminalError("checkpoint_persistence_failed")
-        return original_save(identifier, checkpoint)
-
-    monkeypatch.setattr(provider, "_post", final_response)
-    monkeypatch.setattr("app.ai.tool_loop.get_provider", lambda _name: provider)
-    monkeypatch.setattr("app.ai.tool_loop._save_checkpoint", fail_after_attempt)
-    response = client.post(
-        "/assistant/messages",
-        headers=headers,
-        json={"question": "Persist this", "provider": "anthropic"},
-    )
-
-    assert response.status_code == 503
-    with SessionLocal() as db:
-        execution = db.scalar(
-            select(AssistantExecution).where(AssistantExecution.user_id == user_id)
-        )
-        attempts = list(
-            db.scalars(
-                select(AssistantAttempt).where(AssistantAttempt.execution_id == execution.id)
-            )
-        )
-    assert execution.error_code == "checkpoint_persistence_failed"
-    assert len(attempts) == 1 and attempts[0].status == "completed"
-
-
-def test_final_message_persistence_failure_is_distinct(client, monkeypatch):
-    headers, user_id = _auth_with_anthropic(
-        client, monkeypatch, email="response-failure@example.com"
-    )
-    provider = AnthropicProvider()
-
-    async def final_response(_url, _key, _request):
-        return {
-            "id": "response-persistence-final",
-            "model": "claude-test",
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "Cannot persist this message."}],
-            "usage": {},
-        }
-
-    original_add = Session.add
-
-    def fail_message(self, instance, *args, **kwargs):
-        if isinstance(instance, AssistantMessage) and instance.role == "assistant":
-            raise RuntimeError("simulated message persistence failure")
-        return original_add(self, instance, *args, **kwargs)
-
-    monkeypatch.setattr(provider, "_post", final_response)
-    monkeypatch.setattr("app.ai.tool_loop.get_provider", lambda _name: provider)
-    monkeypatch.setattr(Session, "add", fail_message)
-    response = client.post(
-        "/assistant/messages",
-        headers=headers,
-        json={"question": "Persist the final answer", "provider": "anthropic"},
-    )
-
-    assert response.status_code == 503
-    with SessionLocal() as db:
-        execution = db.scalar(
-            select(AssistantExecution).where(AssistantExecution.user_id == user_id)
-        )
-        attempt = db.scalar(
-            select(AssistantAttempt).where(AssistantAttempt.execution_id == execution.id)
-        )
-    assert execution.error_code == "response_persistence_failed"
-    assert attempt.status == "completed"
-
-
 def test_final_message_persistence_retries_once_without_duplicate(client, monkeypatch):
     headers, user_id = _auth_with_anthropic(client, monkeypatch, email="response-retry@example.com")
     provider = AnthropicProvider()
 
     async def final_response(_url, _key, _request):
-        return {
-            "id": "response-persistence-retry",
-            "model": "claude-test",
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "Persisted after retry."}],
-            "usage": {},
-        }
+        return anthropic_text("Persisted after retry.", identifier="response-persistence-retry")
 
     original_add = Session.add
     failures = 0
@@ -231,45 +128,6 @@ def test_final_message_persistence_retries_once_without_duplicate(client, monkey
         )
         assert execution.status == "synthesis_unavailable"
     assert len(messages) == 1
-
-
-def test_attempt_outcome_persistence_failure_keeps_sent_attempt_linkage(client, monkeypatch):
-    headers, user_id = _auth_with_anthropic(
-        client, monkeypatch, email="attempt-failure@example.com"
-    )
-    provider = AnthropicProvider()
-
-    async def final_response(_url, _key, _request):
-        return {
-            "id": "attempt-persistence-final",
-            "model": "claude-test",
-            "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": "Provider completed."}],
-            "usage": {},
-        }
-
-    def fail_attempt_outcome(*_args, **_kwargs):
-        raise RuntimeError("simulated attempt outcome persistence failure")
-
-    monkeypatch.setattr(provider, "_post", final_response)
-    monkeypatch.setattr("app.ai.tool_loop.get_provider", lambda _name: provider)
-    monkeypatch.setattr(diagnostics, "finish_attempt", fail_attempt_outcome)
-    response = client.post(
-        "/assistant/messages",
-        headers=headers,
-        json={"question": "Record the attempt", "provider": "anthropic"},
-    )
-
-    assert response.status_code == 503
-    with SessionLocal() as db:
-        execution = db.scalar(
-            select(AssistantExecution).where(AssistantExecution.user_id == user_id)
-        )
-        attempt = db.scalar(
-            select(AssistantAttempt).where(AssistantAttempt.execution_id == execution.id)
-        )
-    assert execution.error_code == "attempt_persistence_failed"
-    assert attempt.status == "sent"
 
 
 def test_compact_allocation_recovery_and_latest_failed_attempt():
@@ -482,3 +340,76 @@ def test_accepted_allocation_delivery_and_local_recovery_do_not_repeat_provider(
         }
         assert result["synthesis"]["token_usage"]["model_calls"] == 3
     assert len(captured) == 3
+
+
+@pytest.mark.parametrize(
+    "failure_point,question",
+    [
+        ("checkpoint", "Persist this"),
+        ("response", "Persist the final answer"),
+        ("attempt", "Record the attempt"),
+    ],
+)
+def test_persistence_failures_keep_distinct_stage_and_attempt_state(
+    client, monkeypatch, failure_point, question
+):
+    from app.ai import tool_loop
+
+    codes = {
+        "checkpoint": "checkpoint_persistence_failed",
+        "response": "response_persistence_failed",
+        "attempt": "attempt_persistence_failed",
+    }
+    headers, user_id = _auth_with_anthropic(
+        client, monkeypatch, email=f"{failure_point}-failure@example.com"
+    )
+    provider = AnthropicProvider()
+
+    async def final_response(_url, _key, _request):
+        return anthropic_text(
+            "Provider completed.", identifier=f"{failure_point}-persistence-final"
+        )
+
+    if failure_point == "checkpoint":
+        original_save = tool_loop._save_checkpoint
+
+        def fail_after_attempt(identifier, checkpoint):
+            if checkpoint.get("provider_turn_complete"):
+                raise AssistantTerminalError(codes[failure_point])
+            return original_save(identifier, checkpoint)
+
+        monkeypatch.setattr(tool_loop, "_save_checkpoint", fail_after_attempt)
+    elif failure_point == "response":
+        original_add = Session.add
+
+        def fail_message(self, instance, *args, **kwargs):
+            if isinstance(instance, AssistantMessage) and instance.role == "assistant":
+                raise RuntimeError("simulated message persistence failure")
+            return original_add(self, instance, *args, **kwargs)
+
+        monkeypatch.setattr(Session, "add", fail_message)
+    else:
+
+        def fail_attempt_outcome(*_args, **_kwargs):
+            raise RuntimeError("simulated attempt outcome persistence failure")
+
+        monkeypatch.setattr(diagnostics, "finish_attempt", fail_attempt_outcome)
+
+    monkeypatch.setattr(provider, "_post", final_response)
+    monkeypatch.setattr(tool_loop, "get_provider", lambda _name: provider)
+    response = client.post(
+        "/assistant/messages", headers=headers, json={"question": question, "provider": "anthropic"}
+    )
+    assert response.status_code == 503
+    with SessionLocal() as db:
+        execution = db.scalar(
+            select(AssistantExecution).where(AssistantExecution.user_id == user_id)
+        )
+        attempts = list(
+            db.scalars(
+                select(AssistantAttempt).where(AssistantAttempt.execution_id == execution.id)
+            )
+        )
+    assert execution.error_code == codes[failure_point]
+    assert len(attempts) == 1
+    assert attempts[0].status == ("sent" if failure_point == "attempt" else "completed")

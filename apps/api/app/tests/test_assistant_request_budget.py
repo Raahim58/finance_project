@@ -2,6 +2,7 @@
 
 from app.services.assistant_policy import selected_policy
 from app.core.config import settings
+from app.tests.support.assistant import anthropic_turn
 
 
 def test_trial_selection_is_explicit_and_excludes_reasoning(monkeypatch):
@@ -24,11 +25,8 @@ def test_budget_enforced_at_actual_request_boundary(client, monkeypatch):
 
     async def post(url, key, payload):
         requests.append(payload)
-        return {
-            "id": "budget-call",
-            "model": "claude-test",
-            "stop_reason": "tool_use",
-            "content": [
+        return anthropic_turn(
+            [
                 {
                     "type": "tool_use",
                     "id": f"tool{len(requests)}",
@@ -36,8 +34,10 @@ def test_budget_enforced_at_actual_request_boundary(client, monkeypatch):
                     "input": {},
                 }
             ],
-            "usage": {"input_tokens": 40000, "output_tokens": 100},
-        }
+            identifier="budget-call",
+            stop_reason="tool_use",
+            usage={"input_tokens": 40000, "output_tokens": 100},
+        )
 
     monkeypatch.setattr(provider, "_post", post)
     monkeypatch.setattr("app.ai.tool_loop.get_provider", lambda _: provider)
