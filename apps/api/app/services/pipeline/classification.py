@@ -185,17 +185,36 @@ def validate_event(event, sections, entities, document, *, official):
         amounts=amounts, topics=event.topics, sentiment=sentiment, evidence=spans[:3])
 
 
+# Market-wide prose (no linked company) is macro or geopolitical before it is "earnings" because a
+# sentence mentions revenue or profit. Company-linked sentences keep the generic order.
+MARKET_TERMS = (
+    ('geopolitics', re.compile(r'\b(iran|israel|russia|ukraine|gaza|war|ceasefire|sanctions?|tariffs?|conflict|tensions?|red sea|strait of hormuz|attack(?:ed|s)?|missile)\b', re.I)),
+    ('macro', re.compile(r'\b(inflation|cpi|policy rate|interest rates?|rate (?:cut|hike)s?|federal reserve|the fed|treasury yields?|bond yields?|oil prices?|brent|crude|energy prices?|gold|dollar|rupee|exchange rate|reserves|imf|gdp|central bank|kibor|commodit(?:y|ies))\b', re.I)),
+)
+
+
+COMPANY_ONLY_TYPES = ('earnings', 'dividend', 'expansion', 'financing', 'governance', 'ownership')
+
+
+def market_event_type(quote):
+    return next((name for name, pattern in MARKET_TERMS if pattern.search(quote)), None)
+
+
 def rules_classify(sections, entities, document, *, official):
     """Deterministic fallback: same contract, one record per entity/type/period in a document."""
     grouped = {}
     for section in sections.values():
         for _, quote in sentence_slices(section.text):
             kind, event_type, lifecycle = labels(quote, official)
-            if not event_type or len(quote) > 600: continue
+            if len(quote) > 600: continue
             if kind == 'commentary' and not official: kind = 'secondary_report'
             subjects = entities.linked or ['market']
-            if document.symbol in subjects and document.document_type in ISSUER_TYPES: subjects = [document.symbol]
-            if len(subjects) > 1: subjects = [s for s in subjects if entities.named_in(s, quote)] or ['market']
+            issuer_doc = document.symbol in subjects and document.document_type in ISSUER_TYPES
+            if issuer_doc: subjects = [document.symbol]
+            elif subjects != ['market']: subjects = [s for s in subjects if entities.named_in(s, quote)] or ['market']
+            if subjects == ['market'] and (market_type := market_event_type(quote)): event_type = market_type
+            if subjects == ['market'] and event_type in COMPANY_ONLY_TYPES: continue
+            if not event_type: continue
             match = PERIOD_RE.search(quote)
             period = SourcedValue(value=match.group().strip(), quote=quote) if match else None
             amounts = []

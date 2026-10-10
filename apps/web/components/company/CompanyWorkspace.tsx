@@ -69,7 +69,7 @@ export function CompanyWorkspace({symbol}:{symbol:string}) {
       <details className={styles.coverage}><summary>Data coverage</summary>{data.coverage?Object.entries(data.coverage).filter(([,row])=>typeof row==="object"&&row!==null&&"available" in row).map(([key,row])=><p key={key}>{humanize(key)} <span>{typeof row==="object"&&row!==null&&"available" in row&&row.available?"Available":"Missing"}</span></p>):<p>{data.errors.coverage??"Loading coverage…"}</p>}</details>
     </aside>
     <div className={styles.center}>
-      <div className={`${styles.content} ${view==="fit"||view==="events"?styles.tight:""}`}>
+      <div className={`${styles.content} ${view!=="overview"?styles.tight:""}`}>
         {data.errors.research?<p className={styles.error} role="alert">Company research: {data.errors.research}</p>:null}
         {data.research?.has_synthetic_data?<p className={styles.error}>Demo company facts are labelled and do not represent observed filings.</p>:null}
         {view==="overview"?<>
@@ -85,6 +85,7 @@ export function CompanyWorkspace({symbol}:{symbol:string}) {
           <section className={styles.section}><div className={styles.sectionHead}><h2>Recent reports</h2><button className={styles.textAction} onClick={()=>setView("reports")}>See all reports →</button></div>{reportTable(true)}</section>
         </>:null}
         {view==="fundamentals"?<>
+          <header className={styles.intro}><h2>Fundamentals</h2><p>Stored financial statements and derived ratios for {symbol}, with the reporting period, basis and source behind each figure.</p></header>
           <div className={styles.filters}><label>Period <select value={period} onChange={e=>{setPeriod(e.target.value);setSelectedFact(null)}}><option value="latest">Latest stored period</option><option value="all">All stored periods</option>{periods.map(value=><option key={value}>{value}</option>)}</select></label><label>Basis <select value={basis} onChange={e=>{setBasis(e.target.value);setSelectedFact(null)}}><option value="">All reported bases</option>{bases.map(value=><option key={value} value={value}>{humanize(value)}</option>)}</select></label></div>
           <nav className={styles.statementTabs} aria-label="Financial statements">{[["income","Income"],["balance","Balance sheet"],["cash","Cash flow"],["ratios","Ratios"]].map(([key,label])=><button key={key} aria-current={statement===key?"page":undefined} onClick={()=>{setStatement(key);setSelectedFact(null)}}>{label}</button>)}</nav>
           <div className={styles.tableScroll}><table className={styles.table}><thead><tr><th>Metric</th><th>Value</th><th>Reporting period</th><th>Input status / basis</th></tr></thead><tbody>
@@ -95,8 +96,8 @@ export function CompanyWorkspace({symbol}:{symbol:string}) {
           <section className={styles.section}><h2>Source reconciliation</h2>{reportTable(true)}</section>
         </>:null}
         {view==="events"?<><CompanyIntelligencePanel symbol={symbol} portfolioId={data.portfolioId||undefined}/></>:null}
-        {view==="reports"?<>{reportTable()}</>:null}
-        {view==="fit"?<><p className={styles.description}>Evaluate this company against an explicitly selected portfolio and its confirmed IPS.</p><DecisionWorkbench symbol={symbol} instrumentId={data.research?.instrument.id} portfolios={data.portfolios} selectedPortfolioId={data.portfolioId}/></>:null}
+        {view==="reports"?<><header className={styles.intro}><h2>Reports</h2><p>Annual, quarterly and other filings collected for {symbol}. Each row opens the stored source document.</p></header>{reportTable()}</>:null}
+        {view==="fit"?<><DecisionWorkbench symbol={symbol} instrumentId={data.research?.instrument.id} portfolios={data.portfolios} selectedPortfolioId={data.portfolioId}/></>:null}
       </div>
     </div>
     <aside className={styles.right} aria-label="Company context">

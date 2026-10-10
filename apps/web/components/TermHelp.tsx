@@ -1,4 +1,5 @@
 "use client";
+import { useRef, useState } from "react";
 
 const definitions: Record<string, string> = {
   "Annual volatility": "How widely returns varied, annualized from the available daily price history. Higher values mean a less stable return path.",
@@ -17,12 +18,23 @@ const definitions: Record<string, string> = {
 };
 
 export function TermHelp({ term, definition }: { term: string; definition?: string }) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  // Fixed position from the trigger's screen rect: scroll/overflow containers in tables and cards cannot clip it.
+  const [place, setPlace] = useState<React.CSSProperties | undefined>();
   const text = definition ?? definitions[term];
   if (!text) return null;
   const id = `term-${term.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-  return <span className="term-help">
-    <button type="button" className="term-help-trigger" aria-label={`Explain ${term}`} aria-describedby={id}>?</button>
-    <span className="term-help-popover" id={id} role="tooltip"><strong>{term}</strong>{text}</span>
+  const show = () => {
+    const box = trigger.current?.getBoundingClientRect();
+    if (!box) return;
+    const width = Math.min(260, window.innerWidth - 32);
+    const left = Math.max(16, Math.min(box.left + box.width / 2 - width / 2, window.innerWidth - width - 16));
+    const below = box.top < 130;
+    setPlace({ position: "fixed", left, width, transform: "none", ...(below ? { top: box.bottom + 8, bottom: "auto" } : { bottom: window.innerHeight - box.top + 8, top: "auto" }) });
+  };
+  return <span className="term-help" onMouseEnter={show} onFocus={show}>
+    <button ref={trigger} type="button" className="term-help-trigger" aria-label={`Explain ${term}`} aria-describedby={id}>?</button>
+    <span className="term-help-popover" id={id} role="tooltip" style={place}><strong>{term}</strong>{text}</span>
   </span>;
 }
 

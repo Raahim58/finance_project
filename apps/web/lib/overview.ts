@@ -72,6 +72,10 @@ export function performanceSeries(points: PortfolioPerformancePoint[]) {
   }));
 }
 
+const MARKET_EVENT_TYPES = ["macro", "geopolitics"];
+// Market-wide events have no instrument subject; they belong with macro, not company events.
+export const isMarketEvent = (event: ResearchEventView) => MARKET_EVENT_TYPES.includes(event.event_type) && !event.subjects.length;
+
 export function investigationSignals({ market, events, exposure, regime }: {
   market: MarketOverview | null; events: ResearchEventView[];
   exposure: PortfolioEventIntelligence | null; regime: MacroRegime | null;
@@ -95,7 +99,8 @@ export function investigationSignals({ market, events, exposure, regime }: {
       href: `/companies/${encodeURIComponent(row.symbol)}`,
     }));
   }
-  events.slice(0, 3).forEach(event => signals.push({
+  const sourceOf = (event: ResearchEventView) => [...new Set(event.evidence.map(item => item.source_name))].join(" · ") || "Source unavailable";
+  events.filter(event => !isMarketEvent(event)).slice(0, 8).forEach(event => signals.push({
     id: `event:${event.event_key}`, category: "Events", title: event.subjects.map(subject => subject.subject_key).join(", ") || humanize(event.event_type),
     value: humanize(event.event_type), reason: event.title,
     source: [...new Set(event.evidence.map(item => item.source_name))].join(" · ") || "Source unavailable",
@@ -108,6 +113,10 @@ export function investigationSignals({ market, events, exposure, regime }: {
       reason: row.event.title, source: row.companies.some(company => company.relationship_kind === "ai_proposed_indirect") ? "Includes AI-proposed indirect relevance" : "Event linked to holdings",
       date: row.event.occurred_at, href: `/portfolios/${encodeURIComponent(exposure.portfolio_id)}/research` });
   });
+  events.filter(isMarketEvent).slice(0, 5).forEach(event => signals.push({
+    id: `macro-event:${event.event_key}`, category: "Macro", title: humanize(event.event_type), value: "Market news",
+    reason: event.title, source: sourceOf(event), date: event.occurred_at, href: "/research",
+  }));
   if (regime && regime.regime !== "not_evaluated") signals.push({
     id: "macro", category: "Macro", title: "Macro", value: `${humanize(regime.regime)} regime`,
     reason: regime.method_note, source: "Rules-based assessment", href: "/market",

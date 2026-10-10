@@ -71,3 +71,7 @@
 .content.tight{padding-top:20px}
 .content.tight>:first-child,.content.tight>:first-child :global(.mt-4){margin-top:0}
 .content.tight .description{margin-top:0}
+.content.tight{padding-top:16px}
+.intro{margin-bottom:18px}
+.intro h2{margin:0}
+.intro p{margin:5px 0 0;font-size:13px;line-height:1.5;color:var(--muted)}

@@ -73,6 +73,7 @@ export function AIBriefCard({ title, state, quotes, fallback, onAsk, hideHeader 
       {sec.tickers.length ? <div className={styles.chips}>{sec.tickers.map(symbol => { const change = quotes?.[symbol]; return <Link key={symbol} href={`/companies/${symbol}` as never}><CompanyLogo symbol={symbol} size={18} /><span>{symbol}</span>{change == null ? null : <b className={change < 0 ? styles.down : change > 0 ? styles.up : ""}>{formatPercent(change)}</b>}</Link>; })}</div> : null}
     </article>) : null}
     {brief?.events.length ? <div className={styles.watch}><h3>Upcoming Events</h3><ul>{brief.events.map((item, i) => <li key={i}>{item}</li>)}</ul></div> : null}
+    {view && view.status !== "provider_unavailable" && view.status !== "no_data" && view.status !== "generating" ? <button className={styles.regen} onClick={state.retry} title="Rebuild this brief from the latest stored data">Regenerate</button> : null}
     {note ? <p className={styles.note} role="status">{note}{view?.status === "failed" ? <button onClick={state.retry}>Retry</button> : null}</p> : null}
   </section>;
 }

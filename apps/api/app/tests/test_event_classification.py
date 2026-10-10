@@ -250,3 +250,71 @@ def test_worker_chain_links_then_classifies_then_builds_and_refreshes():
         assert output['events'] and [c[2]['instrument_id'] for c in children] == [luck.id]
         assert db.scalar(select(func.count()).select_from(EventClusterFeature)) == 1
         assert db.scalar(select(func.count()).select_from(EventDocumentLink)) == 1
+
+
+@pytest.mark.usefixtures("database")
+def test_single_source_market_news_is_medium_and_titled_by_headline(vectors):
+    with SessionLocal() as db:
+        instruments(db)
+        quote = 'Brent crude surged as Washington said it could attack Iran.'
+        doc = article(db, quote, title='Oil surges on US-Iran tension', url='https://a.test/oil')
+        section = sections(db, doc.id)[0].id
+        run = model_ready(db)
+        output = {'events': [model_output(section, entities=['market'], event_type='geopolitics', kind='reported_fact',
+            evidence=[{'section_id': section, 'quote': quote}]).model_dump(mode='json')]}
+        classify(db, doc.id, run=run, allow_model=True, transport=catalog_and_completion(output));build(db, doc.id)
+        events = list(db.scalars(select(NormalizedEvent).where(NormalizedEvent.classification_status == 'classified')))
+        assert len(events) == 1 and events[0].materiality == 'medium'
+        assert events[0].title == 'Oil surges on US-Iran tension'
+
+
+@pytest.mark.usefixtures("database")
+def test_market_wide_sentences_are_macro_or_geopolitics_not_earnings(vectors):
+    with SessionLocal() as db:
+        instruments(db)
+        doc = article(db, 'Oil prices slip on US-Iran peace hopes. '
+            'Technology shares came under pressure after new details about OpenAI revenue performance. '
+            'Gold prices edged up as treasury yields fell.', title='Markets wrap', url='https://a.test/wrap')
+        classify(db, doc.id)
+        types = {e.event_type for e in db.scalars(select(NormalizedEvent))} | {
+            s.event_type for s in db.scalars(select(EvidenceStatement))}
+        assert {'geopolitics', 'macro'} <= types and 'earnings' not in types
+
+
+@pytest.mark.usefixtures("database")
+def test_sentence_not_naming_the_linked_company_stays_market_level(vectors):
+    with SessionLocal() as db:
+        instruments(db)
+        doc = article(db, 'Lucky Cement Limited announced a dividend payout. '
+            'The governor expects the current account deficit at 0-1% of GDP, officials said.', title='Mixed', url='https://a.test/mixed')
+        classify(db, doc.id)
+        subjects = {(s.subject_key, s.text[:6]) for s in db.scalars(select(EvidenceStatement))}
+        assert ('LUCK', 'Lucky ') in subjects
+        assert not any(k == 'LUCK' and t == 'The go' for k, t in subjects)
+
+
+@pytest.mark.usefixtures("database")
+def test_news_article_is_one_event_per_subject_set(vectors):
+    with SessionLocal() as db:
+        instruments(db)
+        doc = article(db, 'Oil prices slip on US-Iran peace hopes. Gold prices edged up as treasury yields fell.', title='Markets wrap', url='https://a.test/one')
+        classify(db, doc.id); build(db, doc.id)
+        events = list(db.scalars(select(NormalizedEvent).where(NormalizedEvent.classification_status == 'classified')))
+        assert len(events) == 1 and events[0].title == 'Markets wrap'
+
+
+@pytest.mark.usefixtures("database")
+def test_event_maintenance_repairs_stale_attribution_and_is_idempotent(vectors):
+    from app.jobs.event_maintenance import run
+    with SessionLocal() as db:
+        instruments(db)
+        doc = article(db, 'Oil prices slip on US-Iran peace hopes. Gold prices edged up as treasury yields fell.', title='Markets wrap', url='https://a.test/two')
+        classify(db, doc.id); build(db, doc.id)
+        for statement in db.scalars(select(EvidenceStatement)):
+            statement.subject_type, statement.subject_key, statement.event_type = 'instrument', 'LUCK', 'earnings'
+        db.commit()
+        assert run(db, 30)['misattributed'] == 2
+        run(db, 30, apply=True)
+        assert {(s.subject_key, s.event_type) for s in db.scalars(select(EvidenceStatement).where(EvidenceStatement.validation_status == 'validated'))} <= {('market', 'geopolitics'), ('market', 'macro')}
+        again = run(db, 30)
+        assert again == {'misattributed': 0, 'retyped_or_dropped': 0, 'events_to_merge': 0}

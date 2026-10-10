@@ -222,14 +222,14 @@ def read(db, user, scope, key="", *, schedule, retry=False):
     facts, inputs = _gather(db, user, scope, key)
     h = fingerprint({"v": VERSION, "scope": scope, "key": key, "inputs": inputs, "cfg": config or {}})
     current = next((r for r in rows if r.input_hash == h), None)
-    if current and current.status == 'ready':
+    if current and current.status == 'ready' and not (retry and config):
         return {"status": "ready", "current": True, **_view(current)}
     status = 'provider_unavailable' if not config else 'not_generated'
     if config and not facts:
         status = 'no_data'
     elif config:
         stale_run = current and current.status == 'running' and utc(current.generated_at) < datetime.now(UTC) - RUNNING_TTL
-        if current is None or stale_run or (retry and current.status == 'failed'):
+        if current is None or stale_run or (retry and current.status in ('failed', 'ready')):
             if current is not None:
                 db.delete(current); db.commit()
             try:

@@ -95,6 +95,28 @@ Cached content retains its source/as-of information. A cache is not a replacemen
 - Quantitative estimates are modeled outputs, not promised returns. Missing required inputs remain unavailable.
 - Provider availability, source coverage, extraction quality and observed freshness constrain the analysis.
 
+## Future improvements
+
+### Public deployment and IPS setup (not implemented)
+
+Today the Oracle deployment is private: every port binds to the VM's loopback and is reached over an SSH tunnel (see `docs/oracle-deployment.md`), and the demo workspace is the only no-signup entry. A new user must also draft and confirm an IPS inside each portfolio before mandate-aware analysis works; the onboarding route that used to guide this was retired.
+
+- **Expose only the web app:** put a TLS reverse proxy (for example Caddy or nginx) in front of the web container; the API, PostgreSQL, Redis and MinIO stay on loopback and are reached through the same-origin `/api` proxy.
+- **Real accounts, no demo in public:** keep sign-up and sign-in, set `ENABLE_DEMO_ACCESS=false`, and add login and API rate limits, secret rotation and a tested backup and restore before opening it.
+- **Capacity first:** the current 2-core VM already runs near its limit with ingestion workers, so public traffic needs a larger host or separating ingestion from the serving stack.
+- **Guided IPS setup:** a short first-run flow (objective, horizon, liquidity, risk tolerance, benchmark, constraints) that produces a draft IPS with sensible defaults by risk profile, shows exactly what each constraint does, and asks the user to confirm. Until an IPS is confirmed, mandate-dependent screens should say so and link to this flow instead of showing empty results.
+- **Guardrails:** the user confirms the IPS, defaults are labelled as suggestions and never as advice, and LLM keys stay user-owned and encrypted.
+
+### Scenario AI (not implemented)
+
+Scenarios are fully deterministic today: templates and saved definitions in `scenario_service.py` carry `sector_shocks` and `factor_shocks`, and the engine applies them to stored holdings and prices. The planned AI layer keeps that split and never produces portfolio numbers itself.
+
+- **Propose a scenario:** the user describes it in words ("oil up 30%, rupee weaker"). The model returns a structured `ScenarioDefinition` (sector and factor shocks plus a short rationale), validated against the existing schema and the known sector and factor keys. The user reviews and edits the shocks before anything runs, and the shocks are stored and labelled as user-approved assumptions.
+- **Run:** the existing deterministic engine computes impact from stored holdings and prices. The model does not see or alter the results.
+- **Explain:** after the run, the model drafts a short explanation from the computed output only, citing the run and the stored events behind each shock, or stating what is missing.
+- **Gaps to close first:** wire the templates' `fallback_security_shock` for holdings with no sector or factor mapping, and decide whether proposals reuse the Assistant's retrieval contracts or get a dedicated route.
+- **Guardrails:** the user's own LLM key (BYOK), no shock applied without review, and the same "no invented figures" rule as the rest of the product.
+
 ## Run locally
 
 Use Python 3.13+ and Node.js 20.9+. The production images use Python 3.13 and Node.js 22.

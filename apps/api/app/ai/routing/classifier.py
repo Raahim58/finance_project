@@ -27,6 +27,7 @@ DESCRIPTIONS = {
     Route.TECHNICAL_SETUP: 'chart, levels, indicators',
     Route.ANALYST_SENTIMENT: 'ratings, targets, revisions',
     Route.FUNDAMENTALS_SNAPSHOT: 'revenue, margins, valuation, balance sheet, dividends',
+    Route.PORTFOLIO_OVERVIEW: 'what the user holds and what it is worth right now',
     Route.PORTFOLIO_REVIEW: "overall assessment of the user's portfolio, goals or risks",
     Route.PORTFOLIO_IMPACT: "how a market move or event affects the user's portfolio",
     Route.PORTFOLIO_REBALANCE: 'allocation changes, concentration, alternatives to current holdings',

@@ -71,6 +71,16 @@ def merge_blockers(features, candidate):
     return blockers
 
 
+def dominant_type(types):
+    """Most frequent event type; ties go to the earliest in reading order."""
+    return max(dict.fromkeys(types), key=lambda t: (types.count(t), -types.index(t)))
+
+
+def story_group(document, features):
+    """A news article is one story per subject set; its sentence-level types vote for the event's type."""
+    return ('story', document.id, tuple(sorted(features['entities']))) if document.document_type == 'news' else features['group']
+
+
 def statement_features(statement, document):
     """Classifier statements carry their features; legacy statements get unknowns."""
     typed = statement.typed_value or {}
@@ -124,7 +134,8 @@ def build(db, document_id):
     for statement in statements:
         features = statement_features(statement, document)
         if features['occurred'] is None: continue
-        groups.setdefault(features['group'], (features, []))[1].append(statement)
+        groups.setdefault(story_group(document, features), (features, []))[1].append(statement)
+    for features, rows in groups.values(): features['event_type'] = dominant_type([r.event_type for r in rows])
     if statements and not groups: return {'events': [], 'gap': 'event_date_unverified'}
     pending = [(f, rows) for f, rows in groups.values()
         if not all(db.scalar(select(EventDocumentLink.event_id).where(EventDocumentLink.statement_id==s.id).limit(1)) for s in rows)]
@@ -237,13 +248,14 @@ def refresh_record(db, event):
     feature = db.get(EventClusterFeature, event.id)
     official = any(d.document_type in OFFICIAL_TYPES and d.source_tier <= 2 for d in documents.values())
     instrument = any(s.subject_type == 'instrument' for s, _, _ in members)
-    corroborated = len(documents) >= 2
     if instrument and event.event_type in MATERIAL_TYPES: materiality = 'high' if official else 'medium'
-    elif not instrument and event.event_type in ('macro', 'geopolitics') and corroborated: materiality = 'medium'
+    elif not instrument and event.event_type in ('macro', 'geopolitics'): materiality = 'medium'
     else: materiality = 'low'
     base = max(Decimal('0.65') if m[2]['method'] == 'model' else Decimal('0.45') for m in members)
     confidence = min(Decimal('0.95'), base + Decimal('0.1')*official + Decimal('0.08')*(len(documents)-1))
-    event.title = primary_statement.text[:255]
+    # A news statement is a mid-article sentence; the headline is the readable title.
+    headline = (primary_document.title or '').strip() if primary_document.document_type == 'news' else ''
+    event.title = (headline or primary_statement.text)[:255]
     event.occurred_at = occurred
     event.materiality = materiality
     event.confidence = confidence.quantize(Decimal('0.000001'))

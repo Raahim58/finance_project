@@ -1,6 +1,7 @@
 """Deterministic macro/market regime classification from structured observations."""
 
 from datetime import date,timedelta
+from time import monotonic
 from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -40,6 +41,24 @@ def _latest_pair(db: Session, series: MacroSeries) -> list[MacroObservation]:
     return list(unique.values())[:2]
 
 
+_SECTOR_CACHE: dict[str, object] = {}
+_SECTOR_TTL_SECONDS = 120
+
+
+def _breadth_sectors(db: Session):
+    """Sector breadth changes at most per session; a short cache keeps the Today page off cold price queries."""
+    now = monotonic()
+    cached = None if settings.is_synthetic_environment else _SECTOR_CACHE.get("rows")
+    if cached is not None and now - _SECTOR_CACHE["at"] < _SECTOR_TTL_SECONDS:
+        return cached
+    try:
+        rows = get_sectors(db)
+    except Exception:
+        return []
+    _SECTOR_CACHE.update(rows=rows, at=now)
+    return rows
+
+
 def macro_regime(db: Session, user: User, portfolio_id: str | None = None) -> dict[str, object]:
     dimensions: dict[str, dict[str, object]] = {}
     for series in db.scalars(select(MacroSeries).order_by(MacroSeries.key)):
@@ -71,10 +90,7 @@ def macro_regime(db: Session, user: User, portfolio_id: str | None = None) -> di
             dimensions[dimension]['pkr_direction']='appreciation' if change<0 else 'depreciation' if change>0 else 'unchanged'
 
 
-    try:
-        sectors = get_sectors(db)
-    except Exception:
-        sectors = []
+    sectors = _breadth_sectors(db)
     advancers = sum(row.advancers for row in sectors)
     decliners = sum(row.decliners for row in sectors)
     if advancers or decliners:

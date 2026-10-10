@@ -511,6 +511,10 @@ export function renameAllocation(portfolioId: string, allocationId: string, name
   return request<AllocationSet>(`/portfolios/${encodeURIComponent(portfolioId)}/allocations/${encodeURIComponent(allocationId)}`, { method: "PATCH", body: JSON.stringify({ name }) });
 }
 
+export function updateAllocation(portfolioId: string, allocationId: string, items: Array<{ symbol: string; target_weight: number; locked: boolean; is_cash: boolean }>) {
+  return request<AllocationSet>(`/portfolios/${encodeURIComponent(portfolioId)}/allocations/${encodeURIComponent(allocationId)}`, { method: "PATCH", body: JSON.stringify({ items }) });
+}
+
 export function runScenario(portfolioId: string, payload: Record<string, unknown>) {
   return request<ScenarioResult>(`/portfolios/${encodeURIComponent(portfolioId)}/scenario-runs`, { method: "POST", body: JSON.stringify(payload) });
 }

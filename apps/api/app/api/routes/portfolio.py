@@ -6,6 +6,7 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.portfolio import (
+    AllocationItemInput,
     AllocationSetCreate,
     AllocationSetResponse,
     HoldingCreate,
@@ -135,12 +136,13 @@ def create_allocation(portfolio_id: str, payload: AllocationSetCreate, current_u
 
 
 class AllocationRename(BaseModel):
-    name: str = Field(max_length=120)
+    name: str | None = Field(default=None, max_length=120)
+    items: list[AllocationItemInput] | None = Field(default=None, min_length=1)
 
 
 @router.patch("/{portfolio_id}/allocations/{allocation_id}", response_model=AllocationSetResponse)
 def rename_allocation(portfolio_id: str, allocation_id: str, payload: AllocationRename, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return rename_allocation_set(db, current_user, portfolio_id, allocation_id, payload.name)
+    return rename_allocation_set(db, current_user, portfolio_id, allocation_id, payload.name, payload.items)
 
 
 @router.get("/{portfolio_id}/summary", response_model=PortfolioSummaryResponse)

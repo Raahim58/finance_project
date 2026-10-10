@@ -8,15 +8,20 @@
   --font-ui: "Inter", "Segoe UI", Arial, sans-serif;
   --font-heading: var(--font-ui);
   color-scheme: light;
-  --canvas: #ffffff;
-  --paper: #ffffff;
-  --surface: #f1f2f4;
-  --surface-strong: #e9edf1;
+  /* Warm palette. Previous neutral values, to revert: --canvas #ffffff; --paper #ffffff; --surface #f1f2f4;
+     --surface-strong #e9edf1; --line #e7e9ed; Today boxes (overview.module.css .surface) #f3eee3 with
+     .portfolioStatus #f3eee0; hovering chat drawer background var(--paper), border #dce3e7. */
+  --bg-page: #f4e5da;
+  --bg-box: #ead4c2;
+  --canvas: var(--bg-page);
+  --paper: var(--bg-page);
+  --surface: #e4cfbc;
+  --surface-strong: #dcc2ac;
   --ink: #141619;
   --ink-2: #3f454b;
   --muted: #666d78;
   --tertiary: #8b9096;
-  --line: #e7e9ed;
+  --line: #dcc7b4;
   --line-strong: rgba(23, 26, 29, .16);
   --green: #00875a;
   --green-hover: #0e5944;
@@ -365,12 +370,12 @@ body:has(select[aria-label="Activity type"]) .data-table td:nth-child(n+4):not(:
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
-.term-help{position:relative;display:inline-flex;vertical-align:middle}.term-help-trigger{display:inline-grid;height:15px;width:15px;place-items:center;border:1px solid #b9c0c7;border-radius:50%;background:var(--canvas);color:#68717a;font-family:ui-sans-serif,system-ui,sans-serif;font-size:10px;font-weight:700;line-height:1;cursor:help;transition:border-color .15s ease,color .15s ease,background .15s ease}.term-help-trigger:hover,.term-help-trigger:focus-visible{border-color:#365f7d;background:#eef5f8;color:#214d6b;outline:none}.term-help-popover{position:absolute;z-index:80;bottom:calc(100% + 8px);left:50%;display:none;width:260px;max-width:min(260px,calc(100vw - 32px));transform:translateX(-50%);border:1px solid #cbd3d9;border-radius:8px;background:#17242e;color:#f4f7f8;padding:10px 11px;box-shadow:0 12px 30px rgba(20,35,45,.18);font-family:ui-sans-serif,system-ui,sans-serif;font-size:11px;font-weight:400;line-height:1.45;text-align:left;white-space:normal}.term-help-popover strong{display:block;margin-bottom:3px;color:#fff;font-size:11px}.term-help:hover .term-help-popover,.term-help:focus-within .term-help-popover{display:block}@media(max-width:640px){.term-help-popover{left:auto;right:-16px;transform:none}}@media(prefers-reduced-motion:reduce){.term-help-trigger{transition:none}}
+.term-help{position:relative;display:inline-flex;align-items:center;flex:none;vertical-align:middle;line-height:1;margin-left:4px}.term-help-trigger{display:inline-grid;flex:none;padding:0;box-sizing:border-box;height:15px;width:15px;place-items:center;border:1px solid #b9c0c7;border-radius:50%;background:var(--canvas);color:#68717a;font-family:ui-sans-serif,system-ui,sans-serif;font-size:10px;font-weight:700;line-height:1;cursor:help;transition:border-color .15s ease,color .15s ease,background .15s ease}.term-help-trigger:hover,.term-help-trigger:focus-visible{border-color:#365f7d;background:#eef5f8;color:#214d6b;outline:none}.term-help-popover{position:absolute;z-index:80;bottom:calc(100% + 8px);left:50%;display:none;width:260px;max-width:min(260px,calc(100vw - 32px));transform:translateX(-50%);border:1px solid var(--line-strong);border-radius:10px;background:var(--canvas);color:#4a525d;padding:11px 13px;box-shadow:0 10px 30px rgba(20,30,40,.12);font-family:ui-sans-serif,system-ui,sans-serif;font-size:12px;font-weight:400;line-height:1.55;text-align:left;white-space:normal}.term-help-popover strong{display:block;margin-bottom:3px;color:var(--ink);font-size:12px;font-weight:600}.term-help:hover .term-help-popover,.term-help:focus-within .term-help-popover{display:block}@media(max-width:640px){.term-help-popover{left:auto;right:-16px;transform:none}}@media(prefers-reduced-motion:reduce){.term-help-trigger{transition:none}}
 
 /* Persistent research workspace uses the workstation's existing visual language. */
 .assistant-launcher{position:fixed;right:24px;bottom:24px;z-index:60;display:flex;align-items:center;gap:8px;padding:12px 20px;border-radius:999px;background:#17252a;color:white;box-shadow:0 6px 24px #0002;font-size:13px;font-weight:600}
 .assistant-running-dot{width:7px;height:7px;border-radius:50%;background:#65d9aa}
-.assistant-drawer{position:fixed;z-index:70;right:16px;top:16px;bottom:16px;width:min(480px,calc(100vw - 32px));display:flex;flex-direction:column;background:var(--paper);border:1px solid #dce3e7;border-radius:16px;box-shadow:0 12px 64px #14253030;overflow:hidden;color:#17252a}
+.assistant-drawer{position:fixed;z-index:70;right:16px;top:16px;bottom:16px;width:min(480px,calc(100vw - 32px));display:flex;flex-direction:column;background:var(--bg-box);border:1px solid #c4a78d;border-radius:16px;box-shadow:0 12px 64px #14253030;overflow:hidden;color:#17252a}
 .assistant-expanded{width:min(960px,calc(100vw - 32px))}
 .assistant-header{padding:16px 18px;border-bottom:1px solid #e1e7e9;display:flex;align-items:center;justify-content:space-between;gap:12px}
 .assistant-header strong{font-size:15px}.assistant-header p{font-size:12px;color:#617077;margin-top:3px}
@@ -785,7 +790,24 @@ body:has(select[aria-label="Activity type"]) .data-table td:nth-child(n+4):not(:
 .assistant-chat-row { display:flex; align-items:center; gap:2px; border-radius:6px; }
 .assistant-chat-row > button:first-child { flex:1; min-width:0; text-align:left; }
 .assistant-chat-row[aria-current], .assistant-chat-row:has(> [aria-current=true]) { background:#eef6f3; }
+.assistant-delete-all { display:block; margin:0 0 6px auto; border:0; background:none; font-size:12px; color:var(--muted); cursor:pointer }
+.assistant-delete-all:hover { color:var(--red) }
 .assistant-chat-actions { display:flex; gap:2px; opacity:0; }
 .assistant-chat-row:hover .assistant-chat-actions, .assistant-chat-row:focus-within .assistant-chat-actions { opacity:1; }
 .assistant-chat-actions button { border:0; background:none; padding:4px 6px; font-size:12px; border-radius:5px; cursor:pointer; }
 .assistant-chat-actions button:hover { background:#e6eaee; }
+
+/* Warm theme: floating Ask button and hovering chat (not the full-page chat) use --bg-box. */
+.assistant-launcher{background:var(--bg-box);color:var(--ink);border:1px solid #c4a78d;box-shadow:0 6px 24px #3b261a22}
+.assistant-launcher-dismiss,.assistant-launcher-tab{background:var(--bg-box);color:var(--ink);border:1px solid #c4a78d}
+.assistant-drawer:not(.assistant-full-page) :is(.assistant-header,.assistant-chat-list,.assistant-composer,.assistant-tokens-total){border-color:#c4a78d}
+.assistant-drawer:not(.assistant-full-page) .assistant-toolbar{background:transparent}
+.assistant-drawer:not(.assistant-full-page) .assistant-user{background:var(--bg-page);border-color:#c4a78d}
+.assistant-drawer:not(.assistant-full-page) .assistant-chat-list>[aria-current=true]{background:var(--bg-page)}
+.assistant-drawer:not(.assistant-full-page) .assistant-composer textarea{background:var(--bg-page);border-color:#c4a78d}
+.assistant-drawer:not(.assistant-full-page) .assistant-warning{background:var(--bg-page)}
+/* Company page: no floating Ask button; "go deeper" links still open the chat. */
+body:has([aria-label="Company context"]) :is(.assistant-launcher-wrap,.assistant-launcher-tab){display:none}
+/* Left rail: hover bolds the label instead of a white circle. */
+.workstation-shell .app-sidebar .nav-item:hover{font-weight:700;color:var(--ink)}
+.workstation-shell .app-sidebar .nav-item:hover .rail-icon,.workstation-shell .app-sidebar .nav-item[aria-current="page"] .rail-icon{background:transparent}
