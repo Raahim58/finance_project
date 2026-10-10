@@ -348,3 +348,17 @@ def test_risk_free_resolves_canonical_tbill_series_without_metadata_flag(monkeyp
         assert found["annual_rate"] == pytest.approx(0.115154)
         assert found["effective_date"] == date(2026, 4, 29)
         assert _effective_risk_free_rate(db, date(2026, 1, 1)) is None
+
+
+def test_broad_index_benchmark_is_default_capm_market_proxy(client):
+    from types import SimpleNamespace
+    from app.services.workstation_service import _capm_market_proxy_symbol
+    from app.db.session import SessionLocal
+    from app.models.workstation import Instrument
+    with SessionLocal() as db:
+        db.add(Instrument(symbol="KSE100X", name="Test Index", instrument_type="total_return_index", currency="PKR", country="PK", metadata_json='{"broad_market_proxy":true,"return_basis":"total_return"}'))
+        db.add(Instrument(symbol="HBLX", name="Test Bank", instrument_type="equity", currency="PKR", country="PK", metadata_json="{}"))
+        db.commit()
+        symbol, notes = _capm_market_proxy_symbol(db, {"performance_benchmark_symbol": "KSE100X"})
+        assert symbol == "KSE100X" and "using the performance benchmark" in " ".join(notes)
+        assert _capm_market_proxy_symbol(db, {"performance_benchmark_symbol": "HBLX"})[0] is None

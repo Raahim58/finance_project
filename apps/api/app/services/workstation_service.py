@@ -162,7 +162,7 @@ def save_ips_version(db: Session, user: User, portfolio_id: str, payload: IPSDra
     performance_benchmark = payload.performance_benchmark_symbol or payload.benchmark_symbol
     if performance_benchmark:
         constraints["performance_benchmark_symbol"] = performance_benchmark.upper()
-        # Compatibility for older clients. New analytics never use this as CAPM proxy.
+        # Compatibility for older clients. CAPM uses it only as a default when it is an approved broad index.
         constraints["benchmark_symbol"] = performance_benchmark.upper()
     if payload.capm_market_proxy_symbol:
         constraints["capm_market_proxy_symbol"] = payload.capm_market_proxy_symbol.upper()
@@ -362,20 +362,34 @@ def _benchmark_symbol(db: Session, portfolio, constraints: dict[str, object]) ->
     return instrument.symbol if instrument else None
 
 
-def _capm_market_proxy_symbol(db: Session, constraints: dict[str, object]) -> tuple[str | None, list[str]]:
-    configured = constraints.get("capm_market_proxy_symbol")
-    if not configured:
-        return None, ["No CAPM market proxy is configured separately from the performance benchmark."]
-    symbol = str(configured).strip().upper()
+def _approved_broad_index(db: Session, symbol: str) -> tuple[Instrument | None, str | None]:
     instrument = db.scalar(select(Instrument).where(Instrument.symbol == symbol))
     if instrument is None:
-        return None, [f"CAPM market proxy {symbol} is not in the instrument master."]
+        return None, f"CAPM market proxy {symbol} is not in the instrument master."
     metadata = _load(instrument.metadata_json)
-    approved = instrument.instrument_type.lower() in {"index", "total_return_index"} and metadata.get("broad_market_proxy") is True
-    if not approved:
-        return None, [f"{symbol} is not an approved broad-index CAPM market proxy; individual securities are rejected."]
+    if instrument.instrument_type.lower() in {"index", "total_return_index"} and metadata.get("broad_market_proxy") is True:
+        return instrument, None
+    return None, f"{symbol} is not an approved broad-index CAPM market proxy; individual securities are rejected."
+
+
+def _capm_market_proxy_symbol(db: Session, constraints: dict[str, object]) -> tuple[str | None, list[str]]:
+    configured = constraints.get("capm_market_proxy_symbol")
+    fallback_note: list[str] = []
+    if not configured:
+        # Default to the performance benchmark only when it is itself an approved broad index.
+        candidate = str(constraints.get("performance_benchmark_symbol") or constraints.get("benchmark_symbol") or "").strip().upper()
+        if candidate and _approved_broad_index(db, candidate)[0] is not None:
+            configured = candidate
+            fallback_note = [f"No CAPM market proxy is set in the IPS; using the performance benchmark {candidate}, an approved broad index."]
+        else:
+            return None, ["No CAPM market proxy is configured separately from the performance benchmark."]
+    symbol = str(configured).strip().upper()
+    instrument, error = _approved_broad_index(db, symbol)
+    if instrument is None:
+        return None, [error]
+    metadata = _load(instrument.metadata_json)
     warnings = [] if instrument.instrument_type.lower() == "total_return_index" or metadata.get("return_basis") == "total_return" else [f"{symbol} uses a price-return index; distributions are not included."]
-    return symbol, warnings
+    return symbol, fallback_note + warnings
 
 
 def _benchmark_returns_for_optimizer(db: Session, symbol: str | None, days: list[date]) -> np.ndarray | None:

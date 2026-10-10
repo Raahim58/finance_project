@@ -101,11 +101,31 @@ def historical_replay(db: Session, user: User, portfolio_id: str, payload: Histo
     }
 
 
+# DPS reports PSX's own sector labels (upper case, long form); templates and users use short names.
+# Only unambiguous labels are aliased; unlisted sectors (e.g. Fertilizer, Refinery) stay unmapped.
+_SECTOR_ALIASES = {
+    "COMMERCIAL BANKS": "Banking", "BANKS": "Banking",
+    "POWER GENERATION & DISTRIBUTION": "Power",
+    "TECHNOLOGY & COMMUNICATION": "Technology",
+    "TEXTILE COMPOSITE": "Textile", "TEXTILE SPINNING": "Textile", "TEXTILE WEAVING": "Textile",
+    "FOOD & PERSONAL CARE PRODUCTS": "Food & Personal Care",
+    "OIL & GAS EXPLORATION COMPANIES": "Oil & Gas", "OIL & GAS EXPLORATION": "Oil & Gas",
+    "OIL & GAS MARKETING COMPANIES": "Oil & Gas Marketing",
+}
+
+
+def sector_key(name: str | None) -> str:
+    cleaned = " ".join((name or "").upper().split())
+    return _SECTOR_ALIASES.get(cleaned, cleaned).upper()
+
+
 def resolve_shock(instrument: Instrument, direct: dict[str, float], sectors: dict[str, float], factors: dict[str, float]) -> tuple[float, list[str]]:
     if instrument.symbol in direct:
         return direct[instrument.symbol], [f"direct:{instrument.symbol}"]
-    shock = sectors.get(instrument.sector or "", 0.0)
-    sources = [f"sector:{instrument.sector}"] if instrument.sector in sectors else []
+    by_sector = {sector_key(name): value for name, value in sectors.items()}
+    key = sector_key(instrument.sector)
+    shock = by_sector.get(key, 0.0)
+    sources = [f"sector:{instrument.sector}"] if key and key in by_sector else []
     metadata = json.loads(instrument.metadata_json)
     betas = metadata.get("factor_betas", {}) if isinstance(metadata, dict) else {}
     for factor, factor_shock in factors.items():
