@@ -41,7 +41,7 @@ export function useOverviewData() {
     void read(getMarketOverview, setMarket);
     void read(getMarketFreshness, setFreshness);
     void read(() => getIndexHistory("KSE-100", 120), setIndexHistory);
-    void read(async () => (await getEventFeed()).events, setEvents);
+    void read(async () => (await getEventFeed(undefined, 0, 20)).events, setEvents);
     void read(getMacroRegime, setRegime);
     void read(() => request<OverviewUser>("/auth/me"), setUser);
     void read(async () => {

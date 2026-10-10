@@ -237,13 +237,14 @@ def refresh_record(db, event):
     feature = db.get(EventClusterFeature, event.id)
     official = any(d.document_type in OFFICIAL_TYPES and d.source_tier <= 2 for d in documents.values())
     instrument = any(s.subject_type == 'instrument' for s, _, _ in members)
-    corroborated = len(documents) >= 2
     if instrument and event.event_type in MATERIAL_TYPES: materiality = 'high' if official else 'medium'
-    elif not instrument and event.event_type in ('macro', 'geopolitics') and corroborated: materiality = 'medium'
+    elif not instrument and event.event_type in ('macro', 'geopolitics'): materiality = 'medium'
     else: materiality = 'low'
     base = max(Decimal('0.65') if m[2]['method'] == 'model' else Decimal('0.45') for m in members)
     confidence = min(Decimal('0.95'), base + Decimal('0.1')*official + Decimal('0.08')*(len(documents)-1))
-    event.title = primary_statement.text[:255]
+    # A news statement is a mid-article sentence; the headline is the readable title.
+    headline = (primary_document.title or '').strip() if primary_document.document_type == 'news' else ''
+    event.title = (headline or primary_statement.text)[:255]
     event.occurred_at = occurred
     event.materiality = materiality
     event.confidence = confidence.quantize(Decimal('0.000001'))

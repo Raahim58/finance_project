@@ -250,3 +250,19 @@ def test_worker_chain_links_then_classifies_then_builds_and_refreshes():
         assert output['events'] and [c[2]['instrument_id'] for c in children] == [luck.id]
         assert db.scalar(select(func.count()).select_from(EventClusterFeature)) == 1
         assert db.scalar(select(func.count()).select_from(EventDocumentLink)) == 1
+
+
+@pytest.mark.usefixtures("database")
+def test_single_source_market_news_is_medium_and_titled_by_headline(vectors):
+    with SessionLocal() as db:
+        instruments(db)
+        quote = 'Brent crude surged as Washington said it could attack Iran.'
+        doc = article(db, quote, title='Oil surges on US-Iran tension', url='https://a.test/oil')
+        section = sections(db, doc.id)[0].id
+        run = model_ready(db)
+        output = {'events': [model_output(section, entities=['market'], event_type='geopolitics', kind='reported_fact',
+            evidence=[{'section_id': section, 'quote': quote}]).model_dump(mode='json')]}
+        classify(db, doc.id, run=run, allow_model=True, transport=catalog_and_completion(output));build(db, doc.id)
+        events = list(db.scalars(select(NormalizedEvent).where(NormalizedEvent.classification_status == 'classified')))
+        assert len(events) == 1 and events[0].materiality == 'medium'
+        assert events[0].title == 'Oil surges on US-Iran tension'

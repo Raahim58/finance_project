@@ -7,7 +7,7 @@ import { EvidenceDrawer } from "@/components/ResearchEventCard";
 import { useAssistantWorkspace } from "@/components/AssistantWorkspace";
 import { clearApiCache } from "@/lib/api";
 import { request } from "@/lib/api/client";
-import { formatDate, formatNumber, formatPercent, humanize, investigationSignals, marketBreadth, numeric, performanceSeries, signalFilters, visibleSignals, type SignalFilter } from "@/lib/overview";
+import { formatDate, formatNumber, formatPercent, humanize, investigationSignals, isMarketEvent, marketBreadth, numeric, performanceSeries, signalFilters, visibleSignals, type SignalFilter } from "@/lib/overview";
 import { IndexChart } from "@/components/markets/IndexChart";
 import { closePoints } from "@/lib/markets";
 import { OverviewPerformanceChart } from "./OverviewPerformanceChart";
@@ -127,7 +127,7 @@ function PortfolioPulse({ data }: { data: OverviewData }) {
 function MaterialEvents({ data }: { data: OverviewData }) {
   return <section className={`${styles.surface} ${styles.events}`} aria-labelledby="material-events-heading">
     <div className={styles.sectionHead}><h2 id="material-events-heading">Material events</h2><Link href="/research">View all research <Arrow /></Link></div>
-    {data.events.data?.length ? data.events.data.slice(0, 3).map(event => <article className={styles.event} key={event.event_key}>
+    {data.events.data?.length ? data.events.data.filter(event => !isMarketEvent(event)).slice(0, 4).map(event => <article className={styles.event} key={event.event_key}>
       <time dateTime={event.occurred_at}>{formatDate(event.occurred_at)}</time><div><strong>{event.subjects.map(subject => subject.subject_key).join(", ") || humanize(event.event_type)}</strong><p>{event.title}</p><small>{humanize(event.event_type)} · {humanize(event.freshness_status)}</small></div>
       <span className={`${styles.materiality} ${event.materiality === "high" ? styles.high : event.materiality === "medium" ? styles.medium : ""}`}>{humanize(event.materiality || "Not rated")}</span>
       <details className={styles.eventEvidence}><summary>View evidence <Arrow /></summary><EvidenceDrawer evidence={event.evidence} /></details>
@@ -145,6 +145,6 @@ function MacroContext({ data }: { data: OverviewData }) {
       const status = String(row.status ?? "not_evaluated");
       const arrow = status === "rising" || status === "positive" ? "↑" : status === "falling" || status === "negative" ? "↓" : status === "flat" ? "→" : "—";
       return <div key={key}><dt><span aria-hidden="true">{arrow}</span>{dimensionLabels[key] ?? humanize(key)}</dt><dd>{humanize(status)}{numeric(row.value) != null ? ` · ${formatNumber(row.value)} ${String(row.unit ?? "")}` : ""}<small>{String(row.series_name ?? (Array.isArray(row.source) ? row.source.join(" · ") : row.source ?? "Source unavailable"))} · {formatDate(String(row.effective_date ?? row.trade_date ?? ""))}</small></dd></div>;
-    })}</dl></div><p className={styles.method}>{regime.method_note}</p><Link className={styles.macroLink} href="/market">View observations & method <Arrow /></Link></> : <State resource={data.regime} empty="Macro assessment unavailable." />}
+    })}</dl></div>{data.events.data?.filter(isMarketEvent).slice(0, 3).map(event => <p className={styles.method} key={event.event_key}><strong>{formatDate(event.occurred_at)}</strong> · {event.title}</p>)}<p className={styles.method}>{regime.method_note}</p><Link className={styles.macroLink} href="/market">View observations & method <Arrow /></Link></> : <State resource={data.regime} empty="Macro assessment unavailable." />}
   </section>;
 }
