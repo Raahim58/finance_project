@@ -32,17 +32,10 @@ class Settings(BaseSettings):
     encryption_key: str = "dev-only-invalid-key"
     market_data_mode: str = "mock"
     market_data_refresh_seconds: int = 300
+    market_session_cache_seconds: int = Field(default=15, ge=0, le=60)
     market_broad_coverage_ratio: float = Field(default=0.8, gt=0, le=1)
-    phase2_refill_seconds: int = Field(default=2, ge=1, le=60)
     phase2_max_retries: int = Field(default=3, ge=0, le=10)
     phase2_retry_backoff_seconds: int = Field(default=300, ge=1, le=86400)
-    phase2_broad_queue_target: int = Field(default=40, ge=1, le=1000)
-    phase2_history_queue_target: int = Field(default=96, ge=1, le=5000)
-    phase2_download_queue_target: int = Field(default=24, ge=1, le=1000)
-    phase2_extract_queue_target: int = Field(default=12, ge=1, le=1000)
-    phase2_catalog_refresh_hours: int = Field(default=6, ge=1, le=168)
-    market_history_years: int = 5
-    market_history_bootstrap_enabled: bool = True
     scheduled_research_enabled: bool = True
     macro_ingestion_enabled: bool = False
     macro_series_allowlist: str | None = None
@@ -90,28 +83,14 @@ class Settings(BaseSettings):
     phase8_sector_candidate_limit: int = Field(default=3, ge=1, le=10)
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
-    evidence_enabled: bool = False
     evidence_material_news_enabled: bool = False
     # None preserves catalog behavior; an explicitly empty value allows no sources.
     evidence_source_allowlist: str | None = None
-    evidence_scheduler_seconds: int = Field(default=30, ge=5, le=3600)
-    evidence_discovery_queue_target: int = Field(default=20, ge=1, le=1000)
-    evidence_fetch_queue_target: int = Field(default=80, ge=1, le=5000)
-    evidence_parse_queue_target: int = Field(default=80, ge=1, le=5000)
-    evidence_index_queue_target: int = Field(default=40, ge=1, le=2000)
-    evidence_historical_queue_target: int = Field(default=10, ge=1, le=500)
-    evidence_historical_batch_candidates: int = Field(default=25, ge=1, le=50)
-    evidence_historical_fetch_budget: int = Field(default=100, ge=1, le=5000)
-    evidence_historical_storage_budget_mb: int = Field(default=250, ge=1, le=10240)
-    evidence_historical_live_backlog_reserve: int = Field(default=1, ge=0, le=1000)
-    evidence_historical_expansion_healthy_days: int = Field(default=7, ge=1, le=30)
     evidence_stage_lease_seconds: int = Field(default=900, ge=60, le=86400)
     evidence_max_retries: int = Field(default=3, ge=0, le=10)
     evidence_retry_backoff_seconds: int = Field(default=60, ge=1, le=86400)
     evidence_circuit_failure_threshold: int = Field(default=5, ge=1, le=100)
     evidence_circuit_open_seconds: int = Field(default=900, ge=60, le=86400)
-    evidence_candidate_retention_days: int = Field(default=45, ge=1, le=3650)
-    evidence_spool_retention_hours: int = Field(default=24, ge=1, le=168)
     evidence_pass4_official_enabled: bool = False
     evidence_pass4_breadth_enabled: bool = False
     evidence_psx_announcement_history_enabled: bool = False
@@ -120,7 +99,6 @@ class Settings(BaseSettings):
     evidence_canary_selected_daily: int = Field(default=75, ge=1, le=5000)
     evidence_canary_storage_daily_mb: int = Field(default=1536, ge=1, le=102400)
     evidence_canary_storage_seven_day_mb: int = Field(default=10240, ge=1, le=512000)
-    evidence_canary_fetch_ready_target: int = Field(default=120, ge=1, le=5000)
     evidence_contact_email: str = "evidence-ops@example.invalid"
     evidence_sec_edgar_ciks: str = ""
     screening_completeness_threshold: float = Field(default=0.70, ge=0, le=1)
@@ -161,6 +139,9 @@ class Settings(BaseSettings):
     @classmethod
     def validate_market_data_mode(cls, value: str) -> str:
         normalized = value.lower().strip()
+        # Retired providers (Yahoo, psxdata, vendor placeholder, auto fallback) resolve to the DPS adapter.
+        if normalized in {"auto", "psxdata", "yahoo", "vendor"}:
+            normalized = "dps"
         if normalized not in {"mock", "dps"}:
             raise ValueError(
                 "MARKET_DATA_MODE must be one of: mock, dps"

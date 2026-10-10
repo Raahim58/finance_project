@@ -16,9 +16,9 @@ from app.schemas.intelligence_context import (
 from app.services.market_ingestion import generate_mock_market_data
 
 
-def _seed_user_and_market(email: str = "context@example.com") -> tuple[str, str]:
+def _seed_user_and_market(email: str = "context@example.com", *, end_date: date | None = None) -> tuple[str, str]:
     with SessionLocal() as db:
-        generate_mock_market_data(db, days=5, end_date=date.today())
+        generate_mock_market_data(db, days=5, end_date=end_date or date.today())
         user = User(email=email, password_hash="unused")
         db.add(user)
         db.commit()

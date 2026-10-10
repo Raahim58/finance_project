@@ -55,6 +55,52 @@ def test_no_key_means_no_generation(monkeypatch):
         assert out["status"] == "provider_unavailable"
 
 
+@pytest.mark.usefixtures("database")
+def test_pending_brief_poll_does_not_reassemble_facts(monkeypatch):
+    with SessionLocal() as db:
+        user = make_user(db)
+        patch(monkeypatch, {"day": "fixture"})
+        brief_service.read(db, user, "market", schedule=lambda *args: None)
+        monkeypatch.setattr(brief_service, "_gather", lambda *args: (_ for _ in ()).throw(AssertionError("expensive poll")))
+        result = brief_service.read(db, user, "market", schedule=lambda *args: (_ for _ in ()).throw(AssertionError("duplicate generation")))
+        assert result["status"] == "generating" and not result["current"]
+
+
+@pytest.mark.usefixtures("database")
+def test_identical_market_briefs_generate_for_each_owner_without_holding_db_connections(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    with SessionLocal() as db:
+        owners = [User(email=f"brief-{i}@example.test", password_hash="fixture") for i in range(2)]
+        db.add_all(owners); db.flush()
+        ids = [owner.id for owner in owners]
+        for owner_id in ids:
+            db.add(AIBrief(user_id=owner_id, input_hash="same-public-input", scope="market", scope_key="",
+                          provider="anthropic", model="fixture", status="running"))
+        db.commit()
+    sessions, calls = [], []
+    factory = SessionLocal
+    def tracked_session():
+        session = factory(); sessions.append(session); return session
+    monkeypatch.setattr(brief_service, "SessionLocal", tracked_session)
+    monkeypatch.setattr(brief_service, "_gather_sync", lambda *args: ([{"id":"f1","text":"Fixture context","source":"fixture"}], {}))
+    monkeypatch.setattr("app.services.llm_key_service.get_decrypted_key_for_call", lambda *args: ("test-only-key", None))
+    class Provider:
+        async def chat_with_options(self, *args, **kwargs):
+            assert all(not session.in_transaction() for session in sessions)
+            calls.append(1)
+            await asyncio.sleep(0)
+            return SimpleNamespace(content=json.dumps({"headline":"Stored evidence", "sections":[{"title":"Context", "body":"A fixture reading.", "fact_ids":["f1"]}]}))
+    monkeypatch.setattr("app.ai.providers.registry.get_provider", lambda *args: Provider())
+    async def run():
+        await asyncio.gather(*(brief_service.generate(owner_id, "market", "", "same-public-input") for owner_id in ids))
+    asyncio.run(run())
+    assert len(calls) == 2
+    with SessionLocal() as db:
+        assert all(row.status == "ready" for row in db.query(AIBrief).all())
+
+
 def test_numeric_guard_flags_restated_figures():
     ok = {"headline": "Narrow advance", "sections": [{"title": "Breadth", "body": "One name drove roughly 3% of it."}]}
     bad = {"headline": "Index up 0.09%", "sections": [{"title": "Breadth", "body": "Up 2% and then 3%."}]}

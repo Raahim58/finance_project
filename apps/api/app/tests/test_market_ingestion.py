@@ -10,6 +10,16 @@ from app.services.market_ingestion import generate_mock_market_data, run_market_
 import pytest
 
 
+@pytest.mark.parametrize("mode", ["auto", "psxdata", "yahoo", "vendor", " AUTO "])
+def test_retired_market_modes_resolve_to_supported_dps_adapter(mode):
+    from app.core.config import Settings
+    from app.services.market_providers import DpsMarketDataProvider, get_market_data_provider
+
+    configured = Settings(_env_file=None, market_data_mode=mode)
+    assert configured.market_data_mode == "dps"
+    assert isinstance(get_market_data_provider(configured.market_data_mode), DpsMarketDataProvider)
+
+
 @pytest.mark.usefixtures("database")
 def test_generate_mock_market_data_creates_companies_prices_and_stats():
     with SessionLocal() as db:

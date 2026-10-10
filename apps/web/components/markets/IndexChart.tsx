@@ -10,7 +10,7 @@ export function IndexChart({ points, name, liveDate, height = 245, compactAxis =
   const available = points.length >= 2;
   useEffect(() => {
     if (!node.current || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => chart.current?.getEchartsInstance().resize());
+    const observer = new ResizeObserver(() => { const instance = chart.current?.getEchartsInstance(); if (instance && !instance.isDisposed?.()) instance.resize(); });
     observer.observe(node.current);
     return () => observer.disconnect();
   }, [available]);

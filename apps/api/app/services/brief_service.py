@@ -16,7 +16,7 @@ from app.services.research_job_service import generation_config
 log = logging.getLogger(__name__)
 VERSION = 'brief.v3'
 RUNNING_TTL = timedelta(minutes=5)
-_inflight: set[str] = set()
+_inflight: set[tuple[str, str, str, str]] = set()
 
 STYLE = (
     "STYLE REFERENCE (a US-market brief; reuse its voice and structure only, never its facts):\n"
@@ -206,12 +206,22 @@ def _view(row):
 def read(db, user, scope, key="", *, schedule, retry=False):
     """Return the cached brief; call schedule(user_id, scope, key, hash) at most once if a new hash needs generating."""
     config = generation_config(db, user)
-    facts, inputs = _gather(db, user, scope, key)
-    h = fingerprint({"v": VERSION, "scope": scope, "key": key, "inputs": inputs, "cfg": config or {}})
     rows = list(db.scalars(select(AIBrief).where(AIBrief.user_id == user.id, AIBrief.scope == scope, AIBrief.scope_key == key)
         .order_by(AIBrief.generated_at.desc())))
-    current = next((r for r in rows if r.input_hash == h), None)
     previous = next((r for r in rows if r.status == 'ready'), None)
+    if scope == 'portfolio':
+        from app.services.portfolio_service import get_portfolio_or_404
+        get_portfolio_or_404(db, user, key)
+    pending = next((row for row in rows if row.status == 'running' and config
+                    and row.provider == config['provider'] and row.model == config['model']
+                    and utc(row.generated_at) >= datetime.now(UTC) - RUNNING_TTL), None)
+    if pending and not retry:
+        # Poll the existing generation, rather than rebuilding its facts on every GET.
+        # Its next read after completion recomputes the input hash before marking it current.
+        return {"status": "generating", "current": False, "error_code": None, **_view(previous)}
+    facts, inputs = _gather(db, user, scope, key)
+    h = fingerprint({"v": VERSION, "scope": scope, "key": key, "inputs": inputs, "cfg": config or {}})
+    current = next((r for r in rows if r.input_hash == h), None)
     if current and current.status == 'ready':
         return {"status": "ready", "current": True, **_view(current)}
     status = 'provider_unavailable' if not config else 'not_generated'
@@ -255,44 +265,59 @@ def _valid(raw, ids, symbols=frozenset()):
 
 
 async def generate(user_id, scope, key, h):
-    """Background task: one provider call, validated against the fact ids, stored under the input hash."""
-    if h in _inflight:
+    """Generate once per owner/input without holding DB connections during inference."""
+    identity = (user_id, scope, key, h)
+    if identity in _inflight:
         return
-    _inflight.add(h)
+    _inflight.add(identity)
+    row_id = None
     try:
         from app.models.user import User
         from app.services.llm_key_service import get_decrypted_key_for_call
         from app.ai.providers.registry import get_provider
         from app.ai.providers.base import ProviderCallOptions
         with SessionLocal() as db:
-            user = db.get(User, user_id)
-            row = db.scalar(select(AIBrief).where(AIBrief.user_id == user_id, AIBrief.input_hash == h, AIBrief.scope == scope, AIBrief.scope_key == key))
-            if not row or not user:
+            row = db.scalar(select(AIBrief).where(AIBrief.user_id == user_id, AIBrief.input_hash == h,
+                                                 AIBrief.scope == scope, AIBrief.scope_key == key))
+            if not row or not db.get(User, user_id):
                 return
-            try:
-                facts, _ = await asyncio.to_thread(lambda: _gather_sync(user_id, scope, key))
-                messages = [{"role": "system", "content": PORTFOLIO_SYSTEM if scope == 'portfolio' else COMPANY_SYSTEM if scope == 'company' else SYSTEM}, {"role": "user", "content": "FACTS\n" + canonical(facts)}]
-                api_key, _rec = get_decrypted_key_for_call(db, user, row.provider)
-                symbols = set(re.findall(r'\b[A-Z][A-Z0-9]{1,9}\b', ' '.join(f['text'] for f in facts)))
-                brief = None
-                for attempt in range(2):
-                    result = await get_provider(row.provider).chat_with_options(api_key, messages, row.model,
+            row_id, provider, model = row.id, row.provider, row.model
+        try:
+            facts, _ = await asyncio.to_thread(lambda: _gather_sync(user_id, scope, key))
+            messages = [{"role": "system", "content": PORTFOLIO_SYSTEM if scope == 'portfolio' else COMPANY_SYSTEM if scope == 'company' else SYSTEM},
+                        {"role": "user", "content": "FACTS\n" + canonical(facts)}]
+            symbols = set(re.findall(r'\b[A-Z][A-Z0-9]{1,9}\b', ' '.join(f['text'] for f in facts)))
+            brief = None
+            for attempt in range(2):
+                with SessionLocal() as db:
+                    api_key, _ = get_decrypted_key_for_call(db, db.get(User, user_id), provider)
+                try:
+                    result = await get_provider(provider).chat_with_options(api_key, messages, model,
                         options=ProviderCallOptions(json_mode=True, max_output_tokens=1400, deadline_seconds=60))
-                    brief = _valid(result.content, {f["id"] for f in facts}, symbols)
-                    if not _too_numeric(brief):
-                        break
-                    messages = messages[:2] + [{"role": "assistant", "content": result.content}, {"role": "user", "content":
-                        "That draft restates figures. Rewrite it as analysis: no figures in the headline or titles, at most one figure per body, "
-                        "interpret what is driving the picture and what it means for the reader, and leave the numbers to the ticker chips. Return the same JSON."}]
-                api_key = None
-                row.brief_json, row.facts_json, row.status = json.dumps(brief), json.dumps(facts), 'ready'
-                row.generated_at = datetime.now(UTC)
-            except Exception as exc:
-                log.warning("brief generation failed scope=%s: %s", scope, type(exc).__name__)
-                row.status, row.error_code = 'failed', ('invalid_model_output' if isinstance(exc, (ValueError, KeyError)) else 'provider_request_failed')
-            db.commit()
+                finally:
+                    api_key = None
+                brief = _valid(result.content, {f["id"] for f in facts}, symbols)
+                if not _too_numeric(brief):
+                    break
+                messages = messages[:2] + [{"role": "assistant", "content": result.content}, {"role": "user", "content":
+                    "That draft restates figures. Rewrite it as analysis: no figures in the headline or titles, at most one figure per body, "
+                    "interpret what is driving the picture and what it means for the reader, and leave the numbers to the ticker chips. Return the same JSON."}]
+            with SessionLocal() as db:
+                row = db.get(AIBrief, row_id)
+                if row:
+                    row.brief_json, row.facts_json, row.status = json.dumps(brief), json.dumps(facts), 'ready'
+                    row.generated_at = datetime.now(UTC)
+                    db.commit()
+        except Exception as exc:
+            log.warning("brief generation failed scope=%s: %s", scope, type(exc).__name__)
+            with SessionLocal() as db:
+                row = db.get(AIBrief, row_id)
+                if row:
+                    row.status = 'failed'
+                    row.error_code = 'invalid_model_output' if isinstance(exc, (ValueError, KeyError)) else 'provider_request_failed'
+                    db.commit()
     finally:
-        _inflight.discard(h)
+        _inflight.discard(identity)
 
 
 def _gather_sync(user_id, scope, key):

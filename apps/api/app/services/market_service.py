@@ -125,8 +125,9 @@ def resolve_market_date(db: Session, requested_date: date | None) -> date:
     return latest
 
 
-def get_market_snapshot(db: Session, requested_date: date | None = None) -> MarketSnapshotResponse | None:
-    trade_date = resolve_market_date(db, requested_date)
+def get_market_snapshot(db: Session, requested_date: date | None = None, *, resolved_session=None,
+                        resolved_prices=None) -> MarketSnapshotResponse | None:
+    trade_date = requested_date if resolved_prices is not None and requested_date else resolve_market_date(db, requested_date)
     from app.models.workstation import DataSource, Instrument, MarketObservation, SourceArtifact
     import json
     start = datetime.combine(trade_date, time.min, tzinfo=ZoneInfo('Asia/Karachi'))
@@ -140,7 +141,7 @@ def get_market_snapshot(db: Session, requested_date: date | None = None) -> Mark
         DataSource.name == 'PSX DPS trading panel')
     live_index = db.execute(index_query.order_by(MarketObservation.effective_at.desc()).limit(1)).first()
     from app.services.market_session import resolve_session
-    session = resolve_session(db)
+    session = resolved_session or resolve_session(db)
     # Once a newer daily close is available it supersedes earlier intraday levels.
     if live_index and session and session.basis == 'intraday':
         observation, artifact, publisher = live_index
@@ -178,7 +179,7 @@ def get_market_snapshot(db: Session, requested_date: date | None = None) -> Mark
         .order_by(SourceArtifact.retrieved_at.desc()).limit(1))
     if artifact is None:
         return None
-    prices = _prices_for_date(db, trade_date)
+    prices = resolved_prices if resolved_prices is not None else _prices_for_date(db, trade_date)
     current, previous = closes[trade_date], closes[previous_dates[-1]]
     return MarketSnapshotResponse(snapshot_date=trade_date,index_name='KSE-100',index_value=current,
         index_change=current-previous,index_change_percent=(current-previous)/previous*100,
@@ -278,7 +279,7 @@ def get_market_overview(db: Session, requested_date: date | None = None) -> Mark
         latest_quote_date=session.latest_quote_date if session else None,
         latest_quote_count=session.latest_quote_count if session else 0,
         prices=[serialize_price(row) for row in prices],
-        snapshot=get_market_snapshot(db, trade_date),
+        snapshot=get_market_snapshot(db, trade_date, resolved_session=session, resolved_prices=prices),
         top_gainers=[serialize_price(row) for row in sorted((row for row in prices if row.change > 0), key=lambda row: (row.change_percent, row.volume), reverse=True)[:5]],
         top_losers=[serialize_price(row) for row in sorted((row for row in prices if row.change < 0), key=lambda row: (row.change_percent, -row.volume))[:5]],
         top_volume=[serialize_price(row) for row in sorted(prices, key=lambda row: row.volume, reverse=True)[:5]],

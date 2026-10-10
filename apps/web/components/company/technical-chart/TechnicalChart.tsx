@@ -46,7 +46,7 @@ export function TechnicalChart({ symbol, endDate }: {
     const levels = useMemo(() => { return levelHistory.at(-1) ?? []; }, [levelHistory, normalized, bars]);
     const option = useMemo(() => chartOptions(bars, settings, zoom.current, indicators, signals, levels), [bars, settings, indicators, signals, levels]);
     useEffect(() => { if (!node.current || typeof ResizeObserver === "undefined")
-        return; const observer = new ResizeObserver(() => chart.current?.getEchartsInstance().resize()); observer.observe(node.current); return () => observer.disconnect(); }, [bars.length]);
+        return; const observer = new ResizeObserver(() => { const instance = chart.current?.getEchartsInstance(); if (instance && !instance.isDisposed?.()) instance.resize(); }); observer.observe(node.current); return () => observer.disconnect(); }, [bars.length]);
     const events = useMemo(() => ({ datazoom: (event: {
             start?: number;
             end?: number;

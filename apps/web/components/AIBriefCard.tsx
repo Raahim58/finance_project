@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CompanyLogo } from "@/components/markets/CompanyLogo";
 import type { AIBriefView } from "@/lib/api/research";
 import { formatDate, formatPercent } from "@/lib/overview";
@@ -24,14 +24,30 @@ export type BriefProps = {
 export function useBrief(load: (retry: boolean) => Promise<AIBriefView>): BriefState {
   const [view, setView] = useState<AIBriefView | null>(null);
   const [error, setError] = useState(false);
-  const run = useCallback((retry = false) => load(retry).then(v => { setView(v); setError(false); return v; }).catch(() => { setError(true); return null; }), [load]);
+  const [revision, setRevision] = useState(0);
+  const retryRequested = useRef(false);
+  const previousLoad = useRef(load);
   useEffect(() => {
     let live = true, tries = 0, timer: ReturnType<typeof setTimeout>;
-    const tick = (retry = false) => run(retry).then(v => { if (live && v?.status === "generating" && tries++ < 15) timer = setTimeout(() => tick(), 5000); });
-    void tick();
+    if (previousLoad.current !== load) setView(null);
+    previousLoad.current = load;
+    const next = () => { if (live && tries++ < 60) timer = setTimeout(() => void tick(), 5000); };
+    async function tick(retry = false) {
+      try {
+        const value = await load(retry);
+        if (!live) return;
+        setView(value); setError(false);
+        if (value.status === "generating") next();
+      } catch {
+        if (live) { setError(true); next(); }
+      }
+    }
+    const forced = retryRequested.current;
+    retryRequested.current = false;
+    void tick(forced);
     return () => { live = false; clearTimeout(timer); };
-  }, [run]);
-  return { view, error, retry: () => void run(true) };
+  }, [load, revision]);
+  return { view, error, retry: () => { retryRequested.current = true; setRevision(value => value + 1); } };
 }
 
 export function AIBriefCard({ title, state, quotes, fallback, onAsk, hideHeader }: BriefProps) {

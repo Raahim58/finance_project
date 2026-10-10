@@ -18,6 +18,55 @@ from app.services.market_session import resolve_session
 import pytest
 
 
+def test_public_session_cache_expires_and_separates_source_policies(monkeypatch):
+    from types import SimpleNamespace
+    from app.services import market_session as module
+    clock, synthetic, calls = [0.0], [False], []
+    engine = object()
+    db = SimpleNamespace(get_bind=lambda: SimpleNamespace(engine=engine, dialect=SimpleNamespace(name="postgresql")))
+    monkeypatch.setattr(settings, "market_session_cache_seconds", 15)
+    monkeypatch.setattr(module, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(module, "synthetic_market_data_allowed", lambda: synthetic[0])
+    def read(_db):
+        calls.append(1)
+        return module.MarketSession(date(2026, 10, 9), "daily", len(calls), None, "fixture", 60)
+    monkeypatch.setattr(module, "_resolve_session", read)
+    module._session_cache.clear()
+    try:
+        assert module.resolve_session(db).securities == 1
+        assert module.resolve_session(db).securities == 1
+        assert len(calls) == 1
+        synthetic[0] = True
+        assert module.resolve_session(db).securities == 2
+        clock[0] = 16
+        assert module.resolve_session(db).securities == 3
+        monkeypatch.setattr(settings, "market_session_cache_seconds", 0)
+        assert module.resolve_session(db).securities == 4
+    finally:
+        module._session_cache.clear()
+
+
+def test_concurrent_public_session_reads_share_one_query(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+    import time
+    from app.services import market_session as module
+    engine, calls = object(), []
+    db = SimpleNamespace(get_bind=lambda: SimpleNamespace(engine=engine, dialect=SimpleNamespace(name="postgresql")))
+    monkeypatch.setattr(settings, "market_session_cache_seconds", 15)
+    def read(_db):
+        calls.append(1); time.sleep(0.02)
+        return None
+    monkeypatch.setattr(module, "_resolve_session", read)
+    module._session_cache.clear()
+    try:
+        with ThreadPoolExecutor(max_workers=4) as workers:
+            assert list(workers.map(lambda _: module.resolve_session(db), range(4))) == [None] * 4
+        assert len(calls) == 1
+    finally:
+        module._session_cache.clear()
+
+
 def daily(db, day, count=10):
     persist_market_data(db, source="dps", latest_prices=[LatestPriceRow(
         symbol=f"T{i}", name=f"Company {i}", sector="Test", trade_date=day,

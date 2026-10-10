@@ -369,8 +369,11 @@ def test_event_admission_is_material_bounded_and_uses_event_freshness_policy():
 
 @pytest.mark.usefixtures("database")
 def test_freshness_uses_source_sla_without_aging_reporting_period_facts():
-    user_id, instrument_id = _seed_user_and_market()
     fixed_now = datetime.now(UTC)
+    while fixed_now.weekday() >= 5:
+        fixed_now -= timedelta(days=1)
+    trade_day = fixed_now.date()
+    user_id, instrument_id = _seed_user_and_market(end_date=trade_day)
     with SessionLocal() as db:
         user = db.get(User, user_id)
         persist_normalized_observations(
@@ -378,7 +381,7 @@ def test_freshness_uses_source_sla_without_aging_reporting_period_facts():
             [
                 SimpleNamespace(
                     symbol="MEBL",
-                    trade_date=date.today(),
+                    trade_date=trade_day,
                     open=Decimal("100"),
                     high=Decimal("102"),
                     low=Decimal("99"),
