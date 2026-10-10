@@ -98,3 +98,12 @@ def test_generic_concept_can_answer_without_fabricated_citations():
     assert citation_gate(result, cp) is None
     _, _, result = resolve_citations('Unsupported source [[E1]].', cp)
     assert citation_gate(result, cp) == 'citation_reference_unknown'
+
+
+def test_numbers_on_untyped_sources_are_flagged_not_rejected():
+    cp = {'evidence': {}, 'next_evidence': 1, 'resolved_identity': {}}
+    _attach_evidence(cp, tool_result('ok', {}, sources=[{'id': 'n1', 'title': 'News article'}]), {})
+    _, _, result = resolve_citations('Cnergyico reported cash of Rs 18.30 on Jun 30, 2026. [[E1]]', cp)
+    assert citation_gate(result, cp) is None
+    assert result['unverified_number_lines'] == 1
+    assert result['support_errors'] == []

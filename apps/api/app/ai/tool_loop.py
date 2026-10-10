@@ -838,7 +838,8 @@ def resolve_citations(text_value: str, checkpoint: dict[str, Any]):
     from app.ai.claim_support import render_financial_placeholders, scope_errors, numeric_errors
     text_value, selector_errors = render_financial_placeholders(text_value, known)
     support_errors = selector_errors + scope_errors(text_value, known, CITATION_RE, checkpoint.get('resolved_identity', {}))
-    support_errors += numeric_errors(text_value, known, CITATION_RE)
+    unverified: list[str] = []
+    support_errors += numeric_errors(text_value, known, CITATION_RE, unverified)
     resolved: list[dict[str, Any]] = []
     unknown = []
     seen = set()
@@ -875,6 +876,7 @@ def resolve_citations(text_value: str, checkpoint: dict[str, Any]):
             "missing_citations": not bool(CITATION_RE.search(text_value)),
             "semantic_verification": "not_performed",
             "support_errors": support_errors,
+            "unverified_number_lines": len(unverified),
             "financial_value_check": "recorded_amounts_only",
         },
     )

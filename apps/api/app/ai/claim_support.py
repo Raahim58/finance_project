@@ -9,7 +9,7 @@ from app.tools.registry import expand_model_data
 
 FACT_TOKEN = re.compile(r'\{\{fact:(E\d+):([a-z_]+):([0-9-]+|none):(standalone|consolidated|none)\}\}')
 FINANCIAL_TERMS = re.compile(r'\b(revenue|sales|profit|income|eps|earnings per share|cash|assets?|liabilities|equity|borrowings|dividends?|payouts?|par value|face value)\b', re.I)
-NUMBER = re.compile(r'(?<![\w-])[-+]?\d[\d,]*(?:\.\d+)?(?![\w-])')
+NUMBER = re.compile(r'(?<![\w-])[-+]?\d(?:[\d,]*\d)?(?:\.\d+)?(?![\w-])')
 SCALE = {'thousand': Decimal(1000), 'million': Decimal(1000000), 'billion': Decimal(1000000000)}
 METRIC_LABELS = {
     'revenue': ('revenue', 'sales', 'turnover'), 'gross_revenue': ('gross revenue', 'gross sales'),
@@ -142,7 +142,7 @@ def scope_errors(answer, evidence, marker_pattern, identity):
     return errors
 
 
-def numeric_errors(answer, evidence, marker_pattern):
+def numeric_errors(answer, evidence, marker_pattern, unverified=None):
     """Check inline financial amounts against typed cited records, including units.
 
     Dates and explicitly labelled growth/ratios are outside this amount check.
@@ -156,6 +156,10 @@ def numeric_errors(answer, evidence, marker_pattern):
         refs = [ref.strip() for match in matches for ref in match.group(1).split(',')]
         if not refs: continue
         records = [row for ref in refs for row in (evidence.get(ref) or {}).get('observations', [])]
+        if not records:
+            if unverified is not None and NUMBER.search(marker_pattern.sub('', line)):
+                unverified.append(line.strip()[:200])
+            continue
         prose = marker_pattern.sub('', line)
         prose = re.sub(r'\b\d{4}-\d{2}-\d{2}\b', '', prose)
         prose = re.sub(r'^\s*\d+[.)]\s*', '', prose)
