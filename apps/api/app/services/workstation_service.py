@@ -1037,6 +1037,16 @@ def list_optimizer_runs(db: Session, user: User, portfolio_id: str):
     ]
 
 
+def delete_scenario_run(db: Session, user: User, portfolio_id: str, run_id: str) -> dict[str, str]:
+    portfolio = get_portfolio_or_404(db, user, portfolio_id)
+    row = db.scalar(select(ScenarioRun).where(ScenarioRun.id == run_id, ScenarioRun.portfolio_id == portfolio.id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Scenario run not found")
+    db.delete(row)
+    db.commit()
+    return {"status": "deleted"}
+
+
 def list_scenario_runs(db: Session, user: User, portfolio_id: str):
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     rows = db.scalars(

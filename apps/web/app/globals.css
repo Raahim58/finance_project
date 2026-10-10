@@ -781,3 +781,11 @@ body:has(select[aria-label="Activity type"]) .data-table td:nth-child(n+4):not(:
 .assistant-markdown :is(table) { width:100%; border-collapse:collapse; font-size:12.5px; }
 .assistant-markdown :is(th,td) { padding:9px 10px; border-bottom:1px solid var(--line); text-align:left; }
 .assistant-markdown th { color:var(--muted); font-weight:500; }
+
+.assistant-chat-row { display:flex; align-items:center; gap:2px; border-radius:6px; }
+.assistant-chat-row > button:first-child { flex:1; min-width:0; text-align:left; }
+.assistant-chat-row[aria-current], .assistant-chat-row:has(> [aria-current=true]) { background:#eef6f3; }
+.assistant-chat-actions { display:flex; gap:2px; opacity:0; }
+.assistant-chat-row:hover .assistant-chat-actions, .assistant-chat-row:focus-within .assistant-chat-actions { opacity:1; }
+.assistant-chat-actions button { border:0; background:none; padding:4px 6px; font-size:12px; border-radius:5px; cursor:pointer; }
+.assistant-chat-actions button:hover { background:#e6eaee; }

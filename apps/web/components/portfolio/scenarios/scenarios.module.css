@@ -88,3 +88,7 @@
 
 .skeletonBlock{border-radius:8px;background:linear-gradient(90deg,#f3f4f6 25%,#eceef1 50%,#f3f4f6 75%);background-size:200% 100%;animation:scenarioShimmer 1.4s linear infinite}
 @keyframes scenarioShimmer{to{background-position:-200% 0}}
+.runRow { position: relative; }
+.runDelete { position: absolute; top: 10px; right: 4px; border: 0; background: transparent; cursor: pointer; opacity: 0; padding: 4px 6px; border-radius: 5px; font-size: 12px; }
+.runRow:hover .runDelete, .runDelete:focus-visible { opacity: 1; }
+.runDelete:hover { background: #e6eaee; }
