@@ -180,7 +180,7 @@ function Application({ prefs, savePrefs, compact = false }: { prefs: Preferences
         </> : null}
       </div>
       {status ? <p className="rx-hint" role="status" style={{ marginTop: 10 }}>{status}</p> : null}
-      {!compact ? <p className="rx-note" style={{ marginTop: 20 }}>Risk tolerance and horizon are defaults. Each portfolio’s mandate is set in its IPS, and <Link className="rx-link" href={"/onboarding" as never}>your investor profile</Link> can be revised at any time.</p> : null}
+      {!compact ? <p className="rx-note" style={{ marginTop: 20 }}>Each portfolio’s mandate is set and revised in its IPS.</p> : null}
     </section>
   );
 }

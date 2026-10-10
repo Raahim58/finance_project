@@ -83,7 +83,7 @@ test("oversight pages share title and tabs in the header",async({page})=>{
   await page.goto(path);await expect(page.locator(".app-topbar .workspace-page-header")).toBeVisible();
   await expect(page.locator("main h1")).toHaveCount(0);await page.screenshot({path:`test-results/layout-${title.toLowerCase()}.png`,fullPage:true});
  }
- await page.goto("/monitoring");await expect(page.locator(".app-topbar").getByRole("button",{name:"Acknowledged",exact:true})).toBeVisible();
+ await page.goto("/monitoring");await expect(page.locator(".app-topbar").getByRole("button",{name:"Reviews",exact:true})).toBeVisible();
 });
 test("Monitoring owns review actions and the standalone recommendations page is removed",async({page})=>{
  await page.route("**/api/recommendations**",async route=>{
@@ -107,6 +107,28 @@ test("management replaces the legacy grid and opens inline creation",async({page
  await expect(page.getByRole("button",{name:"Create and define IPS",exact:true})).toBeVisible();
  await expect(page.getByText("1 Investor profile",{exact:true})).toHaveCount(0);await expect(page.getByRole("button",{name:"Layout test portfolio",exact:true})).toBeVisible();
  await page.screenshot({path:"test-results/layout-portfolios.png",fullPage:true});
+});
+
+test("portfolio navigation retains one scope across the supported analysis workspaces", async({page})=>{
+ await page.goto("/portfolios");
+ await expect(page).toHaveURL(`/portfolios/${portfolio.id}/overview`);
+ for(const [tab,label] of [["ips","IPS"],["build","Build"],["quant","Quant"],["risk","Risk"],["scenarios","Scenarios"],["research","Research"],["activity","Activity"]]){
+  const link=page.getByRole("navigation",{name:"Portfolio sections"}).getByRole("link",{name:label,exact:true});
+  await expect(link).toHaveAttribute("href",`/portfolios/${portfolio.id}/${tab}`);
+  await link.click();
+  await expect(page).toHaveURL(`/portfolios/${portfolio.id}/${tab}`);
+  await expect(page.getByLabel("Selected portfolio context")).toHaveValue(portfolio.id);
+  await expect(page.locator(".app-topbar")).toBeVisible();
+ }
+});
+
+test("the landing entry and retired onboarding route lead to sign-in",async({page})=>{
+ await page.goto("/");
+ await page.getByRole("link",{name:"Open your workspace",exact:true}).click();
+ await expect(page).toHaveURL(/\/login$/);
+ await expect(page.getByRole("heading",{name:"Welcome back"})).toBeVisible();
+ await page.goto("/onboarding");
+ await expect(page).toHaveURL(/\/login$/);
 });
 test("full chat fills the workspace and floating Ask opens and closes cleanly",async({page})=>{
  await page.setViewportSize({width:1440,height:1000});await page.goto("/assistant");
@@ -148,7 +170,7 @@ test(`audit ${width}: left columns reach the viewport top and header utilities r
     if(!panel||panel.dataset.headerRaised!=="true")return true;
     const p=panel.getBoundingClientRect(),h=document.querySelector(".app-topbar")!.getBoundingClientRect();
     return Math.abs(p.y)<1&&Math.abs(h.left-p.right)<1;
-   })).toBe(true);
+   }),{message:`Left panel and header alignment on ${path} at ${width}px`}).toBe(true);
    expect(errors).toEqual([]);
    if(width===1440&&["/market","/companies/FFC","/portfolios/layout-p1/overview","/portfolios/layout-p1/ips","/portfolios/layout-p1/quant","/portfolios/layout-p1/scenarios","/portfolios/layout-p1/research","/assistant"].includes(path)){
     await expect(page.locator("[data-workspace-left-panel]")).toHaveAttribute("data-header-raised","true");

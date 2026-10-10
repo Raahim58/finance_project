@@ -7,7 +7,15 @@ import { createPortal } from "react-dom";
 export function WorkspaceDataNotices({ ready, scope, children }: { ready: boolean; scope: string; children: ReactNode }) {
   const [target, setTarget] = useState<HTMLElement | null>(null);
   useEffect(() => {
-    setTarget(ready ? document.querySelector<HTMLElement>("[data-portfolio-panel='content']") : null);
+    if (!ready) { setTarget(null); return; }
+    const update = () => {
+      const next = document.querySelector<HTMLElement>("[data-portfolio-panel='content']");
+      setTarget(previous => previous === next ? previous : next);
+    };
+    const observer = new MutationObserver(update);
+    observer.observe(document.body, { childList: true, subtree: true });
+    update();
+    return () => observer.disconnect();
   }, [ready, scope]);
   if (!children) return null;
   const notices = <div className="workspace-data-notices">{children}</div>;

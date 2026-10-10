@@ -27,7 +27,7 @@ export function AuthForm({ mode }: AuthFormProps) {
     try {
       const response = mode === "signup" ? await signup(email, password, fullName) : await login(email, password);
       setToken(response.access_token);
-      router.push((mode === "signup" ? "/onboarding" : "/dashboard") as never);
+      router.push("/dashboard" as never);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");
     } finally {

@@ -51,7 +51,7 @@ test("persistent streaming drawer survives navigation, closure, switching and re
     else if (path === "/portfolios") body = [portfolio];
     else if (path === "/portfolios/p1/risk-flags") body = { flags: [] };
     else if (path === "/portfolios/p1/summary") body = { portfolio, holdings: [], total_value: "0" };
-    else if (path === "/preferences") body = { default_llm_provider: "zai" };
+    else if (path === "/settings/preferences") body = { default_llm_provider: "zai" };
     else if (path === "/assistant/workspace/conversations")
       body = {
         items: [
@@ -146,7 +146,7 @@ test("persistent streaming drawer survives navigation, closure, switching and re
   });
   await page.goto("/settings");
   await page.getByLabel("Open Assistant").click();
-  await expect(page.getByText(/Growth/)).toBeVisible();
+  await expect(page.locator(".assistant-chip").filter({hasText:"Growth"})).toBeVisible();
   await page.getByLabel("Message Assistant").fill("Explain my context");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(

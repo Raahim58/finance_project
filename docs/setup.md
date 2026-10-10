@@ -58,21 +58,9 @@ associated tool results, and Gemini interaction IDs resume from the encrypted tr
 provider/model selection cannot change mid-execution. An expired Gemini interaction
 fails explicitly rather than replaying the chain.
 
-Inspect redacted diagnostics through the owner-scoped API or CLI:
-
-```bash
-ASSISTANT_ACCESS_TOKEN='<local-access-token>' python -m app.jobs.assistant_diagnostics --aggregate
-ASSISTANT_ACCESS_TOKEN='<local-access-token>' \
-  python -m app.jobs.assistant_diagnostics --execution-id '<execution-uuid>'
-```
-
-Captured payloads remain internal. An operator with database and encryption-key access
-may replay retained attempts through the local mock provider; the command prints only
-structural counts and statuses:
-
-```bash
-python -m app.jobs.replay_assistant_diagnostic '<execution-uuid>'
-```
+Execution status and supporting evidence are available in the Assistant workspace.
+Captured provider payloads remain internal and encrypted; retired diagnostic/replay
+CLI commands are no longer part of the supported operator interface.
 
 Metadata and attempt accounting are retained for one year. Encrypted captured payloads
 are retained for failed executions and a deterministic 10% success sample for 14 days,
@@ -146,8 +134,8 @@ MACRO_INGESTION_ENABLED=true python -u -m app.jobs.macro_scheduler
 python -m app.jobs.macro_status
 ```
 
-Provider ladders, exact current coverage, fallbacks, and the bounded one-cycle
-command are documented in [Canonical Macro Ingestion](macro-ingestion.md).
+Use `python -m app.jobs.macro_status` to inspect configured series, provider
+ladders and coverage; `macro_backfill` remains the explicit bounded recovery tool.
 
 The live universe is synchronized from observed DPS symbol data; there is no configured stock list. History and report work is recorded in the Postgres stage-run outbox (`ingestion_stage_runs`) and dispatched by `pipeline-scheduler`, so it survives a Redis loss. The market scheduler remains separate.
 
@@ -221,7 +209,7 @@ npm test
 npm run build
 ```
 
-Provider parser tests use bounded fixtures and never hit live services. Live contract smoke tests are opt-in and should remain low-rate. See [migrations](migrations.md) for populated-legacy and downgrade checks.
+Provider parser tests use bounded fixtures and never hit live services. Live contract smoke tests are opt-in and should remain low-rate. See [migration baseline and transition](../apps/api/alembic/README.md) for populated-legacy and downgrade checks.
 
 The API-level pytest bootstrap forces an in-memory SQLite database, test bcrypt cost, disabled demo access, mock market mode, and disabled scheduled ingestion before the application package is imported. A developer `.env` therefore cannot silently redirect the test suite to local Postgres or enable source traffic. Global Evidence Pass 0 contains contracts and schema only; it has no live smoke test or provider setup command.
 

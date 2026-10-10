@@ -153,7 +153,7 @@ The user-approved site exposes `/news.json`, `/news-meta.json`, and `/research.j
 
 The `briefing` stage captures the research JSON, then indexes its overview, sector highlights and registered stock commentary as `commentary`, with physical pages null and numerical promotion prohibited. Its dated analysis is available through `research.morning_brief` and company digest extra-analysis fields. News citations link to the original articles; research commentary links transparently to its research JSON under the label "Market research commentary". The research feed's embedded FIPI/LIPI or market values do not become canonical database observations.
 
-`python -m app.jobs.briefing_source_setup` creates two source targets, preserving the existing canary batch: six original news URLs per scheduled news slot, and commentary discovery at 09:00 Pakistan time. Existing source/body budgets still apply. No paid model or application enrichment credential is required for capture.
+Existing reviewed source targets retain their configured news and 09:00 Pakistan-time commentary schedules. Inspect enabled targets with `python -m app.jobs.pipeline_status`; manage approved discovery targets through `pipeline_bootstrap`. Source/body budgets apply, and capture requires no paid model call.
 
 ## Event classification and event records (0037)
 
