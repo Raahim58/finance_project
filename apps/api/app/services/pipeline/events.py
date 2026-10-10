@@ -71,6 +71,16 @@ def merge_blockers(features, candidate):
     return blockers
 
 
+def dominant_type(types):
+    """Most frequent event type; ties go to the earliest in reading order."""
+    return max(dict.fromkeys(types), key=lambda t: (types.count(t), -types.index(t)))
+
+
+def story_group(document, features):
+    """A news article is one story per subject set; its sentence-level types vote for the event's type."""
+    return ('story', document.id, tuple(sorted(features['entities']))) if document.document_type == 'news' else features['group']
+
+
 def statement_features(statement, document):
     """Classifier statements carry their features; legacy statements get unknowns."""
     typed = statement.typed_value or {}
@@ -124,7 +134,8 @@ def build(db, document_id):
     for statement in statements:
         features = statement_features(statement, document)
         if features['occurred'] is None: continue
-        groups.setdefault(features['group'], (features, []))[1].append(statement)
+        groups.setdefault(story_group(document, features), (features, []))[1].append(statement)
+    for features, rows in groups.values(): features['event_type'] = dominant_type([r.event_type for r in rows])
     if statements and not groups: return {'events': [], 'gap': 'event_date_unverified'}
     pending = [(f, rows) for f, rows in groups.values()
         if not all(db.scalar(select(EventDocumentLink.event_id).where(EventDocumentLink.statement_id==s.id).limit(1)) for s in rows)]

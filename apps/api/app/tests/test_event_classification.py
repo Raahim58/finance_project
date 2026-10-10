@@ -291,3 +291,30 @@ def test_sentence_not_naming_the_linked_company_stays_market_level(vectors):
         subjects = {(s.subject_key, s.text[:6]) for s in db.scalars(select(EvidenceStatement))}
         assert ('LUCK', 'Lucky ') in subjects
         assert not any(k == 'LUCK' and t == 'The go' for k, t in subjects)
+
+
+@pytest.mark.usefixtures("database")
+def test_news_article_is_one_event_per_subject_set(vectors):
+    with SessionLocal() as db:
+        instruments(db)
+        doc = article(db, 'Oil prices slip on US-Iran peace hopes. Gold prices edged up as treasury yields fell.', title='Markets wrap', url='https://a.test/one')
+        classify(db, doc.id); build(db, doc.id)
+        events = list(db.scalars(select(NormalizedEvent).where(NormalizedEvent.classification_status == 'classified')))
+        assert len(events) == 1 and events[0].title == 'Markets wrap'
+
+
+@pytest.mark.usefixtures("database")
+def test_event_maintenance_repairs_stale_attribution_and_is_idempotent(vectors):
+    from app.jobs.event_maintenance import run
+    with SessionLocal() as db:
+        instruments(db)
+        doc = article(db, 'Oil prices slip on US-Iran peace hopes. Gold prices edged up as treasury yields fell.', title='Markets wrap', url='https://a.test/two')
+        classify(db, doc.id); build(db, doc.id)
+        for statement in db.scalars(select(EvidenceStatement)):
+            statement.subject_type, statement.subject_key, statement.event_type = 'instrument', 'LUCK', 'earnings'
+        db.commit()
+        assert run(db, 30)['misattributed'] == 2
+        run(db, 30, apply=True)
+        assert {(s.subject_key, s.event_type) for s in db.scalars(select(EvidenceStatement).where(EvidenceStatement.validation_status == 'validated'))} <= {('market', 'geopolitics'), ('market', 'macro')}
+        again = run(db, 30)
+        assert again == {'misattributed': 0, 'retyped_or_dropped': 0, 'events_to_merge': 0}

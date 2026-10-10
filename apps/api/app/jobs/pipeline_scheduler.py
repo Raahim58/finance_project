@@ -76,6 +76,20 @@ def run_monitoring_tick(db,now):
     except Exception: db.rollback();return 0
 
 
+_last_maintenance_hour=None
+
+
+def run_event_maintenance_tick(db,now):
+    """Hourly idempotent repair so stored events follow the current attribution/typing rules without manual jobs."""
+    global _last_maintenance_hour
+    hour=now.replace(minute=0,second=0,microsecond=0)
+    if _last_maintenance_hour==hour: return None
+    _last_maintenance_hour=hour
+    from app.jobs.event_maintenance import run
+    try: return run(db,days=30,apply=True)
+    except Exception: db.rollback();return None
+
+
 def run_once(now=None):
     if not settings.pipeline_enabled: return {'status':'disabled'}
     with engine.connect() as coordination:
@@ -88,7 +102,8 @@ def run_once(now=None):
                 queued=dispatch(db,lambda identifier,stage,mode:execute.apply_async(args=(identifier,),
                     queue=QUEUES[stage],priority=8 if mode=='historical' else 0),scope=settings.pipeline_dispatch_scope)
                 monitored=run_monitoring_tick(db,now or datetime.now(UTC))
-                return {'status':'running','recovered':recovered,'scheduled':scheduled,'reconstructed':reconstructed,'queued':queued,'monitoring_runs':monitored}
+                maintained=run_event_maintenance_tick(db,now or datetime.now(UTC))
+                return {'status':'running','recovered':recovered,'scheduled':scheduled,'reconstructed':reconstructed,'queued':queued,'monitoring_runs':monitored,'event_maintenance':maintained}
         finally:
             if pg: coordination.execute(text("SELECT pg_advisory_unlock(hashtext('pipeline-restoration'))"))
 
