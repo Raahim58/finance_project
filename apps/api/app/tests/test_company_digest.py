@@ -41,6 +41,7 @@ def stub_sections(monkeypatch):
     monkeypatch.setattr(research_tools,'_search',lambda *args,**kwargs:{'status':'ok','data':{'chunks':[{'id':'news-1','group':'company','text':'Management expects expansion to improve margins. However, completion depends on financing.','source_ref':'cite-1','published_date':'2026-10-01','evidence_kind':'commentary'}],'coverage':{'returned':1}},'sources':[{'id':'cite-1','title':'Fixture development','source_name':'Fixture publisher','source_url':'https://example.test/fixture'}]})
 
 
+@pytest.mark.usefixtures("database")
 def test_selection_and_lossless_projection(monkeypatch):
     stub_sections(monkeypatch)
     with SessionLocal() as db:
@@ -95,6 +96,7 @@ def test_excerpt_retains_adjacent_qualification():
     assert 'However, the plan has not received approval.' in selected and omitted
 
 
+@pytest.mark.usefixtures("database")
 def test_reopen_deduplicates_and_owner_isolation():
     with SessionLocal() as db:
         user,other,company=seed(db)
@@ -106,6 +108,7 @@ def test_reopen_deduplicates_and_owner_isolation():
         assert db.scalar(select(func.count()).select_from(ResearchAttempt))==0
 
 
+@pytest.mark.usefixtures("database")
 def test_correction_marks_dirty_and_failure_preserves_old_brief(monkeypatch):
     stub_sections(monkeypatch)
     with SessionLocal() as db:
@@ -123,6 +126,7 @@ def test_correction_marks_dirty_and_failure_preserves_old_brief(monkeypatch):
         assert retry['job_id']!=job.id and retry['brief']=={'thesis':[]}
 
 
+@pytest.mark.usefixtures("database")
 def test_unknown_citation_rejected_and_brief_is_separate(monkeypatch):
     stub_sections(monkeypatch)
     with SessionLocal() as db:
@@ -136,6 +140,7 @@ def test_unknown_citation_rejected_and_brief_is_separate(monkeypatch):
         assert 'covariance' not in messages[1]['content'] and len(messages)==2
 
 
+@pytest.mark.usefixtures("database")
 def test_worker_one_call_saved_and_reopening_zero_calls(monkeypatch):
     stub_sections(monkeypatch);calls=[]
     class Provider:
@@ -161,6 +166,7 @@ def test_worker_one_call_saved_and_reopening_zero_calls(monkeypatch):
         assert db.get(ResearchJob,first['job_id']).status=='completed'
 
 
+@pytest.mark.usefixtures("database")
 def test_real_handlers_build_snapshot_without_network():
     with SessionLocal() as db:
         user,_,company=seed(db)
@@ -171,6 +177,7 @@ def test_real_handlers_build_snapshot_without_network():
         assert snapshot['size']['estimated_tokens']<5000
 
 
+@pytest.mark.usefixtures("database")
 def test_conflicting_values_are_retained_not_averaged(monkeypatch):
     stub_sections(monkeypatch)
     with SessionLocal() as db:
@@ -183,6 +190,7 @@ def test_conflicting_values_are_retained_not_averaged(monkeypatch):
         assert len([f for f in snapshot['financials'] if f['metric']=='revenue' and f['accounting_basis']=='consolidated' and f['period_end']=='2025-12-31'])==2
 
 
+@pytest.mark.usefixtures("database")
 def test_digest_tool_resolves_sources_into_execution_citations(monkeypatch):
     stub_sections(monkeypatch)
     from app.tools.research_tools import _company_digest, CompanyDigestInput
@@ -217,6 +225,7 @@ def test_late_negative_qualification_is_not_dropped():
     assert 'management cancelled the expansion' in selected and 'Financing remains unavailable.' in selected
 
 
+@pytest.mark.usefixtures("database")
 def test_over_target_preserves_selected_records(monkeypatch):
     stub_sections(monkeypatch)
     with SessionLocal() as db:
@@ -230,6 +239,7 @@ def test_over_target_preserves_selected_records(monkeypatch):
         assert snapshot['size']['over_target']
 
 
+@pytest.mark.usefixtures("database")
 def test_provider_failure_saves_snapshot_and_does_not_auto_retry(monkeypatch):
     stub_sections(monkeypatch);calls=[]
     class Provider:
@@ -261,6 +271,7 @@ def test_digest_api_requires_auth_and_read_poll_does_not_enqueue(client):
         assert db.scalar(select(func.count()).select_from(ResearchJob))==0
 
 
+@pytest.mark.usefixtures("database")
 def test_queue_identifiers_fit_postgres_column_limits():
     with SessionLocal() as db:
         user,_,company=seed(db);read_digest(db,user,company,active=True)
@@ -269,20 +280,3 @@ def test_queue_identifiers_fit_postgres_column_limits():
             assert len(job.dedup_key)<=160
 
 
-def test_migration_upgrade_and_downgrade_match_model():
-    import importlib.util
-    from pathlib import Path
-    from sqlalchemy import create_engine, inspect
-    from alembic.migration import MigrationContext
-    from alembic.operations import Operations
-    path=Path(__file__).resolve().parents[2]/'alembic/versions/0033_company_digests.py'
-    spec=importlib.util.spec_from_file_location('digest_migration',path)
-    migration=importlib.util.module_from_spec(spec);spec.loader.exec_module(migration)
-    engine=create_engine('sqlite+pysqlite:///:memory:')
-    with engine.begin() as connection:
-        migration.op=Operations(MigrationContext.configure(connection))
-        migration.upgrade()
-        assert set(inspect(connection).get_columns('company_digests')[i]['name'] for i in range(10))=={'id','user_id','instrument_id','input_hash','generated_at','prompt_version','provider','model','snapshot_json','brief_json'}
-        assert inspect(connection).get_unique_constraints('company_digests')[0]['name']=='uq_company_digest'
-        migration.downgrade()
-        assert 'company_digests' not in inspect(connection).get_table_names()

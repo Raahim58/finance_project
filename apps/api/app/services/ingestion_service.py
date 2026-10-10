@@ -12,9 +12,6 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.document import Document
 from app.models.workstation import (
-    Event,
-    EventEntityLink,
-    EventSource,
     IngestionRun,
     Instrument,
     FinancialFact,
@@ -59,7 +56,7 @@ def refresh_provider(db: Session, provider: str, run_key: str | None = None):
         return run
     run_id = run.id
     try:
-        if normalized in {"mock", "dps", "yahoo", "auto", "psxdata"}:
+        if normalized in {"mock", "dps"}:
             market_run = run_market_data_cycle(db, normalized)
             if market_run.status == "failed":
                 raise RuntimeError(market_run.message or f"{normalized} market refresh failed")
@@ -206,32 +203,6 @@ def _refresh_psx_financials(db: Session, symbols: list[str] | None = None, limit
     return {"attempted": attempted, "accepted": accepted, "rejected": rejected, "latest_observation_at": datetime.combine(latest_date, datetime.min.time(), tzinfo=UTC) if latest_date else None, "diagnostics": {"errors": errors}}
 
 
-def refresh_company_research(db: Session, instrument_id: str, limit: int = 5) -> dict[str, object]:
-    instrument = db.get(Instrument, instrument_id)
-    if instrument is None:
-        raise HTTPException(status_code=404, detail="Instrument not found")
-    key = f"{instrument.symbol}:{date.today().isoformat()}"
-    existing = db.scalar(select(IngestionRun).where(IngestionRun.job_key == "company-research-refresh", IngestionRun.run_key == key))
-    if existing and existing.status == "completed":
-        return {"run_id": existing.id, "symbol": instrument.symbol, "status": existing.status, "attempted": existing.attempted_count, "accepted": existing.accepted_count, "rejected": existing.rejected_count, "idempotent_reuse": True}
-    run = existing or IngestionRun(job_key="company-research-refresh", run_key=key, provider="psx_financials", status="running")
-    if existing:
-        run.status = "running"; run.retry_count += 1; run.error_class = None; run.error_message = None; run.finished_at = None
-    else:
-        db.add(run)
-    db.commit(); db.refresh(run)
-    try:
-        result = _refresh_psx_financials(db, [instrument.symbol], limit)
-        run = db.get(IngestionRun, run.id)
-        run.attempted_count = result["attempted"]; run.accepted_count = result["accepted"]; run.rejected_count = result["rejected"]
-        run.status = "completed"; run.finished_at = datetime.now(UTC)
-        db.commit()
-    except Exception as exc:
-        db.rollback(); run = db.get(IngestionRun, run.id)
-        run.status = "failed"; run.error_class = type(exc).__name__; run.error_message = str(exc)[:2000]; run.finished_at = datetime.now(UTC); db.commit()
-    return {"run_id": run.id, "symbol": instrument.symbol, "status": run.status, "attempted": run.attempted_count, "accepted": run.accepted_count, "rejected": run.rejected_count, "idempotent_reuse": False}
-
-
 def _refresh_mettis(db: Session) -> dict[str, object]:
     from app.ingestion.evidence_catalog import build_pass1_registry
     from app.services.evidence_pipeline import run_source_once
@@ -306,8 +277,8 @@ def run_historical_backfill(
 ) -> IngestionRun:
     normalized_provider = provider_name.strip().lower()
     normalized_symbols = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
-    if normalized_provider not in {"dps", "yahoo", "psxdata", "auto"}:
-        raise HTTPException(status_code=422, detail="Historical backfill provider must be dps, yahoo, psxdata, or auto")
+    if normalized_provider not in {"dps"}:
+        raise HTTPException(status_code=422, detail="Historical backfill provider must be dps")
     if not normalized_symbols:
         raise HTTPException(status_code=422, detail="At least one symbol is required")
     key = run_key or sha256(f"{normalized_provider}:{','.join(normalized_symbols)}:{start}:{end}".encode()).hexdigest()[:32]
@@ -364,22 +335,3 @@ def run_historical_backfill(
     return run
 
 
-def bootstrap_next_market_history(db: Session) -> IngestionRun | None:
-    if not settings.market_history_bootstrap_enabled or settings.market_data_mode in {"mock", "vendor"}:
-        return None
-    end = date.today()
-    start = end - timedelta(days=settings.market_history_years * 366)
-    minimum_rows = int(settings.market_history_years * 252 * 0.80)
-    from app.services.screening_service import deep_instrument_ids
-    for symbol in db.scalars(select(Instrument.symbol).where(Instrument.id.in_(deep_instrument_ids(db)))):
-        count = len(price_series(db, symbol, start, end))
-        if count < minimum_rows:
-            return run_historical_backfill(
-                db,
-                provider_name="auto" if settings.market_data_mode == "auto" else settings.market_data_mode,
-                symbols=[symbol],
-                start=start,
-                end=end,
-                run_key=f"bootstrap:{symbol}:{start}:{end}",
-            )
-    return None

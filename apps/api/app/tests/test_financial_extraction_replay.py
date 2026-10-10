@@ -7,6 +7,9 @@ from app.models.document import Document
 from app.models.workstation import FinancialFact, Instrument
 from app.providers.fundamentals.extraction import FinancialPage, extract_facts
 from app.services.financial_extraction_replay import save_extracted_facts
+import pytest
+
+pytestmark = pytest.mark.usefixtures("database")
 
 
 def test_reextract_preserves_original_amount_and_promotes_normalized_replacement():

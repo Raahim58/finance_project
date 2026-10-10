@@ -11,6 +11,9 @@ from app.core.config import settings
 from app.services.canonical_market_service import latest_price, price_series
 from app.services.market_ingestion import persist_market_data
 from app.services.market_providers import LatestPriceRow
+import pytest
+
+pytestmark = pytest.mark.usefixtures("database")
 
 
 def _row(source_url: str, close: str = "101", high: str = "102") -> LatestPriceRow:

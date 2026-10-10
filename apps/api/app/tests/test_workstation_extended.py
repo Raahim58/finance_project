@@ -9,11 +9,15 @@ from app.models.market import MarketPrice
 from app.models.workstation import AllocationSet, FinancialFact, Instrument, InvestorFinancialProfileVersion, MacroObservation, MonitoringRule, MonitoringRun, OptimizerRun, PortfolioIPSVersion, Recommendation, ScenarioRun
 from app.seed.demo import seed_workstation
 from app.services.market_ingestion import generate_mock_market_data
+import pytest
+from app.tests.support import portfolios as ledger
+from app.tests.support.users import signup_user
+
+pytestmark = pytest.mark.usefixtures("database")
 
 
 def auth(client, email="extended@example.com"):
-    token = client.post("/auth/signup", json={"email": email, "password": "password123"}).json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+    return signup_user(client, email)
 
 
 def portfolio(client, headers):
@@ -27,11 +31,11 @@ def test_cash_ledger_reversal_and_position_projection(client):
     assert deposit.status_code == 201
     buy = client.post(f"/portfolios/{portfolio_id}/transactions", headers=headers, json={"symbol": "MEBL", "transaction_type": "buy", "quantity": "10", "price": "200", "amount": "2000", "fees": "10", "taxes": "5", "transaction_date": "2026-08-07"})
     assert buy.status_code == 201
-    assert client.get(f"/portfolios/{portfolio_id}/positions", headers=headers).json()[0]["quantity"] == "10.000000"
-    assert Decimal(client.get(f"/portfolios/{portfolio_id}/cash", headers=headers).json()["balance"]) == Decimal("7985.0000")
-    assert client.delete(f"/portfolios/transactions/{buy.json()['id']}", headers=headers).status_code == 204
-    assert client.get(f"/portfolios/{portfolio_id}/positions", headers=headers).json() == []
-    assert Decimal(client.get(f"/portfolios/{portfolio_id}/cash", headers=headers).json()["balance"]) == Decimal("10000.0000")
+    assert ledger.positions(client, headers, portfolio_id)[0]["quantity"] == "10.000000"
+    assert Decimal(ledger.cash(client, headers, portfolio_id)["balance"]) == Decimal("7985.0000")
+    ledger.delete_transaction(client, headers, buy.json()["id"])
+    assert ledger.positions(client, headers, portfolio_id) == []
+    assert Decimal(ledger.cash(client, headers, portfolio_id)["balance"]) == Decimal("10000.0000")
 
 
 def test_ips_allocations_lifecycle_and_monitoring_are_owned(client):
@@ -46,7 +50,7 @@ def test_ips_allocations_lifecycle_and_monitoring_are_owned(client):
     duplicate = client.post(f"/portfolios/{portfolio_id}/duplicate", headers=headers, json={"name": "Copy", "include_positions": False})
     assert duplicate.status_code == 201 and duplicate.json()["selected_ips_version_id"]
     assert client.post(f"/portfolios/{portfolio_id}/archive", headers=headers).json()["archived_at"]
-    assert client.post(f"/portfolios/{portfolio_id}/restore", headers=headers).json()["archived_at"] is None
+    assert ledger.restore(client, headers, portfolio_id)["archived_at"] is None
     rule = client.post(f"/portfolios/{portfolio_id}/monitoring/rules", headers=headers, json={"rule_type": "concentration", "threshold": {"maximum": 0.5}})
     assert rule.status_code == 201
     first = client.post(f"/monitoring/runs/{portfolio_id}", headers=headers).json()

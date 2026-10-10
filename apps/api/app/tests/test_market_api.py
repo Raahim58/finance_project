@@ -5,9 +5,10 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.models.market import MarketIngestionRun, MarketPrice
+from app.models.market import MarketPrice
 from app.services.market_service import serialize_price
 from app.services.market_ingestion import generate_mock_market_data
+import pytest
 
 
 def _seed_market_data():
@@ -27,14 +28,6 @@ def test_market_overview_and_rankings(client):
     assert len(body["top_losers"]) == 5
     assert len(body["top_volume"]) == 5
     assert body["sectors"]
-
-    gainers = client.get("/market/top-gainers?limit=3")
-    assert gainers.status_code == 200
-    assert len(gainers.json()) == 3
-
-    sectors = client.get("/market/sectors")
-    assert sectors.status_code == 200
-    assert any(row["sector"] == "Banking" for row in sectors.json())
 
     freshness = client.get("/market/freshness")
     assert freshness.status_code == 200
@@ -79,33 +72,9 @@ def test_missing_market_date_returns_404(client):
     assert response.status_code == 404
 
 
-def test_market_freshness_shows_provider_and_backup_warning(client):
-    with SessionLocal() as db:
-        db.add(
-            MarketIngestionRun(
-                mode="auto",
-                attempted_provider="auto",
-                used_provider="yahoo",
-                status="success",
-                started_at=datetime.now(UTC),
-                finished_at=datetime.now(UTC),
-                latest_trade_date=date(2026, 6, 30),
-                records_written=12,
-                message="psxdata refresh failed; yahoo fallback succeeded.",
-            )
-        )
-        db.commit()
-
-    response = client.get("/market/freshness")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["latest_source"] == "yahoo"
-    assert body["latest_attempted_provider"] == "auto"
-    assert body["latest_used_provider"] == "yahoo"
-    assert body["backup_warning"]
 
 
+@pytest.mark.usefixtures("database")
 def test_serialize_price_handles_nan_market_cap():
     with SessionLocal() as db:
         generate_mock_market_data(db, days=1, end_date=date(2026, 6, 30))

@@ -7,6 +7,7 @@ from app.db.session import SessionLocal
 from app.models.evidence import DiscoveryCandidate, EvidenceSourceState
 from app.providers.evidence.briefing_site import BASE, BriefingNewsSource
 from app.services.evidence_operations import discover_stage
+import pytest
 
 
 def feed(count=8):
@@ -81,6 +82,7 @@ def test_empty_and_zero_allowance_do_not_emit_candidates():
     assert len(adapter(feed(60)).discover_since({}, 100).candidates) == 50
 
 
+@pytest.mark.usefixtures("database")
 def test_discovery_stage_persists_rotation_without_increasing_slot_limit(monkeypatch):
     from app.core.config import settings
     monkeypatch.setattr(settings, 'pipeline_enabled', True)

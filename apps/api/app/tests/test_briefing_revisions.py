@@ -10,6 +10,9 @@ from app.models.document import Citation, Document
 from app.models.workstation import FinancialFact, Instrument
 from app.services.pipeline.briefing import URL, capture, read
 from app.services.rag_service import ParsedPage, create_document_from_pages
+import pytest
+
+pytestmark = pytest.mark.usefixtures("database")
 
 
 def payload(generated='2026-10-07T09:00:00+05:00', *, reason='Synthetic original interpretation'):

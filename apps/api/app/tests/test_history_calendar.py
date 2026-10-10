@@ -4,6 +4,9 @@ from types import SimpleNamespace
 from app.db.session import SessionLocal
 from app.services.ingestion_service import run_historical_backfill
 from app.services.trading_calendar_service import sessions_between, upsert_calendar_day
+import pytest
+
+pytestmark = pytest.mark.usefixtures("database")
 
 
 def test_explicit_psx_closure_overrides_weekday_assumption():

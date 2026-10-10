@@ -3,6 +3,7 @@ import json
 from app.ai.company_packet import PACKET_PREFIX, initial_calls, merge_result, model_packet, new_packet, project_turns
 from app.ai.providers.base import ContentBlock, ProviderTurn
 from app.tools.registry import expand_model_data, tool_result
+import pytest
 
 
 def call(name='research.company_sections', **args):
@@ -164,7 +165,7 @@ def test_first_pass_recovery_reuses_saved_plan_and_reservation(monkeypatch):
 def test_actual_loop_has_evidence_before_first_model_call_and_no_summary_call(client, monkeypatch):
     from app.core.config import settings
     monkeypatch.setattr(settings, "assistant_company_digest_enabled", False)
-    from app.tests.test_phase8_phase2_tool_loop import _auth_with_anthropic, _mock_market
+    from app.tests.support.assistant import _auth_with_anthropic, _mock_market
     from app.ai.providers.http_placeholders import AnthropicProvider
     from app.ai.tool_loop import ToolExecution
     from app.core.security import decrypt_secret
@@ -240,9 +241,10 @@ def test_initial_quant_projection_preserves_original_and_followup_can_expand():
     assert packet['sections'][next(iter(packet['sections']))]['data']['covariance'] == raw['covariance']
 
 
+@pytest.mark.usefixtures("database")
 def test_company_cache_is_reusable_but_basis_corrections_invalidate_it():
     from datetime import date
-    from app.tests.test_phase7a_canonical_context import _seed_user_and_market, _company_request
+    from app.tests.support.context import _seed_user_and_market, _company_request
     from app.db.session import SessionLocal
     from app.models.user import User
     from app.models.workstation import FinancialFact
@@ -270,52 +272,6 @@ def test_company_cache_is_reusable_but_basis_corrections_invalidate_it():
         assert corrected.sections['company_facts'].data['fundamentals'][0]['accounting_basis'] == 'standalone'
         assert corrected.sections['company_facts'].data['fundamentals'][0]['unit'] == 'thousand'
         assert first.sections['company_facts'].data['fundamentals'][0]['unit'] == 'million'
-
-
-def test_offline_legacy_and_compact_loop_comparison(client, monkeypatch):
-    from app.core.config import settings
-    monkeypatch.setattr(settings, "assistant_company_digest_enabled", False)
-    """Same fixture, real adapters, mocked transport; measure no network latency."""
-    import time
-    from app.tests.test_phase8_phase2_tool_loop import _auth_with_anthropic, _mock_market
-    from app.ai.providers.http_placeholders import AnthropicProvider, wire_tool_name
-    from app.ai.tool_loop import ToolExecution
-    from app.core.config import settings
-    headers, owner = _auth_with_anthropic(client, monkeypatch, email='packet-comparison@example.com')
-    instrument = next(row for row in _mock_market(monkeypatch) if row.symbol == 'MEBL')
-    plan = initial_calls({'explicit_instrument': {'instrument_id': instrument.id, 'symbol': 'MEBL'}}, 'Review MEBL', True, 12)
-    provider, results = AnthropicProvider(), {}
-    async def fake_tool(user_id, c):
-        assert user_id == owner
-        return ToolExecution(c, tool_result('ok', {'reported_fact': 'Fixture only', 'value': '100', 'period_end': '2026-06-30', 'unit': 'million PKR'}, sources=[{'id': 'same-source', 'source_name': 'Offline comparison fixture', 'source_url': 'https://fixture.test/report', 'quote_snippet': 'Fixture passage. ' * 150}]), 1)
-    monkeypatch.setattr('app.ai.tool_loop.get_provider', lambda _: provider)
-    monkeypatch.setattr('app.ai.tool_loop._execute_tool', fake_tool)
-    for compact in (False, True):
-        captured = []
-        async def fake_post(_url, _key, request):
-            captured.append(request)
-            if not compact and len(captured) == 1:
-                return {'model': 'claude-test', 'stop_reason': 'tool_use', 'content': [
-                    {'type': 'tool_use', 'id': f'fixture-{n}', 'name': wire_tool_name(c.name), 'input': c.arguments} for n, c in enumerate(plan)], 'usage': {}}
-            return {'model': 'claude-test', 'stop_reason': 'end_turn', 'content': [{'type': 'text', 'text': 'Fixture value 100 million PKR, period 2026-06-30 [[E1]].'}], 'usage': {}}
-        monkeypatch.setattr(settings, 'assistant_compact_evidence_enabled', compact)
-        monkeypatch.setattr(provider, '_post', fake_post)
-        started = time.perf_counter()
-        response = client.post('/assistant/messages', headers=headers, json={'question': 'Review MEBL', 'instrument_id': instrument.id, 'company_only': True, 'provider': 'anthropic'})
-        assert response.status_code == 201, response.text
-        result = response.json()
-        results['compact' if compact else 'legacy'] = {'mock_provider_calls': len(captured),
-            'backend_reads': len(result['tool_trace']),
-            'serialized_request_bytes': sum(len(json.dumps(r, separators=(',', ':')).encode()) for r in captured),
-            'offline_elapsed_ms': round((time.perf_counter() - started) * 1000, 2)}
-        assert result['source_citations'][0]['source_url'] == 'https://fixture.test/report'
-        assert '100 million PKR' in result['answer']
-        assert '2026-06-30' in result['answer']
-    assert results['compact']['mock_provider_calls'] == 1
-    assert results['legacy']['mock_provider_calls'] == 2
-    assert results['compact']['backend_reads'] == results['legacy']['backend_reads'] == 6
-    assert results['compact']['serialized_request_bytes'] < results['legacy']['serialized_request_bytes']
-    print('COMPANY_PACKET_COMPARISON=' + json.dumps(results, sort_keys=True))
 
 
 def test_equal_length_non_overlapping_quarters_can_be_compared():

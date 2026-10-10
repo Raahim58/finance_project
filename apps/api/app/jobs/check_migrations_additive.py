@@ -13,6 +13,7 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
+from app.db.migration_history import require_supported_revision
 
 BREAKING = re.compile(
     r"op\.(drop_table|drop_column|drop_index|drop_constraint|rename_table|alter_column|"
@@ -26,6 +27,7 @@ def breaking_ops(source: str) -> list[str]:
 
 
 def pending_breaking(script: ScriptDirectory, current: str | None) -> list[tuple[str, str]]:
+    require_supported_revision(script, current)
     found = []
     for revision in script.iterate_revisions("heads", current or "base"):
         if current and revision.revision == current:
@@ -46,7 +48,11 @@ def main() -> int:
     script = load_script()
     with engine.connect() as connection:
         current = MigrationContext.configure(connection).get_current_revision()
-    offenders = pending_breaking(script, current)
+    try:
+        offenders = pending_breaking(script, current)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     if not offenders:
         print(f"pending migrations are additive (current={current})")
         return 0

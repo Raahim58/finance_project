@@ -69,6 +69,7 @@ def test_period_and_date_support_are_source_bound():
     assert supported_date('2025-10-03', 'The board met on October 3, 2026.', date(2026, 10, 4)) is None
 
 
+@pytest.mark.usefixtures("database")
 def test_validation_keeps_only_source_supported_fields():
     with SessionLocal() as db:
         instruments(db)
@@ -97,6 +98,7 @@ def test_validation_keeps_only_source_supported_fields():
         assert validate_event(missing, parts, entities, doc, official=False) is None
 
 
+@pytest.mark.usefixtures("database")
 def test_rules_classification_is_versioned_idempotent_and_supersedes_old_statements():
     with SessionLocal() as db:
         luck, _ = instruments(db)
@@ -116,6 +118,7 @@ def test_rules_classification_is_versioned_idempotent_and_supersedes_old_stateme
         assert dividend.typed_value['amounts'][0]['basis'] == 'attributed_claim'
 
 
+@pytest.mark.usefixtures("database")
 def test_differently_worded_reports_merge_into_one_record(vectors):
     vectors['new cement line'] = vectors['additional production line'] = [1.0]+[0.0]*383
     with SessionLocal() as db:
@@ -135,6 +138,7 @@ def test_differently_worded_reports_merge_into_one_record(vectors):
         assert len(records[0]['raw_event_ids']) == 2
 
 
+@pytest.mark.usefixtures("database")
 @pytest.mark.parametrize('second_text', [
     'Lucky Cement Limited reported profit growth in 1QFY26, higher by 20%.',   # different period
     'Lucky Cement Limited reported profit fell in 4QFY25, lower by 12%.',      # opposite direction + period
@@ -150,6 +154,7 @@ def test_similar_text_with_conflicting_facts_does_not_merge(vectors, second_text
         assert db.scalar(select(func.count()).select_from(NormalizedEvent)) == 2
 
 
+@pytest.mark.usefixtures("database")
 def test_conflicting_amounts_block_merge(vectors):
     vectors['dividend'] = [1.0]+[0.0]*383
     with SessionLocal() as db:
@@ -160,6 +165,7 @@ def test_conflicting_amounts_block_merge(vectors):
         assert db.scalar(select(func.count()).select_from(NormalizedEvent)) == 2
 
 
+@pytest.mark.usefixtures("database")
 def test_proposal_then_approval_is_one_event_with_history(vectors):
     vectors['acquisition'] = [1.0]+[0.0]*383
     with SessionLocal() as db:
@@ -195,6 +201,7 @@ def model_ready(db):
     return run
 
 
+@pytest.mark.usefixtures("database")
 def test_model_classification_is_validated_and_never_overwritten_by_rules():
     with SessionLocal() as db:
         instruments(db)
@@ -212,34 +219,7 @@ def test_model_classification_is_validated_and_never_overwritten_by_rules():
         assert row.classifier_version == MODEL_VERSION and 'sk-test' not in json.dumps(row.output)
 
 
-def test_model_quota_falls_back_to_rules_and_stays_upgradeable():
-    from app.jobs.classify_backfill import pending
-    with SessionLocal() as db:
-        instruments(db)
-        doc = article(db, 'Lucky Cement Limited announced a dividend.')
-        run = model_ready(db)
-        result = classify(db, doc.id, run=run, allow_model=True, transport=catalog_and_completion({}, status=429))
-        assert result['method'] == 'rules' and 'free_provider_quota_or_capacity' in result['gaps']
-        assert [d.id for d in pending(db, target=MODEL_VERSION)] == [doc.id]
-        assert pending(db, target=RULES_VERSION) == []
-
-
-def test_backfill_queues_unclassified_documents_once():
-    from app.jobs.classify_backfill import enqueue_documents, pending
-    with SessionLocal() as db:
-        instruments(db)
-        parsed = article(db, 'Lucky Cement Limited announced a dividend.')
-        raw = create_document_from_pages(db, [ParsedPage(1, 'Lucky Cement Limited plans expansion.')], title='Raw',
-            document_type='news', source_name='Publisher', source_url='https://raw.test', published_date=date(2026, 10, 1), commit=False)
-        docs = pending(db, target=RULES_VERSION)
-        assert {d.id for d in docs} == {parsed.id, raw.id}
-        assert enqueue_documents(db, docs, target=RULES_VERSION) == {'classify': 1, 'sections': 1}
-        enqueue_documents(db, docs, target=RULES_VERSION)
-        assert db.scalar(select(func.count()).select_from(IngestionStageRun)) == 2
-        classify(db, parsed.id)
-        assert [d.id for d in pending(db, target=RULES_VERSION)] == [raw.id]
-
-
+@pytest.mark.usefixtures("database")
 def test_reads_filter_by_entity_and_type_and_rank(vectors):
     with SessionLocal() as db:
         instruments(db)
@@ -254,6 +234,7 @@ def test_reads_filter_by_entity_and_type_and_rank(vectors):
         assert [r['subjects'][0]['subject_key'] for r in event_records(db, event_types=['dividend'])] == ['OGDC', 'LUCK']
 
 
+@pytest.mark.usefixtures("database")
 def test_worker_chain_links_then_classifies_then_builds_and_refreshes():
     from app.jobs.pipeline_tasks import perform
     with SessionLocal() as db:

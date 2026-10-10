@@ -4,9 +4,8 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 import json
 from random import Random
-from types import SimpleNamespace
 
-from sqlalchemy import delete, func, insert, select, text
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy.orm import Session
 
 from app.models.market import (
@@ -367,60 +366,6 @@ def generate_mock_market_data(db: Session, days: int = 365, end_date: date | Non
     stats_count = compute_market_stats(db, source="mock")
     db.commit()
     return {"companies": len(companies), "prices": len(price_rows), "derived_stats": stats_count}
-
-
-def cleanup_invalid_market_prices(db: Session) -> int:
-    rows = db.execute(
-        text(
-            """
-            SELECT id, open, high, low, close, previous_close, change, change_percent, volume, value, market_cap
-            FROM market_prices
-            """
-        )
-    ).mappings().all()
-    updates = 0
-    for price in rows:
-        cleaned = sanitize_market_price_values(SimpleNamespace(**price))
-        changed = any(price[field] != cleaned[field] for field in cleaned)
-        if changed:
-            db.execute(
-                text(
-                    """
-                    UPDATE market_prices
-                    SET open = :open,
-                        high = :high,
-                        low = :low,
-                        close = :close,
-                        previous_close = :previous_close,
-                        change = :change,
-                        change_percent = :change_percent,
-                        volume = :volume,
-                        value = :value,
-                        market_cap = :market_cap,
-                        ingested_at = :ingested_at
-                    WHERE id = :id
-                    """
-                ),
-                {
-                    "id": price["id"],
-                    "open": str(cleaned["open"]),
-                    "high": str(cleaned["high"]),
-                    "low": str(cleaned["low"]),
-                    "close": str(cleaned["close"]),
-                    "previous_close": str(cleaned["previous_close"]),
-                    "change": str(cleaned["change"]),
-                    "change_percent": str(cleaned["change_percent"]),
-                    "volume": cleaned["volume"],
-                    "value": str(cleaned["value"]),
-                    "market_cap": None if cleaned["market_cap"] is None else str(cleaned["market_cap"]),
-                    "ingested_at": datetime.now(UTC),
-                },
-            )
-            updates += 1
-
-    if updates:
-        db.commit()
-    return updates
 
 
 def persist_market_data(db: Session, *, latest_prices: list[LatestPriceRow], source: str) -> dict[str, int | date | None]:

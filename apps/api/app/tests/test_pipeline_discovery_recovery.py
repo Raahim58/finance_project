@@ -20,6 +20,8 @@ from app.services.pipeline.parsing import sections
 from app.services.pipeline.statements import extract
 from app.services.rag_service import ParsedPage, create_document_from_pages
 
+pytestmark = pytest.mark.usefixtures("database")
+
 
 class DiscoveryFixture:
     key = 'mettis'

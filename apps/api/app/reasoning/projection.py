@@ -5,7 +5,6 @@ import hashlib
 import json
 import math
 import re
-from dataclasses import dataclass
 
 VERSION = "phase8-projection-1"
 OMIT = {"allowed_numeric_tokens", "deterministic_fallback", "numeric_allowlist",
@@ -66,35 +65,7 @@ def project(value: object) -> dict[str, object]:
                        "omitted_evidence": 0}}
 
 
-def bounded_history(history: list[dict[str, str]], ceiling: int = 2000):
-    result = []
-    used = 0
-    for message in reversed(history):
-        size = estimate_tokens(message)
-        if used + size > ceiling:
-            break
-        result.append(message)
-        used += size
-    return list(reversed(result))
-
-
 class BudgetExceeded(ValueError):
     pass
 
 
-@dataclass
-class InferenceBudget:
-    per_call: int = 20_000
-    execution: int = 48_000
-    spent: int = 0
-    output_reserve: int = 4096
-    recovery_reserve: int = 8000
-
-    def reserve(self, messages: object, *, recovery: bool, provider_limit: int) -> int:
-        amount = estimate_tokens(messages)
-        limit = min(8000 if recovery else self.per_call, provider_limit - self.output_reserve)
-        remaining_reserve = 0 if recovery else self.recovery_reserve
-        if amount > limit or self.spent + amount + remaining_reserve > self.execution:
-            raise BudgetExceeded(f"Safe evidence compaction cannot fit: estimated input {amount}, call ceiling {limit}, execution remaining {self.execution - self.spent - remaining_reserve}")
-        self.spent += amount
-        return amount

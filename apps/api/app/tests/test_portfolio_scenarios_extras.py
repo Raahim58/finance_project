@@ -1,6 +1,6 @@
 import pytest
 
-from app.tests.test_workstation_api import seeded_portfolio, signup
+from app.tests.support.portfolios import seeded_portfolio, signup
 
 
 def test_scenario_run_extras_report_timestamp_shocks_and_volatility(client):

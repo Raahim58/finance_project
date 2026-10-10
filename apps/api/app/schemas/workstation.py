@@ -16,15 +16,6 @@ class ProfileVersionResponse(BaseModel):
     confirmed_at: datetime | None
 
 
-class RiskAssessment(BaseModel):
-    capacity: Literal["low", "moderate", "high"] | None = None
-    willingness: Literal["low", "moderate", "high"] | None = None
-    reconciled_tolerance: Literal["low", "moderate", "high"] | None = None
-    confirmed_tolerance: Literal["low", "moderate", "high"] | None = None
-    available: bool
-    diagnostics: list[str] = Field(default_factory=list)
-
-
 class DatedContribution(BaseModel):
     contribution_date: date
     amount: float = Field(gt=0)
@@ -74,30 +65,6 @@ class IPSVersionResponse(BaseModel):
     required_return: float | None
     required_return_analysis: dict[str, object] = Field(default_factory=dict)
     confirmed_at: datetime | None
-
-
-class RequiredReturnAnalysis(BaseModel):
-    available: bool
-    annual_rate: float | None = None
-    calculation_type: str | None = None
-    assumptions: dict[str, object] = Field(default_factory=dict)
-    diagnostics: list[str] = Field(default_factory=list)
-
-
-class MetricValue(BaseModel):
-    value: float | None
-    unit: Literal["decimal", "percentage_point", "ratio", "PKR", "days", "count"]
-    status: Literal["AVAILABLE", "NOT_EVALUATED"]
-    reason: str | None = None
-    sample_start: date | None = None
-    sample_end: date | None = None
-    data_cutoff: date | None = None
-    observations: int | None = None
-    annualization: int | None = None
-    return_basis: Literal["price", "total_return", "ledger_twr", "modeled_current_allocation"] | None = None
-    portfolio_basis: Literal["total_capital", "risky_sleeve"] | None = None
-    estimator: str | None = None
-    run_id: str | None = None
 
 
 class IPSComplianceResponse(BaseModel):

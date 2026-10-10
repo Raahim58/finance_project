@@ -32,7 +32,7 @@ Verification (from repository root):
 
 ```sh
 cd apps/api
-DATABASE_URL='sqlite+pysqlite:///:memory:' EMBEDDING_BACKEND=hash .venv/bin/python -m pytest app/tests/test_tool_registry.py app/tests/test_canonical_market.py app/tests/test_phase8_phase1_read_tools.py app/tests/test_phase8_phase2_tool_loop.py app/tests/test_phase8_revamp.py -q
+DATABASE_URL='sqlite+pysqlite:///:memory:' EMBEDDING_BACKEND=hash .venv/bin/python -m pytest app/tests/test_tool_registry.py app/tests/test_canonical_market.py app/tests/test_read_tool_contracts.py app/tests/test_company_read_tools.py app/tests/test_document_read_tools.py app/tests/test_allocation_verification_tools.py app/tests/test_tool_loop_*.py app/tests/test_assistant_execution.py app/tests/test_allocation_calculation.py app/tests/test_evidence_projection.py -q
 ```
 
 No new dependencies, seeds or database migration required. Deployment uses the existing API rebuild/restart workflow; these local changes are not yet deployed.

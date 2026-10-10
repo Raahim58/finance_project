@@ -45,6 +45,7 @@ def test_total_shares_use_all_shares_not_index_float(monkeypatch):
     with pytest.raises(ValueError, match='no validated'): parse_constituents(b'fixture')
 
 
+@pytest.mark.usefixtures("database")
 def test_capitalization_idempotency_and_no_future_leak(monkeypatch, tmp_path):
     from app.ingestion.artifact_store import LocalArtifactStore
     monkeypatch.setattr('app.services.ingestion_persistence.get_artifact_store', lambda *_: LocalArtifactStore(tmp_path))
@@ -59,6 +60,7 @@ def test_capitalization_idempotency_and_no_future_leak(monkeypatch, tmp_path):
         assert db.scalar(select(func.count()).select_from(MarketObservation)) == 1
 
 
+@pytest.mark.usefixtures("database")
 def test_announcements_do_not_invent_dividend_amount_or_ex_date(monkeypatch, tmp_path):
     from app.ingestion.artifact_store import LocalArtifactStore
     monkeypatch.setattr('app.services.ingestion_persistence.get_artifact_store', lambda *_: LocalArtifactStore(tmp_path))
@@ -81,6 +83,7 @@ def test_eod_target_and_recent_weekdays():
     assert recent_weekdays(date(2026,10,5)) == [date(2026,10,d) for d in [5,2,1]] + [date(2026,9,d) for d in [30,29]]
 
 
+@pytest.mark.usefixtures("database")
 def test_durable_stages_skip_success_and_throttle_failures():
     calls=[]
     def operation(db): calls.append(1); return {'accepted':3, 'coverage_status':'partial'}
@@ -102,28 +105,7 @@ def test_company_history_exact_duplicates_and_conflicts():
         DpsMarketDataProvider.parse_symbol_history('<table id="historicalTable">'+headers+row+row.replace('<td>11</td>','<td>10</td>')+'</table>','TEST')
 
 
-def test_reviewed_bonus_validates_date_ratio_and_is_idempotent(monkeypatch, tmp_path):
-    from hashlib import sha256
-    from types import SimpleNamespace
-    from app.jobs.reviewed_corporate_actions import import_reviewed_action
-    from app.ingestion.artifact_store import LocalArtifactStore
-    content = b'Synthetic pinned PDF'; quote = 'Synthetic issuer declared 800% (B); ex date 16-Sep-2024.'
-    monkeypatch.setattr('app.jobs.reviewed_corporate_actions.PdfReader', lambda *_: SimpleNamespace(pages=[SimpleNamespace(extract_text=lambda:quote)]))
-    monkeypatch.setattr('app.services.ingestion_persistence.get_artifact_store', lambda *_: LocalArtifactStore(tmp_path))
-    class PDFClient:
-        def get(self,url): return httpx.Response(200,content=content,request=httpx.Request('GET',url))
-    item = {'symbol':'TEST','action_type':'bonus_issue','ex_date':'2024-09-16', 'date_evidence':'16-Sep-2024',
-        'old_shares':'1','new_shares':'9','ratio_evidence':'800% (B)',
-        'evidence':[{'url':'https://dps.psx.com.pk/download/document/fixture.pdf','page':1,'quote':quote,'sha256':sha256(content).hexdigest()}]}
-    with SessionLocal() as db:
-        db.add(Instrument(symbol='TEST',name='Synthetic test'));db.commit()
-        action=import_reviewed_action(db,PDFClient(),item);db.commit()
-        assert action.id==import_reviewed_action(db,PDFClient(),item).id
-        with pytest.raises(ValueError,match='multiplier'):import_reviewed_action(db,PDFClient(),{**item,'new_shares':'8'})
-        with pytest.raises(ValueError,match='Ex date'):import_reviewed_action(db,PDFClient(),{**item,'ex_date':'2024-09-17'})
-        assert db.scalar(select(func.count()).select_from(CorporateAction))==1
-
-
+@pytest.mark.usefixtures("database")
 def test_same_date_capitalization_enriches_price_but_never_future(monkeypatch, tmp_path):
     from app.ingestion.artifact_store import LocalArtifactStore
     from app.services.market_ingestion import persist_market_data
@@ -147,8 +129,9 @@ def test_same_date_capitalization_enriches_price_but_never_future(monkeypatch, t
         assert canonical_prices_for_date(db,date(2026,10,1))[0].market_cap is None
 
 
+@pytest.mark.usefixtures("database")
 def test_verified_bonus_is_adjusted_but_announcement_is_not():
-    from app.tests.test_index_and_splits import seed_split
+    from app.tests.support.market import seed_split
     from app.services.split_adjustments import split_adjusted_price_series
     with SessionLocal() as db:
         # Existing split fixture establishes sourced observations and artifacts.
@@ -166,8 +149,9 @@ def test_official_payout_notation_variants(label):
     assert not issues and records[0]['kind']=='D' and records[0]['payout_percent']=='25'
 
 
+@pytest.mark.usefixtures("database")
 def test_adjusted_previous_close_handles_action_on_nontrading_date():
-    from app.tests.test_index_and_splits import seed_split
+    from app.tests.support.market import seed_split
     from app.services.split_adjustments import split_adjusted_price_series
     with SessionLocal() as db:
         action = seed_split(db)

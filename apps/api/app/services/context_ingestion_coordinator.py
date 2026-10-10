@@ -12,15 +12,9 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.jobs.evidence_tasks import targeted_refresh
-from app.jobs.phase2_tasks import (
-    broad_fundamentals,
-    dps_history,
-    financial_download_catalog,
-    financial_extract,
-)
 from app.models.document import Document
 from app.models.evidence import EvidenceRefreshRequest
+from app.models.pipeline import IngestionStageRun
 from app.models.intelligence_context import ContextDeficiencyRecord, ContextIngestionWork
 from app.models.workstation import (
     FinancialFact,
@@ -35,9 +29,9 @@ from app.services.context_deficiency_bridge import (
     IngestionRoute,
     TERMINAL_STATES,
 )
-from app.services.coverage_service import coverage, is_queueable, reserve_and_publish
+from app.services.coverage_service import coverage, is_queueable, reserve_and_enqueue
 from app.services.macro_schedule_service import enqueue_due_macro_refreshes
-from app.services.phase2_orchestration import incremental_catalog_dispatch_key
+from app.services.pipeline.runs import enqueue
 
 
 def _utc(value: datetime) -> datetime:
@@ -267,8 +261,13 @@ class DatabaseIngestionCoordinator:
             period_key = f"{year:04d}-{month:02d}"
             row = coverage(self.db, instrument.id, "price_history", period_key, "dps")
             if self.publish and is_queueable(row, now):
-                reserve_and_publish(
-                    self.db, row, dps_history, (instrument.symbol, year, month), now
+                reserve_and_enqueue(
+                    self.db,
+                    row,
+                    "history_prices",
+                    f"history_price:{instrument.id}:{date(year, month, 1)}",
+                    {"symbol": instrument.symbol, "year": year, "month": month},
+                    now,
                 )
             links.append({"kind": "coverage", "id": row.id})
         return links
@@ -277,48 +276,34 @@ class DatabaseIngestionCoordinator:
         links: list[dict[str, str]] = []
         broad = coverage(self.db, instrument.id, "standardized_fundamentals", "current", "dps")
         if self.publish and is_queueable(broad, now, refresh_after=timedelta(days=30)):
-            reserve_and_publish(self.db, broad, broad_fundamentals, (instrument.symbol,), now)
-        links.append({"kind": "coverage", "id": broad.id})
-        key = incremental_catalog_dispatch_key(now)
-        catalog = coverage(self.db, instrument.id, "report_catalog_dispatch", key, "psx_financials")
-        if self.publish and is_queueable(catalog, now):
-            reserve_and_publish(
+            reserve_and_enqueue(
                 self.db,
-                catalog,
-                financial_download_catalog,
-                (instrument.symbol, "incremental", now.year, key),
+                broad,
+                "broad_fundamentals",
+                f"broad_fundamentals:{instrument.id}",
+                {"symbol": instrument.symbol, "bucket": now.strftime("%Y-%m")},
                 now,
             )
-        links.append({"kind": "coverage", "id": catalog.id})
+        links.append({"kind": "coverage", "id": broad.id})
+        links.append(self._queue_reports_stage(instrument, now))
         return links
 
-    def _queue_evidence(self, instrument: Instrument, now: datetime) -> dict[str, str]:
-        request = EvidenceRefreshRequest(
-            requested_by_user_id=self.user_id,
-            request_type="targeted",
-            scope_key=f"symbol:{instrument.symbol}",
-            query_text=f'("{instrument.symbol}" OR "{instrument.name}") AND Pakistan',
-            source_keys_json='["gdelt"]',
-            status="queued",
-            priority_class="live",
-            max_candidates=25,
+    def _queue_reports_stage(self, instrument: Instrument, now: datetime) -> dict[str, str]:
+        """Official PSX reports and announcements for one issuer, via the pipeline outbox."""
+        run = enqueue(
+            self.db,
+            "reports",
+            f"reports:{instrument.id}",
+            {"symbol": instrument.symbol, "bucket": now.strftime("%Y-%m-%d")},
+            mode="live",
         )
-        self.db.add(request)
         self.db.commit()
-        if not self.publish:
-            return {"kind": "evidence_request", "id": request.id}
-        request.status = "running"
-        request.started_at = now
-        self.db.commit()
-        try:
-            targeted_refresh.apply_async(args=(request.id,), queue="evidence_discovery", priority=0)
-        except Exception as exc:
-            # The evidence scheduler reconstructs queued requests from Postgres.
-            request.status = "queued"
-            request.error_class = type(exc).__name__
-            request.error_message = str(exc)[:2000]
-            self.db.commit()
-        return {"kind": "evidence_request", "id": request.id}
+        return {"kind": "pipeline_run", "id": run.id}
+
+    def _queue_evidence(self, instrument: Instrument, now: datetime) -> dict[str, str]:
+        # Targeted news discovery has no pipeline stage; news arrives through the scheduled
+        # discovery sources. A per-issuer refresh covers the official reports/announcements.
+        return self._queue_reports_stage(instrument, now)
 
     def _aggregate(self, links: list[dict[str, str]], work: ContextIngestionWork) -> str:
         states = [self._link_state(link, work) for link in links]
@@ -391,8 +376,13 @@ class DatabaseIngestionCoordinator:
                 self.db, instrument.id, "financial_extract", document.id, "psx_financials"
             )
             if is_queueable(extraction, self.now()):
-                reserve_and_publish(
-                    self.db, extraction, financial_extract, (document.id,), self.now()
+                reserve_and_enqueue(
+                    self.db,
+                    extraction,
+                    "report_extract",
+                    f"document:{document.id}",
+                    {"document_id": document.id},
+                    self.now(),
                 )
             if extraction.id not in linked_ids:
                 links.append({"kind": "coverage", "id": extraction.id})
@@ -413,6 +403,13 @@ class DatabaseIngestionCoordinator:
                 return "partial"
             if row.status == "failed" and row.retry_count >= settings.phase2_max_retries:
                 return "failed"
+            return "running" if row.status == "running" else "queued"
+        if kind == "pipeline_run":
+            row = self.db.get(IngestionStageRun, link["id"])
+            if row is None or row.status in {"failed", "dead_letter"}:
+                return "failed"
+            if row.status == "completed":
+                return "succeeded"
             return "running" if row.status == "running" else "queued"
         if kind == "ingestion_run":
             row = self.db.get(IngestionRun, link["id"])

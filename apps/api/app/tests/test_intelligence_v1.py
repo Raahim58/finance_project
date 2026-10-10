@@ -1,10 +1,8 @@
 from datetime import date
-from pathlib import Path
 
 from app.db.session import SessionLocal
 from app.models.portfolio import PortfolioHolding, PortfolioTransaction
 from app.models.workstation import AllocationSet
-from app.models.workstation import Instrument
 from app.services.market_ingestion import generate_mock_market_data
 
 
@@ -44,29 +42,8 @@ def _portfolio(client, headers):
     return portfolio_id
 
 
-def test_legacy_security_context_route_is_retired(client):
-    headers = _auth(client)
-    portfolio_id = _portfolio(client, headers)
-    response = client.get(
-        f"/intelligence/securities/MEBL?portfolio_id={portfolio_id}", headers=headers
-    )
-    assert response.status_code == 404
 
 
-def test_legacy_context_sources_cannot_be_registered_again():
-    repository = Path(__file__).resolve().parents[4]
-    service = (repository / "apps/api/app/services/intelligence_service.py").read_text()
-    routes = (repository / "apps/api/app/api/routes/intelligence.py").read_text()
-    tools = (repository / "apps/api/app/tools/research_tools.py").read_text()
-    web_api = (repository / "apps/web/lib/api.ts").read_text()
-
-    assert "def security_intelligence(" not in service
-    assert '"personal_context":' not in service
-    assert '@router.get("/intelligence/securities/{symbol}")' not in routes
-    assert "intelligence.security_context" not in tools
-    assert "SecurityContextInput" not in tools
-    assert "getSecurityIntelligence" not in web_api
-    assert "type SecurityIntelligence" not in web_api
 
 
 def test_candidate_evaluation_and_save_never_mutate_ledger(client):

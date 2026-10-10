@@ -334,16 +334,6 @@ def _from_observation_parts(
     )
 
 
-def _from_observation(db: Session, observation: MarketObservation, symbol: str, capitalization_by_instrument=None) -> CanonicalPrice:
-    artifact = db.get(SourceArtifact, observation.artifact_id)
-    source = db.get(DataSource, artifact.data_source_id) if artifact else None
-    price = _from_observation_parts(observation, artifact, source, symbol)
-    if capitalization_by_instrument is None:
-        return _attach_capitalization(db, price)
-    snapshot = capitalization_by_instrument.get(price.instrument_id)
-    return replace(price,market_cap=Decimal(snapshot['market_cap']),capitalization=snapshot) if snapshot else price
-
-
 def _attach_capitalization(db, price):
     from app.services.dps_capitalization import capitalization
     snapshot = capitalization(db, price.instrument_id, price.trade_date)

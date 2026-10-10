@@ -37,7 +37,7 @@ export const ratioDefinitions=[
 export type RatioDefinition=typeof ratioDefinitions[number];
 export function ratioValue(research:CompanyResearch|null,key:string){
   // Never derive ratios or substitute screening estimates on the client.
-  return research?.derived_fundamentals.ratios?.[key];
+  return research?.derived_fundamentals?.ratios?.[key];
 }
 export function factGroup(key:string){
   if(["assets","current_assets","liabilities","current_liabilities","equity","debt","cash","inventory","receivables","short_term_investments"].includes(key))return "balance";

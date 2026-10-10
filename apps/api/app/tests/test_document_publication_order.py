@@ -3,6 +3,9 @@ from app.db.session import SessionLocal
 from app.models.document import Document
 from app.models.user import User
 from app.services.rag_service import list_documents
+import pytest
+
+pytestmark = pytest.mark.usefixtures("database")
 
 
 def test_publication_order_precedes_limit_and_retains_ownership():

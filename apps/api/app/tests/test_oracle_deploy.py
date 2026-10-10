@@ -22,14 +22,16 @@ def test_additive_migrations_pass_and_destructive_ones_are_flagged():
     assert breaking_ops("def upgrade():\n    op.create_table('t')\n\ndef downgrade():\n    op.drop_table('t')\n") == []
 
 
-def test_this_branch_routing_migration_is_additive_on_top_of_production_revision():
+def test_baseline_is_a_noop_at_its_retained_revision_and_rejects_older_databases():
     script = load_script()
-    assert pending_breaking(script, '0035_pipeline_text_index') == []
+    assert pending_breaking(script, '0039_ai_briefs') == []
+    with pytest.raises(RuntimeError, match="Do not stamp an older database"):
+        pending_breaking(script, '0035_pipeline_text_index')
 
 
 @pytest.fixture
 def stub(tmp_path):
-    """Fake docker/curl that log every call; behaviour is driven by env vars."""
+    """Stub external commands so rollout contracts also run on hosts without flock."""
     bindir, log = tmp_path / 'bin', tmp_path / 'calls.log'
     bindir.mkdir()
     docker = bindir / 'docker'
@@ -41,7 +43,9 @@ exit 0
 ''')
     curl = bindir / 'curl'
     curl.write_text('#!/usr/bin/env bash\necho "curl $*" >> "$STUB_LOG"\nexit 0\n')
-    for f in (docker, curl):
+    flock = bindir / 'flock'
+    flock.write_text('#!/usr/bin/env bash\nexit "${STUB_LOCK_BUSY:-0}"\n')
+    for f in (docker, curl, flock):
         f.chmod(0o755)
 
     def run(**extra):
@@ -95,3 +99,10 @@ def test_deploy_with_no_ingestion_running_is_a_plain_deploy(stub):
     result, calls = stub(STUB_RUNNING='')
     assert result.returncode == 0 and not [c for c in calls if ' stop ' in c]
     assert any('alembic upgrade head' in c for c in calls)
+
+
+def test_busy_deployment_lock_aborts_before_docker_commands(stub):
+    result, calls = stub(STUB_LOCK_BUSY='1')
+    assert result.returncode != 0
+    assert 'Another Oracle deployment is running.' in result.stderr
+    assert calls == []

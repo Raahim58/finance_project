@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("route_classifier_enabled")
+
 from app.ai.providers.base import ContentBlock, LLMProviderResult, ProviderTurn
 from app.ai.routing import Route, RouterInput, plan_initial_evidence, route_query
 from app.ai.routing.classifier import apply_tie_break, build_prompt, parse_label, tie_break
@@ -103,6 +105,7 @@ def test_loop_tiebreak_is_one_recorded_call_and_idempotent(monkeypatch):
     assert 'cement' not in json.dumps(checkpoint['route_tiebreak'])
 
 
+@pytest.mark.usefixtures("database")
 def test_routing_log_rows_are_idempotent_per_execution_and_hold_no_question_text():
     from app.db.session import SessionLocal
     from app.models.routing import RouteBudgetLog, RouteDecisionRecord

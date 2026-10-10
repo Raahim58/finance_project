@@ -1,10 +1,13 @@
 from logging.config import fileConfig
 
 from alembic import context
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import engine_from_config, pool
 
 from app.core.config import settings
 from app.db.session import Base
+from app.db.migration_history import require_supported_revision
 from app.models import LLMApiKey, User, UserPreferences
 
 config = context.config
@@ -36,6 +39,11 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        script = ScriptDirectory.from_config(config)
+        for revision in MigrationContext.configure(connection).get_current_heads():
+            require_supported_revision(script, revision)
+        # End the read-only preflight transaction before Alembic owns its writes.
+        connection.commit()
         context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():

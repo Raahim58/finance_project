@@ -153,7 +153,7 @@ The user-approved site exposes `/news.json`, `/news-meta.json`, and `/research.j
 
 The `briefing` stage captures the research JSON, then indexes its overview, sector highlights and registered stock commentary as `commentary`, with physical pages null and numerical promotion prohibited. Its dated analysis is available through `research.morning_brief` and company digest extra-analysis fields. News citations link to the original articles; research commentary links transparently to its research JSON under the label "Market research commentary". The research feed's embedded FIPI/LIPI or market values do not become canonical database observations.
 
-`python -m app.jobs.briefing_source_setup` creates two source targets, preserving the existing canary batch: six original news URLs per scheduled news slot, and commentary discovery at 09:00 Pakistan time. Existing source/body budgets still apply. No paid model or application enrichment credential is required for capture.
+Existing reviewed source targets retain their configured news and 09:00 Pakistan-time commentary schedules. Inspect enabled targets with `python -m app.jobs.pipeline_status`; manage approved discovery targets through `pipeline_bootstrap`. Source/body budgets apply, and capture requires no paid model call.
 
 ## Event classification and event records (0037)
 
@@ -172,15 +172,7 @@ Questions are answered from saved event records, not by matching question phrase
 
 **Reads.** `services/pipeline/event_reads.event_records` filters by entity, type and date in SQL, then ranks by `0.45·freshness + 0.35·materiality + 0.20·confidence`, with freshness recomputed at read time. Company pages, the Assistant `research.events` / company tools (optional `event_types` filter) and portfolio intelligence all read through `research_intelligence_service`. Portfolio intelligence joins records to owned holdings and their stored weights. Legacy rows already inside a record are deduplicated. Document search stays available for deeper evidence.
 
-**Backfill of the existing corpus.**
-
-```bash
-cd apps/api
-alembic upgrade head                                     # adds 0037
-python -m app.jobs.classify_backfill --dry-run           # count pending documents
-python -m app.jobs.classify_backfill --limit 500         # queue historical-mode runs
-python -m app.jobs.classify_backfill --since 2026-01-01 --document-type news
-```
+**Backfill of the existing corpus.** The `classify_backfill` job has been removed; historical documents are re-queued through `pipeline_bootstrap`.
 
 A document is skipped once a classification exists for its current content hash and the target version (model output satisfies a rules target). Rules-classified documents are re-queued after the model is enabled. Unparsed documents run the full chain from `sections`. Stage-run input hashes include the content hash and classifier version, so re-running the job does not duplicate work.
 

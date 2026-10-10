@@ -5,6 +5,8 @@ not a claim that every symbol in PSX's historical directory traded that day.
 """
 from dataclasses import dataclass
 from datetime import date, datetime
+from threading import Lock
+from time import monotonic
 
 from sqlalchemy import Date, JSON, case, cast, func, select
 
@@ -36,7 +38,33 @@ def _eligible(statement):
     )
 
 
+_session_cache = {}
+_session_cache_lock = Lock()
+
+
 def resolve_session(db) -> MarketSession | None:
+    """Reuse public session selection briefly; prices still come from fresh SQL reads.
+
+    Single-flight prevents dashboard widgets and brief polling from simultaneously
+    repeating the same historical aggregation. SQLite remains uncached for tests.
+    """
+    bind = db.get_bind()
+    ttl = getattr(settings, "market_session_cache_seconds", 15)
+    if bind.dialect.name != "postgresql" or ttl == 0:
+        return _resolve_session(db)
+    key = (id(bind.engine), synthetic_market_data_allowed(), settings.market_broad_coverage_ratio)
+    with _session_cache_lock:
+        cached = _session_cache.get(key)
+        if cached and cached[0] > monotonic():
+            return cached[1]
+        result = _resolve_session(db)
+        if len(_session_cache) >= 8:
+            _session_cache.pop(next(iter(_session_cache)))
+        _session_cache[key] = (monotonic() + ttl, result)
+        return result
+
+
+def _resolve_session(db) -> MarketSession | None:
     if db.bind.dialect.name == "postgresql":
         day = func.coalesce(
             cast(cast(MarketObservation.values_json, JSON)["trade_date"].as_string(), Date),

@@ -92,6 +92,7 @@ def test_limit_notice_preserves_partial_and_citations_not_raw_metadata():
     assert 'PRIVATE_METADATA' not in text
 
 
+@pytest.mark.usefixtures("database")
 def test_rejected_preflight_is_saved_without_attempt_or_reservation():
     with SessionLocal.begin() as db:
         user = User(email='preflight@example.com', password_hash='fixture'); db.add(user); db.flush()
@@ -116,6 +117,7 @@ def test_exchange_date_uses_local_date_and_explicit_source_date():
     assert observation_trade_date(observation, {'trade_date': '2026-08-14'}) == date(2026, 8, 14)
 
 
+@pytest.mark.usefixtures("database")
 def test_exchange_date_filters_cover_source_day_only():
     from decimal import Decimal
     row = LatestPriceRow(symbol='DATEFIX', trade_date=date(2026, 8, 13), close=Decimal(100), previous_close=Decimal(99), open=Decimal(99), high=Decimal(101), low=Decimal(98), volume=10, name='Date fixture', sector='Test', source_url='https://dps.psx.com.pk/fixture')
@@ -157,7 +159,7 @@ def test_verifier_outcomes_follow_existing_calculation_and_checks(monkeypatch, v
 
 
 def test_live_execution_preflight_stops_before_provider_and_preserves_diagnostic(client, monkeypatch):
-    from app.tests.test_phase8_phase2_tool_loop import _auth_with_anthropic
+    from app.tests.support.assistant import _auth_with_anthropic
     from app.ai.providers.http_placeholders import AnthropicProvider
     headers, _ = _auth_with_anthropic(client, monkeypatch, email='preflight-loop@example.com')
     provider = AnthropicProvider()

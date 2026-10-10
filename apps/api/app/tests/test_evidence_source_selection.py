@@ -18,6 +18,7 @@ def test_empty_selection_is_fail_closed(monkeypatch):
     assert not source_is_allowlisted("dawn")
 
 
+@pytest.mark.usefixtures("database")
 def test_selection_restricts_and_catalog_sync_does_not_reenable(monkeypatch):
     monkeypatch.setattr(settings, "evidence_source_allowlist", "dawn")
     with SessionLocal() as db:
@@ -29,12 +30,14 @@ def test_selection_restricts_and_catalog_sync_does_not_reenable(monkeypatch):
         assert not ensure_source_config(db, "business_recorder")[0].enabled
 
 
+@pytest.mark.usefixtures("database")
 def test_allowlist_does_not_activate_dormant_source(monkeypatch):
     monkeypatch.setattr(settings, "evidence_source_allowlist", "gdelt")
     with SessionLocal() as db:
         assert not ensure_source_config(db, "gdelt")[0].enabled
 
 
+@pytest.mark.usefixtures("database")
 def test_unknown_selection_aborts_before_source_creation(monkeypatch):
     monkeypatch.setattr(settings, "evidence_source_allowlist", "dawn,guardian_typo")
     with SessionLocal() as db:
@@ -43,6 +46,7 @@ def test_unknown_selection_aborts_before_source_creation(monkeypatch):
         assert db.scalar(select(func.count()).select_from(DataSource)) == 0
 
 
+@pytest.mark.usefixtures("database")
 @pytest.mark.parametrize("staged", [True, False])
 def test_excluded_discovery_does_not_fetch_or_advance_cursor(monkeypatch, staged):
     monkeypatch.setattr(settings, "evidence_source_allowlist", "")
@@ -61,6 +65,7 @@ def test_excluded_discovery_does_not_fetch_or_advance_cursor(monkeypatch, staged
         assert state.last_attempted_at is None
 
 
+@pytest.mark.usefixtures("database")
 def test_queued_fetch_respects_new_selection_without_losing_candidate(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "evidence_source_allowlist", None)
     with SessionLocal() as db:

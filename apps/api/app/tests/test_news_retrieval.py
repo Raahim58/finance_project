@@ -11,6 +11,8 @@ from app.services.news_retrieval import tag_document
 from app.tools.research_tools import ResearchInput,_search
 from app.tools.registry import expand_model_data
 
+pytestmark = pytest.mark.usefixtures("database")
+
 
 def search(db,user,payload):
     result=_search(db,user,payload)
@@ -146,7 +148,6 @@ def test_shareholder_dividend_search_excludes_receipts_by_the_company():
 def test_high_semantic_match_can_survive_without_literal_terms(monkeypatch):
     from app.core.config import settings
     from app.services import rag_service
-    from app.tools.registry import expand_model_data
     with SessionLocal() as db:
         user, company, _, _ = seed(db)
         for chunk in db.scalars(select(DocumentChunk)):

@@ -67,11 +67,6 @@ def sample_session(db: Session = Depends(get_db)) -> TokenResponse:
     return TokenResponse(access_token=create_access_token(user.id))
 
 
-@router.post("/logout")
-def logout() -> dict[str, str]:
-    return {"status": "ok"}
-
-
 @router.get("/me", response_model=UserResponse)
 def me(current_user: User = Depends(get_current_user)) -> UserResponse:
     return serialize_user(current_user)

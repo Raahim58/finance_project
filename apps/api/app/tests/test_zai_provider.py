@@ -55,6 +55,7 @@ async def test_same_credential_is_serialized_and_released_on_failure(monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("database")
 async def test_postgres_slot_waits_and_unlocks_on_error(monkeypatch):
     from app.ai.providers import zai
     statements = []

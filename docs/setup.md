@@ -13,28 +13,7 @@ python -m app.core.keys
 
 Put the generated Fernet key in `ENCRYPTION_KEY`. User LLM keys are encrypted at rest, never returned after save, and decrypted server-side only for an LLM request.
 
-The Phase 8 Assistant uses one model-directed, read-only native tool loop. New Gemini
-Assistant runs use the stateful Interactions API: the first turn sends the question,
-while later turns send `previous_interaction_id` and only new function results. Gemini 3
-models do not receive Google Search or URL Context: model support does not guarantee the
-configured Google project has web-tool quota. External verification is reported missing.
-Assistant requests are owned by the API process and persisted in PostgreSQL; no Assistant Celery
-worker is used. Apply migrations through `0029_assistant_tool_loop` before starting the
-API. The migration adds the encrypted transcript checkpoint used for restart recovery.
-
-`ASSISTANT_EXECUTION_DEADLINE_SECONDS` defaults to one 300-second outer deadline for
-every Assistant request. `ASSISTANT_EXECUTION_INPUT_TOKEN_LIMIT` defaults to 200,000
-cumulative estimated input tokens. Before every provider turn the estimate includes the
-entire retained logical context, native tool schemas, and images; this remains the
-safeguard even though Gemini continuations transmit only new results. Diagnostics track
-transmitted bytes and provider-reported input/output/cache/reasoning separately, then
-reconcile the conservative reservation to reported input. `ASSISTANT_MAX_TOOL_ITERATIONS`
-retains the operator-configured call safeguard. Cost-unit scoring and its configuration
-have been removed; see `docs/mcp-tools.md` for concrete tool workload bounds.
-The older `PHASE8_*_DEADLINE_SECONDS` settings remain for non-Assistant compatibility
-consumers and do not select budgets in the new Assistant path.
-
-Start production-style dependencies and migrate:
+Start PostgreSQL and Redis, then migrate:
 
 ```bash
 cd ../..
@@ -43,300 +22,77 @@ cd apps/api
 alembic upgrade head
 ```
 
-SQLite can be used without Docker:
+SQLite works without Docker:
 
 ```bash
 DATABASE_URL=sqlite+pysqlite:///./psx_ai_local.db alembic upgrade head
 ```
 
-The API reconciles queued and abandoned Assistant runs at startup and every 20 seconds.
-It runs at most two local executions concurrently. A sent external-provider attempt
-without a recorded outcome is marked uncertain and fails explicitly to avoid a duplicate
-paid request. The local mock provider retains its single retry allowance. Retry and input
-counters remain in the execution row across restarts. Persisted provider turns,
-associated tool results, and Gemini interaction IDs resume from the encrypted transcript;
-provider/model selection cannot change mid-execution. An expired Gemini interaction
-fails explicitly rather than replaying the chain.
+See [migration baseline and transition](../apps/api/alembic/README.md) for populated-legacy and downgrade checks.
 
-Inspect redacted diagnostics through the owner-scoped API or CLI:
+Local tokenizer assets (Docker installs them at image build; without them a conservative counting fallback is used):
 
 ```bash
-ASSISTANT_ACCESS_TOKEN='<local-access-token>' python -m app.jobs.assistant_diagnostics --aggregate
-ASSISTANT_ACCESS_TOKEN='<local-access-token>' \
-  python -m app.jobs.assistant_diagnostics --execution-id '<execution-uuid>'
+.venv/bin/python scripts/setup_glm_tokenizer.py
 ```
 
-Captured payloads remain internal. An operator with database and encryption-key access
-may replay retained attempts through the local mock provider; the command prints only
-structural counts and statuses:
+### Demo data
 
-```bash
-python -m app.jobs.replay_assistant_diagnostic '<execution-uuid>'
-```
-
-Metadata and attempt accounting are retained for one year. Encrypted captured payloads
-are retained for failed executions and a deterministic 10% success sample for 14 days,
-subject to `PHASE8_DIAGNOSTIC_PAYLOAD_BYTES` (default 1 GiB). Exports exclude prompts,
-response bodies, holdings, allocation amounts, documents, and credentials.
-
-Run the offline Phase 8 quality cases and focused conformance suites without provider
-credentials:
-
-```bash
-python -m app.jobs.evaluate_phase8
-pytest app/tests/test_phase7a_canonical_context.py \
-  app/tests/test_phase7b_context_consumers.py \
-  app/tests/test_phase8_revamp.py app/tests/test_phase8_phase2_tool_loop.py \
-  app/tests/test_tool_registry.py app/tests/test_quant_domain.py \
-  app/tests/test_intelligence_v1.py app/tests/test_providers.py \
-  app/tests/test_llm_provider_usage.py -q
-```
-
-Run the Phase 8 Phase 1 read-tool fidelity suite separately while iterating on evidence
-contracts (it performs no network, ingestion, broker, or model calls):
-
-```bash
-pytest app/tests/test_phase8_phase1_read_tools.py -q
-```
-
-Run the Phase 2 native-provider and durable-loop acceptance suite without network or
-paid model calls:
-
-```bash
-pytest app/tests/test_phase8_phase2_tool_loop.py \
-  app/tests/test_llm_provider_usage.py app/tests/test_tool_registry.py -q
-```
-
-Live benchmark commands are intentionally disabled because they can incur provider cost:
-
-```bash
-ALLOW_PAID_PHASE8_BENCHMARKS=false PHASE8_BENCHMARK_PROVIDER=gemini \
-  python -m app.jobs.evaluate_phase8 --live
-ALLOW_PAID_PHASE8_BENCHMARKS=false PHASE8_BENCHMARK_PROVIDER=anthropic \
-  python -m app.jobs.evaluate_phase8 --live
-```
-
-Seed the demo investor state (demo user, ledger-backed holdings and cash,
-historical cost basis, investor profile, confirmed IPS, target allocation, and
-monitoring preferences). This default path creates no market prices, macro
-observations, company reports, financial facts, or events:
+Seeds the demo investor state (user, ledger-backed holdings and cash, profile, confirmed IPS, target allocation, monitoring preferences). It creates no market prices, macro data, reports, facts or events; run live ingestion afterwards.
 
 ```bash
 DEMO_USER_PASSWORD='choose-a-local-password' python -m app.seed.demo
 ```
 
-The demo login is `portfolio.manager@example.com`. The command is idempotent and
-never seeds an LLM key. Run live ingestion after this command to create the
-hybrid environment: synthetic investor state plus observed external-world data.
+Login: `portfolio.manager@example.com`. The command is idempotent and never seeds an LLM key. `--with-mock-world` adds deterministic mock market data; use it only for isolated offline development, never in a live-data database.
 
-For isolated offline development only, the old deterministic external-world
-fixtures remain explicitly available:
-
-```bash
-DEMO_USER_PASSWORD='choose-a-local-password' python -m app.seed.demo --with-mock-world
-```
-
-Never use `--with-mock-world` in an `auto`, `dps`, or other live-data database.
-Even if old mock rows exist, live modes exclude them from canonical prices,
-market screens, portfolio valuation, and quant inputs.
-
-Run the API, scheduler, and the four Phase 2 queues in separate worker pools:
+### Run the API and ingestion
 
 ```bash
 uvicorn app.main:app --reload
-celery -A app.celery_app worker -Q broad_fundamentals --concurrency=20 --loglevel=INFO
-celery -A app.celery_app worker -Q dps_history --concurrency=24 --loglevel=INFO
-celery -A app.celery_app worker -Q financial_download --concurrency=12 --loglevel=INFO
-celery -A app.celery_app worker -Q financial_extract --concurrency=3 --loglevel=INFO
-python -m app.jobs.scheduler --once
-python -m app.jobs.scheduler
-python -m app.jobs.phase2_scheduler
+python -m app.jobs.pipeline_scheduler
+celery -A app.celery_app worker -n pipeline-parse@%h -Q pipeline_parse --concurrency=1 --loglevel=INFO
 ```
 
-Canonical macro ingestion has its own Postgres-led queue producer. It does not
-depend on the document/evidence scheduler:
+The stage-to-queue map is in [Pipeline restoration](PIPELINE_RESTORATION.md); `compose.oracle.yml` is the reference deployment. Macro ingestion has its own queue and scheduler:
 
 ```bash
 celery -A app.celery_app worker -P threads -n macro@%h -Q macro --concurrency=4 --loglevel=INFO
 MACRO_INGESTION_ENABLED=true python -u -m app.jobs.macro_scheduler
-python -m app.jobs.macro_status
+python -m app.jobs.macro_status   # configured series, provider ladders, coverage
 ```
 
-Provider ladders, exact current coverage, fallbacks, and the bounded one-cycle
-command are documented in [Canonical Macro Ingestion](macro-ingestion.md).
+`macro_backfill` is the explicit bounded recovery tool. Compose workers and schedulers are opt-in profiles: `docker compose up -d` starts only PostgreSQL and Redis.
 
-The live universe is synchronized from observed DPS symbol data; there is no configured stock list. Expensive history/report work is reconstructed from Postgres coverage rows after a Redis loss. Docker Compose persists Postgres, Redis AOF data, and source artifacts in named volumes. Its lightweight `phase2-scheduler` is the sole Phase 2 queue producer: it checks queue targets every two seconds, reserves coverage rows before publication, completes historical report-catalogue bootstrap once, and performs bucketed incremental current/prior-year catalogue refreshes every six hours. The five-minute market scheduler remains separate and never publishes Phase 2 tasks.
+### Data assumptions
 
-`MARKET_DATA_MODE=mock` is development-only. `dps` uses the verified direct DPS adapter; `auto` tries DPS and uses Yahoo only as a labeled real-data fallback. A failed live refresh retains prior observed rows and records failure/staleness; it never generates mock replacements. NCCPL remains a manual CSV import because ordinary retrieval is blocked; no anti-bot bypass is implemented.
-
-DPS latest-price coverage uses the currently observed DPS ordinary-equity universe
-as its denominator. A response that omits any ordinary symbol is recorded as
-`partial` with the missing symbols and accepted/rejected counts; Yahoo or SCSTrade
-rows never satisfy DPS health. DPS standardized company-page facts are exposed as
-observed secondary fundamentals, while facts extracted from official filings retain
-precedence for the same metric and period.
-
-Enable and run the independent Global Evidence services with a shared artifact/spool
-volume:
-
-```bash
-EVIDENCE_ENABLED=true python -m app.jobs.evidence_scheduler
-celery -A app.celery_app worker -n discovery@%h -Q evidence_discovery --concurrency=4 --loglevel=INFO
-celery -A app.celery_app worker -n fetch@%h -Q evidence_fetch --concurrency=16 --loglevel=INFO
-celery -A app.celery_app worker -n parse@%h -Q evidence_parse --concurrency=6 --loglevel=INFO
-celery -A app.celery_app worker -n pdf@%h -Q evidence_pdf --concurrency=2 --loglevel=INFO
-celery -A app.celery_app worker -n index@%h -Q evidence_index --concurrency=4 --loglevel=INFO
-celery -A app.celery_app worker -n historical@%h -Q historical_hydrate --concurrency=2 --loglevel=INFO
-```
-
-Mettis is scheduled only through this evidence pipeline. It is intentionally not
-also run by the generic market/macro scheduler, which prevents duplicate ingestion
-paths with different entity-linking and story-deduplication behavior.
-
-Historical official-source canary jobs remain disabled by default. Current pipeline
-operation and source controls are documented in [Pipeline restoration](PIPELINE_RESTORATION.md).
-
-Workers and schedulers are opt-in Compose profiles: `docker compose up -d` starts
-only PostgreSQL and Redis. Use `--profile ingestion` for explicitly selected
-workers and `--profile scheduling` for explicitly selected producers; neither
-profile's services restart automatically. Phase 2 workers do not consume evidence queues. Live messages use Redis priority `0`;
-historical hydration uses priority `8`, concurrency two, and a separate queue. Every
-worker mounts the same `SOURCE_ARTIFACT_ROOT` because temporary bodies move between
-stages through `.evidence-spool`; Redis messages contain IDs only. Postgres leases and
-candidate state reconstruct lost work after broker or worker failure.
+- `MARKET_DATA_MODE=mock` is development-only. `dps` uses the direct DPS adapter. A failed live refresh keeps prior observed rows and records staleness; it never generates mock replacements. Live modes exclude mock rows from prices, screens, valuation and quant inputs.
+- The live universe is synced from observed DPS symbols; there is no configured stock list.
+- DPS coverage uses the observed ordinary-equity universe as its denominator; a response missing any symbol is recorded as `partial`. DPS company-page facts are secondary fundamentals; facts extracted from official filings take precedence for the same metric and period.
+- NCCPL remains a manual CSV import. No anti-bot bypass exists.
+- History and report work is recorded in the `ingestion_stage_runs` outbox and dispatched by `pipeline-scheduler`, so it survives a Redis loss.
+- Set `EMBEDDING_BACKEND=sentence_transformers` for production semantic retrieval (384-dim pgvector, cosine). SQLite stores JSON vectors for tests only. Private uploads are always queried by owner/portfolio scope.
+- Assistant runs are owned by the API process and persisted in PostgreSQL (no Assistant worker). See [Assistant tools](mcp-tools.md) for tool bounds.
+- No broker password storage, browser automation or trade placement exists. Rebalance output is a proposal only.
 
 ## Frontend
 
 ```bash
 cd apps/web
 npm install
-npm run generate:api
-npm run typecheck
-npm test
-npm run build
+npm run generate:api   # needs the API on http://localhost:8000; writes lib/generated/api.d.ts
 npm run dev
 ```
 
-`generate:api` expects the API at `http://localhost:8000` and checks `lib/generated/api.d.ts` into the repository. Main portfolio routes are `overview`, `build`, `quant`, `risk`, `scenarios`, `research`, `activity`, and `ips`.
+Browser requests use the same-origin `/api` path, which Next.js proxies to `API_INTERNAL_BASE_URL` (default `http://127.0.0.1:8000`). For a remote preview, expose only the frontend (e.g. `cloudflared tunnel --url http://localhost:3000`) and do not set `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`.
 
-Browser requests default to the same-origin `/api` path. Next.js proxies that path to
-`API_INTERNAL_BASE_URL` (default `http://127.0.0.1:8000`), so an HTTPS development
-tunnel only needs to expose the frontend:
-
-```bash
-cd apps/api
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-
-cd ../web
-npm run dev -- --hostname 0.0.0.0
-
-cloudflared tunnel --url http://localhost:3000
-```
-
-Do not set `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` for a remote preview: the
-remote browser would try its own localhost and HTTPS pages may block the HTTP request.
+To use Oracle data from a local API/web, see the remote block in `.env.example` and [Oracle deployment](oracle-deployment.md).
 
 ## Verification
 
 ```bash
-cd apps/api
-.venv/bin/python -m pytest -q
-DATABASE_URL=sqlite:////tmp/psx-migration.sqlite alembic upgrade head
-
-cd ../web
-npm run typecheck
-npm test
-npm run build
+cd apps/api && .venv/bin/python -m pytest -q
+cd ../web && npm run typecheck && npm test && npm run build
 ```
 
-Provider parser tests use bounded fixtures and never hit live services. Live contract smoke tests are opt-in and should remain low-rate. See [migrations](migrations.md) for populated-legacy and downgrade checks.
-
-The API-level pytest bootstrap forces an in-memory SQLite database, test bcrypt cost, disabled demo access, mock market mode, and disabled scheduled ingestion before the application package is imported. A developer `.env` therefore cannot silently redirect the test suite to local Postgres or enable source traffic. Global Evidence Pass 0 contains contracts and schema only; it has no live smoke test or provider setup command.
-
-## Documents and RAG
-
-Manual uploads are available in Research (`/research`) under **Upload document**.
-The supported market route is `/market`; `/markets`, `/documents`, `/portfolio`,
-and the portfolio `stress` and `settings` aliases have been removed. Use
-`/portfolios/{id}/scenarios` and `/portfolios/{id}/ips` respectively.
-This UI cleanup requires no migration or new seed data.
-
-```bash
-cd apps/api
-python -m app.jobs.ingest_document --file ./sample.pdf --symbol MEBL --type annual_report
-python -m app.jobs.test_retrieval --query "deposit growth" --symbol MEBL
-```
-
-For production semantic retrieval, set `EMBEDDING_BACKEND=sentence_transformers`, install requirements, then run `python -m app.jobs.reindex_rag`. PostgreSQL stores 384-dimensional vectors with an indexed cosine search; SQLite stores vectors as JSON and scans only for tests/local use. Private uploads must be queried through their owner/portfolio scope.
-
-## Event intelligence
-
-After Phase 5 evidence is indexed, apply the current migration and normalize retained
-announcements/news in bounded batches:
-
-```bash
-cd apps/api
-alembic upgrade head
-python -m app.jobs.normalize_events --rebuild --confirm-rebuild --all --limit 500
-```
-
-The command processes bounded batches until `scanned` is zero. New evidence processed by the background
-evidence-index worker is normalized automatically. See [Pipeline restoration](PIPELINE_RESTORATION.md)
-for event classification, deterministic boundaries, and read APIs.
-
-## Safety assumptions
-
-No broker password storage, browser automation, or trade placement exists. Rebalance output is only a proposal. Market prices and exact portfolio values come from database queries, while document retrieval supplies narrative evidence only.
-
-## Focused Assistant correction
-
-No migration or new seed is required. The existing encrypted execution/checkpoint and
-`AnalysisRun` fields support normalized evidence, local finalization recovery and versioned
-saved-analysis reuse. Assistant reads calculate in memory on a cache miss and do not save
-analytics. The only added model tool is the database-backed, section-selectable
-`market.overview`; universe screening remains optional on the existing tool.
-
-Run the isolated backend boundary once, then the browser checks:
-
-```bash
-DATABASE_URL='sqlite+pysqlite:///:memory:' EMBEDDING_BACKEND=hash \
-  apps/api/.venv/bin/python -m pytest apps/api/app/tests -q
-cd apps/web
-npm test
-npm run typecheck
-npm run build
-```
-
-No live provider call, external search or streaming is required for these offline checks.
-
-
-## Local tokenizer assets
-
-Install the data-only tokenizer assets after installing the backend dependencies:
-
-```bash
-cd apps/api
-.venv/bin/python scripts/setup_glm_tokenizer.py
-```
-
-Docker installs these assets during the API image build. Missing assets use the
-explicit conservative counting fallback; no request-time model download is required.
-
-## Assistant finalization recovery
-
-For a failed serialization/rendering/persistence execution, run this server-side recovery
-from `apps/api` with the application's normal server configuration. Use the owning user ID
-and exact failed execution ID; the helper refuses uncertain attempts and non-final turns:
-
-```bash
-python - <<'PY'
-from app.db.session import SessionLocal
-from app.services.assistant_execution import queue_finalization_recovery
-with SessionLocal() as db:
-    queue_finalization_recovery(db, 'OWNING_USER_ID', 'FAILED_EXECUTION_ID')
-PY
-```
-
-The existing API maintenance loop schedules the queued execution. Expired provider-work
-deadlines do not block purely local finalization. No external attempt is scheduled during
-this recovery. Diagnostics expose safe failure locations in the execution's stage metadata.
+The pytest bootstrap forces in-memory SQLite, mock market mode, disabled demo access and disabled scheduled ingestion before the app imports, so a developer `.env` cannot redirect tests to Postgres or enable source traffic. Parser tests use bounded fixtures; live smoke tests are opt-in and low-rate.
