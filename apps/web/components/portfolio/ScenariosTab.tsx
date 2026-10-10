@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { runHistoricalReplay, runScenario, type HistoricalReplay, type ScenarioResult } from "@/lib/api";
+import { deleteScenarioRun, runHistoricalReplay, runScenario, type HistoricalReplay, type ScenarioResult } from "@/lib/api";
 import { customPayload, templatePayload, type CustomInput } from "@/lib/portfolio-scenarios";
 import type { WorkspaceData } from "@/components/workspace/useWorkspaceData";
 import { EmptyResult, ReplayResult, RunResult } from "./scenarios/ScenarioResults";
@@ -49,10 +49,20 @@ export function ScenariosTab({ portfolioId, data, setMessage }: { portfolioId: s
       const result: ScenarioResult = await runScenario(portfolioId, payload);
       setActive({ kind: "run", id: result.id });
       await scenario.refresh();
-      setMessage(`Ran ${result.name}. Saved to scenario history.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Scenario failed");
     } finally { setRunning(false); }
+  }
+
+  async function remove(run: ScenarioResult) {
+    if (!window.confirm(`Delete "${run.name}" from history?`)) return;
+    try {
+      await deleteScenarioRun(portfolioId, run.id);
+      if (active?.kind === "run" && active.id === run.id) setActive(null);
+      await scenario.refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not delete scenario");
+    }
   }
 
   if (!scenario.loaded) return <div className={styles.layout} aria-busy="true" aria-label="Loading scenarios">
@@ -69,6 +79,6 @@ export function ScenariosTab({ portfolioId, data, setMessage }: { portfolioId: s
       : shownRun ? <RunResult result={shownRun} extra={extraById.get(shownRun.id)} extrasNote={extrasNote} templates={scenario.templates.value} names={names} websites={scenario.websites} volatilityMethod={scenario.extras.value?.volatility_method} />
         : <EmptyResult text="Choose a scenario type, then run it. Results are computed from stored holdings and database prices." />}
     <ScenarioHistory runs={scenario.runs} extras={extraById} activeId={shownRun?.id ?? null}
-      onSelect={run => setActive({ kind: "run", id: run.id })} onNew={() => { setActive({ kind: "fresh" }); setSelection(null); window.scrollTo({ top: 0, behavior: "smooth" }); }} />
+      onSelect={run => setActive({ kind: "run", id: run.id })} onDelete={run => void remove(run)} onNew={() => { setActive({ kind: "fresh" }); setSelection(null); window.scrollTo({ top: 0, behavior: "smooth" }); }} />
   </div>;
 }

@@ -515,6 +515,7 @@ export function runScenario(portfolioId: string, payload: Record<string, unknown
   return request<ScenarioResult>(`/portfolios/${encodeURIComponent(portfolioId)}/scenario-runs`, { method: "POST", body: JSON.stringify(payload) });
 }
 
+export function deleteScenarioRun(portfolioId: string, runId: string) { return request<{ status: string }>(`/portfolios/${encodeURIComponent(portfolioId)}/scenario-runs/${encodeURIComponent(runId)}`, { method: "DELETE" }); }
 export function getScenarioRuns(portfolioId: string) { return request<ScenarioResult[]>(`/portfolios/${encodeURIComponent(portfolioId)}/scenario-runs`); }
 export type ScenarioTemplate={id:string;name:string;description:string;version:string;sector_shocks:Record<string,number>;factor_shocks:Record<string,number>;fallback_security_shock?:number;required_mappings:string[]};
 export function getScenarioTemplates(){return request<ScenarioTemplate[]>("/scenario-templates");}

@@ -129,6 +129,8 @@ function essentialWarnings(synthesis?: Record<string, unknown>): string[] {
       }
     | undefined;
   const warnings: string[] = [];
+  const unverified = (synthesis?.citation_resolution as { unverified_number_lines?: number } | undefined)?.unverified_number_lines;
+  if (unverified) warnings.push("Some figures cite sources that can’t be machine-checked. Verify them against the sources.");
   if (allocation?.trade_feasibility === "valid" && allocation.IPS_status && allocation.IPS_status !== "pass")
     warnings.push(`Calculated candidate, not fully IPS compliant: ${allocation.IPS_status.replaceAll("_", " ")}.`);
   if (allocation?.checks?.price_freshness?.status === "stale")

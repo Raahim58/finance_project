@@ -5,7 +5,7 @@ import { getAlerts, getIpsCompliance, getMacroRegime, getMarketFreshness, getMar
 import { getEventFeed, getPortfolioEventIntelligence } from "@/lib/api/research";
 import { OverviewPage } from "./OverviewPage";
 
-vi.mock("@/lib/api", () => ({ getAlerts: vi.fn(), getIpsCompliance: vi.fn(), getMacroRegime: vi.fn(), getMarketFreshness: vi.fn(), getMarketOverview: vi.fn(), getPortfolioPerformance: vi.fn(), getPortfolioSummary: vi.fn(), getPortfolios: vi.fn(), getCompanies: vi.fn(), clearApiCache: vi.fn() }));
+vi.mock("@/lib/api", () => ({ getAlerts: vi.fn(), getIndexHistory: vi.fn().mockResolvedValue([]), getIpsCompliance: vi.fn(), getMacroRegime: vi.fn(), getMarketFreshness: vi.fn(), getMarketOverview: vi.fn(), getPortfolioPerformance: vi.fn(), getPortfolioSummary: vi.fn(), getPortfolios: vi.fn(), getCompanies: vi.fn(), clearApiCache: vi.fn() }));
 vi.mock("@/lib/api/client", () => ({ request: vi.fn().mockResolvedValue({ full_name: "Fixture Reader", email: "reader@example.test" }) }));
 vi.mock("@/lib/api/research", () => ({ getEventFeed: vi.fn(), getPortfolioEventIntelligence: vi.fn() }));
 vi.mock("@/components/AssistantWorkspace", () => ({ useAssistantWorkspace: () => null }));

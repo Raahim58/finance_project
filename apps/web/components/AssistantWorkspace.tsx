@@ -37,6 +37,8 @@ import {
   type ChatMessage,
   type ChatRun,
   type Conversation,
+  renameChat,
+  deleteChat,
   type History,
   type MessageContext,
   sumTokenUsage,
@@ -481,6 +483,31 @@ export function AssistantWorkspaceProvider({
       return null;
     }
   };
+  const editChat = async (chat: Conversation) => {
+    const title = window.prompt("Rename chat", chat.title)?.trim();
+    if (!title || title === chat.title) return;
+    try {
+      await renameChat(chat.id, title);
+      setChats((old) => old.map((c) => (c.id === chat.id ? { ...c, title } : c)));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const removeChat = async (chat: Conversation) => {
+    if (!window.confirm(`Delete "${chat.title}"? This cannot be undone.`)) return;
+    try {
+      await deleteChat(chat.id);
+      setChats((old) => old.filter((c) => c.id !== chat.id));
+      setHistories((old) => { const { [chat.id]: _gone, ...rest } = old; return rest; });
+      if (selected === chat.id) setSelected(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const chatActions = (chat: Conversation) => <span className="assistant-chat-actions">
+    <button type="button" aria-label={`Rename ${chat.title}`} title="Rename" onClick={() => void editChat(chat)}>✎</button>
+    <button type="button" aria-label={`Delete ${chat.title}`} title="Delete" onClick={() => void removeChat(chat)}>🗑</button>
+  </span>;
   const send = async () => {
     const key = selected ?? "new",
       question = (drafts[key] ?? "").trim();
@@ -558,7 +585,7 @@ export function AssistantWorkspaceProvider({
         >
           {fullPage?<aside data-workspace-left-panel className="assistant-conversation-list" aria-label="Conversations">
             <div><h1>Chats</h1><button type="button" onClick={()=>void newChat()}>＋ New chat</button></div>
-            <nav aria-label="Saved chat threads">{chats.map(chat=><button key={chat.id} aria-current={selected===chat.id?"true":undefined} onClick={()=>{setSelected(chat.id);nearBottom.current=true;}}><strong>{chat.title}</strong><span>{chat.latest_activity?formatDate(chat.latest_activity):"—"}{chat.active_run?" · Generating":""}</span></button>)}</nav>
+            <nav aria-label="Saved chat threads">{chats.map(chat=><div className="assistant-chat-row" key={chat.id}><button aria-current={selected===chat.id?"true":undefined} onClick={()=>{setSelected(chat.id);nearBottom.current=true;}}><strong>{chat.title}</strong><span>{chat.latest_activity?formatDate(chat.latest_activity):"—"}{chat.active_run?" · Generating":""}</span></button>{chatActions(chat)}</div>)}</nav>
             {!chats.length?<p>No saved chats yet.</p>:null}{chatCursor?<button type="button" onClick={()=>void refreshChats(chatCursor)}>More chats</button>:null}
           </aside>:null}
           <div className="assistant-conversation-column">
@@ -609,18 +636,20 @@ export function AssistantWorkspaceProvider({
                 New chat
               </button>
               {chats.map((chat) => (
-                <button
-                  key={chat.id}
-                  aria-current={selected === chat.id ? "true" : undefined}
-                  onClick={() => {
-                    setSelected(chat.id);
-                    setShowChats(false);
-                    nearBottom.current = true;
-                  }}
-                >
-                  {chat.title}
-                  {chat.active_run ? <small> · Generating</small> : null}
-                </button>
+                <div className="assistant-chat-row" key={chat.id}>
+                  <button
+                    aria-current={selected === chat.id ? "true" : undefined}
+                    onClick={() => {
+                      setSelected(chat.id);
+                      setShowChats(false);
+                      nearBottom.current = true;
+                    }}
+                  >
+                    {chat.title}
+                    {chat.active_run ? <small> · Generating</small> : null}
+                  </button>
+                  {chatActions(chat)}
+                </div>
               ))}
               {chatCursor ? (
                 <button onClick={() => void refreshChats(chatCursor)}>

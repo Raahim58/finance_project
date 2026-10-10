@@ -105,6 +105,13 @@ export const retrySummary = (id: string) =>
   request(`/assistant/workspace/conversations/${id}/retry-summary`, {
     method: "POST",
   });
+export const renameChat = (id: string, title: string) =>
+  request<{ id: string; title: string }>(`/assistant/workspace/conversations/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+export const deleteChat = (id: string) =>
+  request<{ status: string }>(`/assistant/workspace/conversations/${id}`, { method: "DELETE" });
 export const continueChat = (id: string) =>
   request<{ id: string; title: string }>(
     `/assistant/workspace/conversations/${id}/continue`,

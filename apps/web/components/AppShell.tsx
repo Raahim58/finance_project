@@ -128,13 +128,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <nav className="rail-navigation" aria-label="Workspace navigation">
           {groups.filter(group => group.label !== "System").map(group => (
             <div key={group.label}>
-              {group.items.filter(([label]) => !["Recommendations", "Activity"].includes(label)).map(item => <NavItem key={item[1]} item={item} pathname={pathname} selectedPortfolioId={selectedPortfolioId} />)}
+              {group.items.map(item => <NavItem key={item[1]} item={item} pathname={pathname} selectedPortfolioId={selectedPortfolioId} />)}
             </div>
           ))}
           <ChatNavigation />
-          <details className="rail-more"><summary className="nav-item"><span className="rail-icon"><Icon name="more" size={20} /></span><span className="sidebar-label">More</span></summary><nav aria-label="More workspace pages" className="rail-more-menu">
-            {groups.flatMap(group => group.items).filter(([label]) => ["Recommendations", "Activity"].includes(label)).map(item => <NavItem key={item[1]} item={item} pathname={pathname} selectedPortfolioId={selectedPortfolioId} />)}
-          </nav></details>
         </nav>
         <AccountMenu />
 

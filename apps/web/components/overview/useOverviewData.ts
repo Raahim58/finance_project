@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import {
-  getAlerts, getIpsCompliance, getMacroRegime, getMarketFreshness, getMarketOverview,
+  getAlerts, getIndexHistory, getIpsCompliance, getMacroRegime, getMarketFreshness, getMarketOverview,
   getPortfolioPerformance, getPortfolioSummary, getPortfolios,
-  type Compliance, type MacroRegime, type MarketFreshness, type MarketOverview,
+  type Compliance, type IndexClose, type MacroRegime, type MarketFreshness, type MarketOverview,
   type Portfolio, type PortfolioPerformancePoint, type PortfolioSummary,
 } from "@/lib/api";
 import { request } from "@/lib/api/client";
@@ -20,6 +20,7 @@ export function useOverviewData() {
   const [portfolioId, setPortfolioId] = useState("");
   const [portfolios, setPortfolios] = useState<Resource<Portfolio[]>>(loading);
   const [market, setMarket] = useState<Resource<MarketOverview>>(loading);
+  const [indexHistory, setIndexHistory] = useState<Resource<IndexClose[]>>(loading);
   const [freshness, setFreshness] = useState<Resource<MarketFreshness>>(loading);
   const [events, setEvents] = useState<Resource<ResearchEventView[]>>(loading);
   const [regime, setRegime] = useState<Resource<MacroRegime>>(loading);
@@ -39,6 +40,7 @@ export function useOverviewData() {
     // Independent reads: a slow portfolio or research service cannot block the market.
     void read(getMarketOverview, setMarket);
     void read(getMarketFreshness, setFreshness);
+    void read(() => getIndexHistory("KSE-100", 120), setIndexHistory);
     void read(async () => (await getEventFeed()).events, setEvents);
     void read(getMacroRegime, setRegime);
     void read(() => request<OverviewUser>("/auth/me"), setUser);
@@ -79,5 +81,5 @@ export function useOverviewData() {
     id: portfolioId, summary: loading<PortfolioSummary>(), performance: loading<PortfolioPerformancePoint[]>(),
     alerts: loading<Array<Record<string, unknown>>>(), compliance: loading<Compliance>(), exposure: loading<PortfolioEventIntelligence>(),
   };
-  return { portfolios, portfolioId, setPortfolioId, market, freshness, events, regime, user, ...selectedScope, reload: () => setRevision(value => value + 1) };
+  return { portfolios, portfolioId, setPortfolioId, market, indexHistory, freshness, events, regime, user, ...selectedScope, reload: () => setRevision(value => value + 1) };
 }

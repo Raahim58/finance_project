@@ -43,6 +43,7 @@ from app.services.workstation_service import (
     list_optimizer_runs,
     list_profile_versions,
     list_recommendations,
+    delete_scenario_run,
     list_scenario_runs,
     portfolio_quant,
     run_optimizer,
@@ -155,6 +156,11 @@ def scenario(portfolio_id: str, payload: ScenarioRequest, current_user: User = D
 @router.get("/portfolios/{portfolio_id}/scenario-runs", response_model=list[ScenarioResponse])
 def scenario_history(portfolio_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return list_scenario_runs(db, current_user, portfolio_id)
+
+
+@router.delete("/portfolios/{portfolio_id}/scenario-runs/{run_id}")
+def scenario_delete(portfolio_id: str, run_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return delete_scenario_run(db, current_user, portfolio_id, run_id)
 
 
 @router.post("/portfolios/{portfolio_id}/monitoring/rules", response_model=MonitoringRuleResponse, status_code=status.HTTP_201_CREATED)

@@ -8,6 +8,8 @@ import { useAssistantWorkspace } from "@/components/AssistantWorkspace";
 import { clearApiCache } from "@/lib/api";
 import { request } from "@/lib/api/client";
 import { formatDate, formatNumber, formatPercent, humanize, investigationSignals, marketBreadth, numeric, performanceSeries, signalFilters, visibleSignals, type SignalFilter } from "@/lib/overview";
+import { IndexChart } from "@/components/markets/IndexChart";
+import { closePoints } from "@/lib/markets";
 import { OverviewPerformanceChart } from "./OverviewPerformanceChart";
 import { WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { useOverviewData, type Resource } from "./useOverviewData";
@@ -67,6 +69,7 @@ function MarketSnapshot({ data }: { data: OverviewData }) {
     <div className={styles.index}><h2 id="market-snapshot-heading">Market snapshot</h2>
       {snapshot ? <><div className={styles.indexHeadline}><h3>{snapshot.index_name}</h3><strong>{formatNumber(snapshot.index_value)}</strong><span className={tone(snapshot.index_change_percent)}>{numeric(snapshot.index_change) != null && Number(snapshot.index_change) > 0 ? "+" : ""}{formatNumber(snapshot.index_change)} ({formatPercent(snapshot.index_change_percent)})</span></div>
         <dl className={styles.tradingStats}><div><dt>Volume</dt><dd>{formatNumber(snapshot.total_volume, 1, true)}</dd></div><div><dt>Value traded</dt><dd>PKR {formatNumber(snapshot.total_value, 1, true)}</dd></div></dl>
+        {closePoints(data.indexHistory.data ?? []).length >= 2 ? <div className={styles.indexChart}><IndexChart points={closePoints(data.indexHistory.data ?? [])} name={snapshot.index_name} height={150} /></div> : null}
         <p className={styles.source}>Daily snapshot · {formatDate(snapshot.snapshot_date)} · {snapshot.source || "Source unavailable"}</p></> : <State resource={data.market} empty="Market snapshot unavailable." />}
     </div>
     <div className={styles.breadth}><h2>Market breadth</h2>{breadth ? <>

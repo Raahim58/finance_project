@@ -4,9 +4,10 @@ import json
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func, tuple_
+from sqlalchemy import delete, select, func, tuple_
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from app.db.session import Base
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
@@ -124,3 +125,41 @@ def continue_chat(identifier: str, user: User = Depends(get_current_user), db: S
             tool_trace_json=message.tool_trace_json, outcome=message.outcome, created_at=message.created_at))
     db.commit()
     return {"id": row.id, "title": row.title}
+
+
+class ConversationRename(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+
+
+@router.patch("/assistant/workspace/conversations/{identifier}")
+def rename_chat(identifier: str, payload: ConversationRename, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    conversation = assistant_memory.owned_conversation(db, user.id, identifier)
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(422, "Title is required")
+    conversation.title = title
+    db.commit()
+    return {"id": conversation.id, "title": conversation.title}
+
+
+def _delete_rows(db, table, condition):
+    """Delete rows and everything that references them through foreign keys, children first."""
+    for child in Base.metadata.sorted_tables:
+        for fk in child.foreign_keys:
+            if fk.column.table is table and child is not table:
+                keys = select(fk.column).where(condition)
+                _delete_rows(db, child, fk.parent.in_(keys))
+    db.execute(delete(table).where(condition))
+
+
+@router.delete("/assistant/workspace/conversations/{identifier}")
+def delete_chat(identifier: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    conversation = assistant_memory.owned_conversation(db, user.id, identifier)
+    active = db.scalar(select(AssistantExecution.id).where(AssistantExecution.conversation_id == identifier,
+                       AssistantExecution.status.in_(["queued", "running"])))
+    if active:
+        raise HTTPException(409, "Stop the running answer before deleting this chat")
+    table = Conversation.__table__
+    _delete_rows(db, table, table.c.id == conversation.id)
+    db.commit()
+    return {"status": "deleted"}

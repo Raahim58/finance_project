@@ -348,3 +348,49 @@ def test_risk_free_resolves_canonical_tbill_series_without_metadata_flag(monkeyp
         assert found["annual_rate"] == pytest.approx(0.115154)
         assert found["effective_date"] == date(2026, 4, 29)
         assert _effective_risk_free_rate(db, date(2026, 1, 1)) is None
+
+
+def test_broad_index_benchmark_is_default_capm_market_proxy(client):
+    from types import SimpleNamespace
+    from app.services.workstation_service import _capm_market_proxy_symbol
+    from app.db.session import SessionLocal
+    from app.models.workstation import Instrument
+    with SessionLocal() as db:
+        db.add(Instrument(symbol="KSE100X", name="Test Index", instrument_type="total_return_index", currency="PKR", country="PK", metadata_json='{"broad_market_proxy":true,"return_basis":"total_return"}'))
+        db.add(Instrument(symbol="HBLX", name="Test Bank", instrument_type="equity", currency="PKR", country="PK", metadata_json="{}"))
+        db.commit()
+        symbol, notes = _capm_market_proxy_symbol(db, {"performance_benchmark_symbol": "KSE100X"})
+        assert symbol == "KSE100X" and "using the performance benchmark" in " ".join(notes)
+        assert _capm_market_proxy_symbol(db, {"performance_benchmark_symbol": "HBLX"})[0] is None
+
+
+def test_scenario_run_delete_is_owner_scoped(client):
+    headers = signup(client, "scenario-delete@example.com")
+    other = signup(client, "scenario-delete-other@example.com")
+    portfolio_id = seeded_portfolio(client, headers)
+    run = client.post(f"/portfolios/{portfolio_id}/scenario-runs", headers=headers, json={"name": "Del", "scenario_type": "hypothetical", "shocks": {"HBL": -0.1}})
+    assert run.status_code == 201, run.text
+    assert client.delete(f"/portfolios/{portfolio_id}/scenario-runs/{run.json()['id']}", headers=other).status_code == 404
+    assert client.delete(f"/portfolios/{portfolio_id}/scenario-runs/{run.json()['id']}", headers=headers).status_code == 200
+    assert client.get(f"/portfolios/{portfolio_id}/scenario-runs", headers=headers).json() == []
+    assert client.delete(f"/portfolios/{portfolio_id}/scenario-runs/{run.json()['id']}", headers=headers).status_code == 404
+
+
+def test_chat_rename_and_delete_are_owner_scoped(client):
+    headers = signup(client, "chat-edit@example.com")
+    other = signup(client, "chat-edit-other@example.com")
+    chat = client.post("/assistant/conversations", headers=headers, json={"title": "First"}).json()
+    url = f"/assistant/workspace/conversations/{chat['id']}"
+    assert client.patch(url, headers=other, json={"title": "x"}).status_code == 404
+    assert client.patch(url, headers=headers, json={"title": "  Renamed  "}).json()["title"] == "Renamed"
+    from app.db.session import SessionLocal
+    from app.models.workstation import AssistantMessage
+    with SessionLocal() as db:
+        db.add(AssistantMessage(conversation_id=chat["id"], role="user", content="hi"))
+        db.commit()
+    assert client.delete(url, headers=other).status_code == 404
+    assert client.delete(url, headers=headers).status_code == 200
+    with SessionLocal() as db:
+        assert db.query(AssistantMessage).filter_by(conversation_id=chat["id"]).count() == 0
+    items = client.get("/assistant/workspace/conversations", headers=headers).json()["items"]
+    assert chat["id"] not in [item["id"] for item in items]
