@@ -47,6 +47,11 @@ CONTRACTS: dict[Route, RetrievalContract] = {c.route: c for c in (
         required=(B.COMPANY_FACTS, B.PRICE_SNAPSHOT, B.EVIDENCE_SEARCH),
         optional=(B.SECTOR, B.MARKET_RISK, B.EVENTS), forbidden=(B.PORTFOLIO_QUANT,),
         as_secondary=(B.COMPANY_FACTS,), max_entities=2, max_calls=10),
+    # "What do I hold / what is it worth": stored holdings and valuation only, no research sweep.
+    RetrievalContract(Route.PORTFOLIO_OVERVIEW, required=(B.PORTFOLIO_SNAPSHOT,), optional=(B.PORTFOLIO_PERFORMANCE,),
+        forbidden=(B.IPS_COMPLIANCE, B.PORTFOLIO_QUANT, B.PORTFOLIO_EVENTS, B.EVIDENCE_SEARCH, B.COMPANY_DIGEST,
+                   B.MARKET_BRIEF, B.MARKET_SNAPSHOT, B.PRICE_SNAPSHOT, B.SECURITY_QUANT, B.MARKET_UNIVERSE) + SECTIONS,
+        portfolio_context='always', entity_blocks=False, max_calls=2),
     RetrievalContract(Route.PORTFOLIO_REVIEW,
         required=(B.PORTFOLIO_SNAPSHOT, B.IPS_COMPLIANCE, B.PORTFOLIO_QUANT, B.EVIDENCE_SEARCH),
         optional=(B.PORTFOLIO_EVENTS, B.PORTFOLIO_PERFORMANCE, B.PRICE_SNAPSHOT, B.COMPANY_DIGEST, B.EVENTS),

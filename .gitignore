@@ -30,3 +30,5 @@ images/
 .next-ui-preview/
 .next-*/
 *.tsbuildinfo
+.env.example
+.env.oracle.example

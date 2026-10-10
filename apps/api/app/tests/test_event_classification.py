@@ -266,3 +266,16 @@ def test_single_source_market_news_is_medium_and_titled_by_headline(vectors):
         events = list(db.scalars(select(NormalizedEvent).where(NormalizedEvent.classification_status == 'classified')))
         assert len(events) == 1 and events[0].materiality == 'medium'
         assert events[0].title == 'Oil surges on US-Iran tension'
+
+
+@pytest.mark.usefixtures("database")
+def test_market_wide_sentences_are_macro_or_geopolitics_not_earnings(vectors):
+    with SessionLocal() as db:
+        instruments(db)
+        doc = article(db, 'Oil prices slip on US-Iran peace hopes. '
+            'Technology shares came under pressure after new details about OpenAI revenue performance. '
+            'Gold prices edged up as treasury yields fell.', title='Markets wrap', url='https://a.test/wrap')
+        classify(db, doc.id)
+        types = {e.event_type for e in db.scalars(select(NormalizedEvent))} | {
+            s.event_type for s in db.scalars(select(EvidenceStatement))}
+        assert {'geopolitics', 'macro'} <= types and 'earnings' not in types

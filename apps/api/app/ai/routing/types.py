@@ -16,6 +16,7 @@ class Route(str, Enum):
     TECHNICAL_SETUP = 'technical_setup'
     ANALYST_SENTIMENT = 'analyst_sentiment'
     FUNDAMENTALS_SNAPSHOT = 'fundamentals_snapshot'
+    PORTFOLIO_OVERVIEW = 'portfolio_overview'
     PORTFOLIO_REVIEW = 'portfolio_review'
     PORTFOLIO_IMPACT = 'portfolio_impact'
     PORTFOLIO_REBALANCE = 'portfolio_rebalance'

@@ -377,3 +377,17 @@ def test_universe_screen_ranks_by_score_screenable_only_and_excludes_held():
         symbols = [row[1] for row in out['data']['rows'] if row[1].startswith(tag)]
         db.rollback()
     assert symbols == [f'{tag}A', f'{tag}B']
+
+
+@pytest.mark.parametrize('question', ['what does my portfolio look like right now?', 'What do I hold?', 'how much is my portfolio worth'])
+def test_simple_portfolio_questions_use_the_snapshot_only_route(question):
+    decision = route_query(RouterInput(question, (), True))
+    assert decision.primary is Route.PORTFOLIO_OVERVIEW
+    plan = plan_initial_evidence({'portfolio': PORTFOLIO}, question, False, 12, decision=decision)
+    assert [step.tool for step in plan.steps] == ['portfolio.summary']
+
+
+@pytest.mark.parametrize('question', ['what are the risks in my portfolio?', 'how is my portfolio doing', 'should I rebalance my portfolio',
+    'how will oil affect my portfolio'])
+def test_analytical_portfolio_questions_keep_the_full_contract(question):
+    assert route_query(RouterInput(question, (), True)).primary is not Route.PORTFOLIO_OVERVIEW

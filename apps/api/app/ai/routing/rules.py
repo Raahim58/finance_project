@@ -31,6 +31,7 @@ PORTFOLIO = _rx(r"\bmy (portfolio|holdings?|positions?|investments?|stocks|money
 IMPACT = _rx(r"\b(affect|impact|hurt|help|mean for|exposure)\b")
 REBALANCE = _rx(r"\brebalanc|\bconcentrat|\bdiversif|\btrim\b|\boverweight|\bunderweight|\bbuy more\b|\bsell\b|\bbetter options?\b|\balternatives?\b|\boptions? outside\b|\boutside (of )?(my|the|just)\b|\bother (stocks?|options|names)\b|\bwhat else (should|could|can) i\b|\bnew (stocks?|ideas?)\b|\breduce\b|\bshould i (buy|add)\b|\ballocat|\brecommend|\bwhat (should|can) i do\b|\bnext (step|action)")
 PORTFOLIO_REVIEW = _rx(r"\bgoals?\b|what could go wrong|\brisks?\b|\bhow (is|am)\b|what do you think of|\breview\b|\bmandate\b|\bips\b|\bcompliance\b|\bperformance\b")
+PORTFOLIO_OVERVIEW = _rx(r"look like|looking|\bwhat (do )?i (hold|own)\b|\bholdings?\b|\bhow much\b|\bworth\b|\bvalue\b|\btotal\b|\bbalance\b|\bsummary\b|\bbreakdown\b|\bpositions?\b|\bshow me\b")
 MARKET = _rx(r"\bmarket\b|\bkse\b|\bindex\b|\bsector\b|\bbreadth\b|\bpsx\b|\bmacro\b|\bmorning\b|\bnews\b")
 MARKET_BRIEF = _rx(r"(what'?s|what is) (happening|going on) in the market|\bmarket (today|overview|brief|update|status)\b|\bhow is the market\b|\bmorning brief\b|\bnews today\b")
 WHY = _rx(r"\bwhy\b|\bdriver|\bcaused?\b|\breason\b|\bmoving\b|\bmoved\b|\bdown\b|\bup\b")
@@ -78,6 +79,8 @@ RULES: tuple[Rule, ...] = (
     (Route.ANALYST_SENTIMENT, 3.0, lambda f: f.has(ANALYST)),
     (Route.FUNDAMENTALS_SNAPSHOT, 2.5, lambda f: f.has(FUNDAMENTALS) or dividend_query(f.text)),
     (Route.FUNDAMENTALS_SNAPSHOT, 2.0, lambda f: f.entities > 0 and dividend_query(f.text) and not f.has(REBALANCE) and not f.has(IMPACT)),
+    (Route.PORTFOLIO_OVERVIEW, 2.5, lambda f: f.portfolio_words and f.entities == 0 and f.has(PORTFOLIO_OVERVIEW)
+        and not any(f.has(p) for p in (PORTFOLIO_REVIEW, IMPACT, REBALANCE, WHY, MARKET, EVENT, EARNINGS))),
     (Route.PORTFOLIO_REVIEW, 3.0, lambda f: f.portfolio_words and f.has(PORTFOLIO_REVIEW)),
     (Route.PORTFOLIO_REVIEW, 1.0, lambda f: f.portfolio_words),
     (Route.PORTFOLIO_IMPACT, 3.5, lambda f: (f.portfolio_words or f.has(_rx(r"\bme\b"))) and f.has(IMPACT) and (f.market_words or f.entities > 0)),
