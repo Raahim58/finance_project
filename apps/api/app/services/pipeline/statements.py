@@ -3,7 +3,7 @@ import re
 from sqlalchemy import select
 from app.models.document import Document
 from app.models.pipeline import DocumentEntityLink, DocumentSection, EvidenceStatement, StatementEvidence
-from app.models.workstation import Instrument
+from app.models.workstation import Instrument, InstrumentAlias
 from app.schemas.pipeline import StatementBatch, StatementCandidate
 from app.ingestion.news_selection import classify_news
 from app.services.pipeline.runs import fingerprint
@@ -59,6 +59,17 @@ def validate_candidate(candidate, sections, subjects, *, official=False):
             raise ValueError('unsupported_sentiment')
     return section
 
+def subject_names(db,symbols):
+    """Symbol, company name and alias strings by symbol, for literal in-quote attribution."""
+    out={sym:{sym} for sym in symbols}
+    for sym,name in db.execute(select(Instrument.symbol,Instrument.name).where(Instrument.symbol.in_(symbols))): out[sym].add(name)
+    for sym,alias in db.execute(select(Instrument.symbol,InstrumentAlias.alias).join(InstrumentAlias,InstrumentAlias.instrument_id==Instrument.id).where(Instrument.symbol.in_(symbols))): out[sym].add(alias)
+    return out
+
+def names_in(names,quote):
+    # Short tickers (AIR/NET/GAS) are ordinary words: they count only in capitals.
+    return any(re.search(r'(?<!\w)'+re.escape(n)+r'(?!\w)',quote,0 if len(n)<=3 else re.I) for n in names if len(n)>=3)
+
 def extract(db,document_id, *, model_output=None):
     document=db.get(Document,document_id)
     parts={s.id:s for s in db.scalars(select(DocumentSection).where(DocumentSection.document_id==document_id))}
@@ -66,8 +77,10 @@ def extract(db,document_id, *, model_output=None):
         .where(DocumentEntityLink.document_id==document_id,DocumentEntityLink.status=='validated')))
     # No company link is invented for sector/macro documents.
     subjects=set(linked or ['market'])
-    if document.symbol in subjects and document.document_type in ('annual_report','quarterly_report','interim_report','announcement'):
-        subjects={document.symbol}
+    issuer_doc=document.symbol in subjects and document.document_type in ('annual_report','quarterly_report','interim_report','announcement')
+    if issuer_doc: subjects={document.symbol}
+    names=subject_names(db,subjects-{'market'})
+    if not issuer_doc: subjects.add('market')
     official=document.document_type in ('annual_report','quarterly_report','announcement','macro_report','policy_document') and document.source_tier<=2
     candidates=[]
     if model_output is not None:
@@ -77,10 +90,10 @@ def extract(db,document_id, *, model_output=None):
             for _,quote in sentence_slices(section.text):
                 kind,event,phase=labels(quote,official)
                 if not event or len(quote)>6000: continue
-                # Multiple mentioned companies are ambiguous; leave attribution
-                # at market level unless the literal issuer name is in the quote.
-                for subject in subjects:
-                    if len(subjects)>1 and subject not in quote: continue
+                # A company link on the document is not a link on the sentence: attribute it
+                # only where the quote names the company, otherwise it is market-level.
+                named=[s for s in subjects if s in names and names_in(names[s],quote)]
+                for subject in (named or (['market'] if not issuer_doc else list(subjects))):
                     candidates.append(StatementCandidate(section_id=section.id,subject_key=subject,quote=quote,
                         kind=kind,event_type=event,lifecycle=phase,topics=classify_news(quote)['topics'],attribution=None,sentiment=None))
     # Validate the whole batch before any writes: one bad candidate must not

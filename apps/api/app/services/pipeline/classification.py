@@ -209,8 +209,9 @@ def rules_classify(sections, entities, document, *, official):
             if len(quote) > 600: continue
             if kind == 'commentary' and not official: kind = 'secondary_report'
             subjects = entities.linked or ['market']
-            if document.symbol in subjects and document.document_type in ISSUER_TYPES: subjects = [document.symbol]
-            if len(subjects) > 1: subjects = [s for s in subjects if entities.named_in(s, quote)] or ['market']
+            issuer_doc = document.symbol in subjects and document.document_type in ISSUER_TYPES
+            if issuer_doc: subjects = [document.symbol]
+            elif subjects != ['market']: subjects = [s for s in subjects if entities.named_in(s, quote)] or ['market']
             if subjects == ['market'] and (market_type := market_event_type(quote)): event_type = market_type
             if subjects == ['market'] and event_type in COMPANY_ONLY_TYPES: continue
             if not event_type: continue

@@ -53,7 +53,7 @@ type LiveRun = ChatRun & {
   warning?: string;
 };
 type WorkspaceAction = {
-  open: (question?: string) => void; setCompanyPortfolioScope: (id: string | null) => void; setPortfolioScope: (id: string | null) => void; close: () => void; opened: boolean;
+  open: (question?: string) => void; askNew: (question: string) => void; setCompanyPortfolioScope: (id: string | null) => void; setPortfolioScope: (id: string | null) => void; close: () => void; opened: boolean;
   chats: Conversation[]; selected: string | null; selectChat: (id: string) => void;
   newChat: () => Promise<string | null>; moreChats: () => void; hasMoreChats: boolean;
 };
@@ -504,20 +504,28 @@ export function AssistantWorkspaceProvider({
       setError((e as Error).message);
     }
   };
+  const removeAll = async () => {
+    const idle = chats.filter((c) => !c.active_run);
+    if (!idle.length || !window.confirm(`Delete all ${idle.length} chats? This cannot be undone.${idle.length < chats.length ? " Chats that are still generating are kept." : ""}`)) return;
+    const done = new Set<string>();
+    for (const chat of idle) { try { await deleteChat(chat.id); done.add(chat.id); } catch (e) { setError((e as Error).message); break; } }
+    setChats((old) => old.filter((c) => !done.has(c.id)));
+    setHistories((old) => Object.fromEntries(Object.entries(old).filter(([id]) => !done.has(id))));
+    if (selected && done.has(selected)) setSelected(null);
+  };
   const chatActions = (chat: Conversation) => <span className="assistant-chat-actions">
     <button type="button" aria-label={`Rename ${chat.title}`} title="Rename" onClick={() => void editChat(chat)}>✎</button>
     <button type="button" aria-label={`Delete ${chat.title}`} title="Delete" onClick={() => void removeChat(chat)}>🗑</button>
   </span>;
-  const send = async () => {
-    const key = selected ?? "new",
-      question = (drafts[key] ?? "").trim();
+  // `existing` null starts a fresh conversation; the page context is re-read first so the question is scoped correctly.
+  const sendQuestion = async (question: string, existing: string | null, draftKey: string) => {
     if (!question || submitting || providerSaving || !contextReady) return;
     setSubmitting(true);
     setError(null);
     const owner = accountRef.current;
     const snapshot = { ...context };
     try {
-      const id = selected ?? (await newChat());
+      const id = existing ?? (await newChat());
       if (!id) return;
       const accepted = await submitRun(
         id,
@@ -527,7 +535,7 @@ export function AssistantWorkspaceProvider({
         provider ?? undefined,
       );
       if (owner !== accountRef.current) return;
-      setDrafts((old) => ({ ...old, [key]: "", [id]: "" }));
+      setDrafts((old) => ({ ...old, [draftKey]: "", [id]: "" }));
       setSelected(id);
       await loadHistory(id);
       observe(accepted, id);
@@ -538,6 +546,20 @@ export function AssistantWorkspaceProvider({
       setSubmitting(false);
     }
   };
+  const send = () => {
+    const key = selected ?? "new";
+    return sendQuestion((drafts[key] ?? "").trim(), selected, key);
+  };
+  // Opens an empty new chat with the question pasted in; the user reviews and sends it.
+  const askNew = useCallback((question: string) => {
+    setSelected(null);
+    selectedRef.current = null;
+    pendingPrefill.current = null;
+    setDrafts((old) => ({ ...old, new: question }));
+    setOpened(true);
+    setShowChats(false);
+    setTimeout(() => composer.current?.focus(), 0);
+  }, []);
   const history = selected ? histories[selected] : null,
     conversationTokens = sumTokenUsage(history?.items ?? []),
     live = Object.values(runs).filter((r) => r.conversationId === selected),
@@ -553,7 +575,7 @@ export function AssistantWorkspaceProvider({
     composer.current?.focus();
   };
   const marketWorkspace = !fullPage;
-  const action: WorkspaceAction = { open, setCompanyPortfolioScope, setPortfolioScope:setCompanyPortfolioScope, close: () => setOpened(false), opened, chats, selected,
+  const action: WorkspaceAction = { open, askNew, setCompanyPortfolioScope, setPortfolioScope:setCompanyPortfolioScope, close: () => setOpened(false), opened, chats, selected,
     selectChat: id => { setSelected(id); setOpened(true); setShowChats(false); nearBottom.current = true; },
     newChat, moreChats: () => { if (chatCursor) void refreshChats(chatCursor); }, hasMoreChats: !!chatCursor };
   return (
@@ -585,7 +607,7 @@ export function AssistantWorkspaceProvider({
         >
           {fullPage?<aside data-workspace-left-panel className="assistant-conversation-list" aria-label="Conversations">
             <div><h1>Chats</h1><button type="button" onClick={()=>void newChat()}>＋ New chat</button></div>
-            <nav aria-label="Saved chat threads">{chats.map(chat=><div className="assistant-chat-row" key={chat.id}><button aria-current={selected===chat.id?"true":undefined} onClick={()=>{setSelected(chat.id);nearBottom.current=true;}}><strong>{chat.title}</strong><span>{chat.latest_activity?formatDate(chat.latest_activity):"—"}{chat.active_run?" · Generating":""}</span></button>{chatActions(chat)}</div>)}</nav>
+            <nav aria-label="Saved chat threads">{chats.length > 1 ? <button className="assistant-delete-all" onClick={() => void removeAll()}>Delete all chats</button> : null}{chats.map(chat=><div className="assistant-chat-row" key={chat.id}><button aria-current={selected===chat.id?"true":undefined} onClick={()=>{setSelected(chat.id);nearBottom.current=true;}}><strong>{chat.title}</strong><span>{chat.latest_activity?formatDate(chat.latest_activity):"—"}{chat.active_run?" · Generating":""}</span></button>{chatActions(chat)}</div>)}</nav>
             {!chats.length?<p>No saved chats yet.</p>:null}{chatCursor?<button type="button" onClick={()=>void refreshChats(chatCursor)}>More chats</button>:null}
           </aside>:null}
           <div className="assistant-conversation-column">
@@ -635,6 +657,7 @@ export function AssistantWorkspaceProvider({
               >
                 New chat
               </button>
+              {chats.length > 1 ? <button className="btn btn-secondary" onClick={() => void removeAll()}>Delete all chats</button> : null}
               {chats.map((chat) => (
                 <div className="assistant-chat-row" key={chat.id}>
                   <button

@@ -7,7 +7,7 @@ import { ComparisonTable } from "@/components/DecisionTables";
 import { CompanyLogo } from "@/components/markets/CompanyLogo";
 import styles from "@/components/portfolio/build/build.module.css";
 import type { WorkspaceData } from "@/components/workspace/useWorkspaceData";
-import { PortfolioComparison, comparePortfolio, createAllocation, decideRecommendation, getAllocations, renameAllocation, runOptimizer, type AllocationSet } from "@/lib/api";
+import { PortfolioComparison, comparePortfolio, createAllocation, decideRecommendation, getAllocations, renameAllocation, runOptimizer, updateAllocation, type AllocationSet } from "@/lib/api";
 import { BuildExtras, getBuildExtras } from "@/lib/api/portfolio-build";
 import { normalizeWeights, weightSummary } from "@/lib/analytics";
 import { formatDate, formatNumber, humanize, numeric } from "@/lib/overview";
@@ -136,6 +136,15 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
       setMessage(`Sandbox allocation v${allocation.version} saved${recommendationId ? " and linked to the recommendation" : ""}. Actual holdings were not changed.`); refreshAllocations(); hydratedAllocation.current = ""; setSelectedAllocationId(String(allocation.id)); setDraftName(null); setDirty(false);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not save sandbox"); } finally { setRunning(false); }
   }
+  async function updateSaved() {
+    if (!savedAllocation) return;
+    setRunning(true);
+    try {
+      await updateAllocation(portfolioId, savedAllocation.id, Object.entries(proposed).filter(([, weight]) => weight > 0).map(([symbol, weight]) => ({ symbol, target_weight: weight, locked: false, is_cash: symbol === "CASH" })));
+      setMessage("Saved proposal updated in place. Actual holdings were not changed.");
+      hydratedAllocation.current = ""; setDirty(false); setComparison(null); refreshAllocations();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Could not update the proposal"); } finally { setRunning(false); }
+  }
   function reset() { setDraftName(null); setObjective(DEFAULT_OBJECTIVE); setMethod(DEFAULT_METHOD); setTargetVolatility(""); setTargetBeta(""); setAnalystReturns({}); setDirty(true); setProposed(current); setComparison(null); setDiagnostics(null); }
   const setWeight = (symbol: string, percent: string) => { setDirty(true); setComparison(null); setProposed(values => ({ ...values, [symbol]: Math.max(0, Number(percent) || 0) / 100 })); };
 
@@ -216,7 +225,8 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
         <label className={styles.control}>Objective<select id="build-objective" className={styles.field} value={objective} onChange={event => setObjective(event.target.value)}>{objectiveOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <label className={styles.control}>Method<select id="build-method" className={styles.field} value={method} disabled={!usesReturns} onChange={event => setMethod(event.target.value)}>{returnMethodOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <button type="button" className={styles.btn} disabled={running || !weightState.valid} onClick={() => void analyze()}>{running ? "Calculating…" : savedAllocation && !dirty ? "Compare saved proposal" : "Compare proposal"}</button>
-        <button type="button" className={styles.btnSmall} disabled={running || !weightState.valid} onClick={saveSandbox}>{dirty && savedAllocation ? "Save changes" : "Save sandbox"}</button>
+        <button type="button" className={styles.btnSmall} disabled={running || !weightState.valid} onClick={saveSandbox}>{dirty && savedAllocation ? "Save as new version" : "Save sandbox"}</button>
+        {dirty && savedAllocation?.kind === "sandbox" ? <button type="button" className={styles.btnSmall} disabled={running || !weightState.valid} onClick={() => void updateSaved()}>Update this proposal</button> : null}
         <details className={styles.actions}><summary aria-label="Construction actions">•••</summary><div className={styles.menu}><button type="button" disabled={running || Boolean(compatibilityProblem) || analystIncomplete || missingTarget} onClick={optimize}>Run optimization</button><button type="button" disabled={running} onClick={reset}>Reset to current holdings</button></div></details>
       </div>
       <p className={styles.sub}>Proposal only · holdings and transactions remain unchanged. Comparison uses current stored market inputs; configuration controls apply to a new optimizer run.</p>
@@ -236,7 +246,7 @@ export function BuildTab({ portfolioId, data, setMessage }: { portfolioId: strin
               if (name === proposalName(savedAllocation)) return;
               void renameAllocation(portfolioId, savedAllocation.id, name).then(refreshAllocations).catch(error => setMessage(error instanceof Error ? error.message : "Could not rename the proposal")); }} />
         : <h1 className={styles.title}>Portfolio construction</h1>}
-      {dirty ? <p className={styles.editing}>Editing{savedAllocation ? " a copy of this proposal" : ""} · unsaved changes. Saving creates a new version; the stored proposal is not overwritten.</p> : null}
+      {dirty ? <p className={styles.editing}>Editing{savedAllocation ? " a copy of this proposal" : ""} · unsaved changes. “Save as new version” keeps the stored proposal; “Update this proposal” overwrites its weights.</p> : null}
       <div className={styles.allocations}>
         <section><div className={styles.allocationHeading}><h2>Current allocation</h2><span>Total {pctOf(Object.values(current).reduce((sum, value) => sum + value, 0))}</span></div>
           <table className={styles.table}><thead><tr><th>#</th><th>Company</th><th className={styles.num}>Weight</th><th /></tr></thead><tbody>{rowsView.rows.map((row,index) => renderRow(row,index,"current"))}{othersRow("current")}</tbody></table>

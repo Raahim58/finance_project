@@ -279,3 +279,15 @@ def test_market_wide_sentences_are_macro_or_geopolitics_not_earnings(vectors):
         types = {e.event_type for e in db.scalars(select(NormalizedEvent))} | {
             s.event_type for s in db.scalars(select(EvidenceStatement))}
         assert {'geopolitics', 'macro'} <= types and 'earnings' not in types
+
+
+@pytest.mark.usefixtures("database")
+def test_sentence_not_naming_the_linked_company_stays_market_level(vectors):
+    with SessionLocal() as db:
+        instruments(db)
+        doc = article(db, 'Lucky Cement Limited announced a dividend payout. '
+            'The governor expects the current account deficit at 0-1% of GDP, officials said.', title='Mixed', url='https://a.test/mixed')
+        classify(db, doc.id)
+        subjects = {(s.subject_key, s.text[:6]) for s in db.scalars(select(EvidenceStatement))}
+        assert ('LUCK', 'Lucky ') in subjects
+        assert not any(k == 'LUCK' and t == 'The go' for k, t in subjects)

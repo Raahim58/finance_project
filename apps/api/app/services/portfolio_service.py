@@ -539,6 +539,15 @@ def _serialize_allocation(db: Session, row: AllocationSet) -> AllocationSetRespo
     )
 
 
+def _add_allocation_items(db: Session, row: AllocationSet, items) -> None:
+    for item in items:
+        instrument = None if item.is_cash else instrument_for_symbol(db, item.symbol)
+        amount = row.base_value * item.target_weight if row.base_value is not None else None
+        latest = latest_price_for_symbol(db, item.symbol) if instrument else None
+        quantity = amount / latest.close if amount is not None and latest and latest.close else None
+        db.add(AllocationItem(allocation_set_id=row.id, symbol="CASH" if item.is_cash else instrument.symbol, instrument_id=instrument.id if instrument else None, is_cash=item.is_cash, target_weight=item.target_weight, target_amount=amount, target_quantity=quantity, locked=item.locked))
+
+
 def create_allocation_set(db: Session, user: User, portfolio_id: str, payload: AllocationSetCreate) -> AllocationSetResponse:
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     if abs(sum((item.target_weight for item in payload.items), Decimal("0")) - Decimal("1")) > Decimal("0.000001"):
@@ -552,12 +561,7 @@ def create_allocation_set(db: Session, user: User, portfolio_id: str, payload: A
             raise HTTPException(status_code=404, detail="Linked recommendation was not found for this portfolio")
     row = AllocationSet(portfolio_id=portfolio.id, kind=payload.kind, version=version, status="draft" if payload.kind == "sandbox" else "active", assumptions_json=json.dumps(payload.assumptions, sort_keys=True), base_value=payload.base_value, created_by_user_id=user.id)
     db.add(row); db.flush()
-    for item in payload.items:
-        instrument = None if item.is_cash else instrument_for_symbol(db, item.symbol)
-        amount = payload.base_value * item.target_weight if payload.base_value is not None else None
-        latest = latest_price_for_symbol(db, item.symbol) if instrument else None
-        quantity = amount / latest.close if amount is not None and latest and latest.close else None
-        db.add(AllocationItem(allocation_set_id=row.id, symbol="CASH" if item.is_cash else instrument.symbol, instrument_id=instrument.id if instrument else None, is_cash=item.is_cash, target_weight=item.target_weight, target_amount=amount, target_quantity=quantity, locked=item.locked))
+    _add_allocation_items(db, row, payload.items)
     record_event(
         db, user, event_type="proposal_saved", entity_type="allocation_set", entity_id=row.id, portfolio_id=portfolio.id,
         entity_version=row.version,
@@ -581,19 +585,29 @@ def list_allocation_sets(db: Session, user: User, portfolio_id: str) -> list[All
     return [_serialize_allocation(db, row) for row in db.scalars(select(AllocationSet).where(AllocationSet.portfolio_id == portfolio.id).order_by(AllocationSet.created_at.desc()))]
 
 
-def rename_allocation_set(db: Session, user: User, portfolio_id: str, allocation_id: str, name: str) -> AllocationSetResponse:
-    """Proposal names live in the free-form assumptions record; no schema change is needed."""
+def rename_allocation_set(db: Session, user: User, portfolio_id: str, allocation_id: str, name: str | None = None, items=None) -> AllocationSetResponse:
+    """Proposal names live in the free-form assumptions record; passing items replaces the saved weights in place."""
     portfolio = get_portfolio_or_404(db, user, portfolio_id)
     row = db.scalar(select(AllocationSet).where(AllocationSet.id == allocation_id, AllocationSet.portfolio_id == portfolio.id))
     if row is None:
         raise HTTPException(status_code=404, detail="Saved proposal not found")
-    cleaned = " ".join(name.split())[:80]
-    assumptions = json.loads(row.assumptions_json or "{}")
-    if cleaned:
-        assumptions["name"] = cleaned
-    else:
-        assumptions.pop("name", None)
-    row.assumptions_json = json.dumps(assumptions, sort_keys=True)
+    if items is not None:
+        if row.kind != "sandbox":
+            raise HTTPException(status_code=409, detail="Only sandbox proposals can be edited; save a new version instead")
+        if abs(sum((item.target_weight for item in items), Decimal("0")) - Decimal("1")) > Decimal("0.000001"):
+            raise HTTPException(status_code=422, detail="Allocation weights must sum to one")
+        for old in db.scalars(select(AllocationItem).where(AllocationItem.allocation_set_id == row.id)):
+            db.delete(old)
+        db.flush()
+        _add_allocation_items(db, row, items)
+    if name is not None:
+        cleaned = " ".join(name.split())[:80]
+        assumptions = json.loads(row.assumptions_json or "{}")
+        if cleaned:
+            assumptions["name"] = cleaned
+        else:
+            assumptions.pop("name", None)
+        row.assumptions_json = json.dumps(assumptions, sort_keys=True)
     db.commit()
     return _serialize_allocation(db, row)
 
