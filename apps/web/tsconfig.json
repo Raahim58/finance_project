@@ -37,7 +37,9 @@
     ".next-ui-preview/types/**/*.ts",
     ".next-ui-preview/dev/types/**/*.ts",
     ".next-13000/types/**/*.ts",
-    ".next-13000/dev/types/**/*.ts"
+    ".next-13000/dev/types/**/*.ts",
+    ".next-local-live/types/**/*.ts",
+    ".next-local-live/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"
