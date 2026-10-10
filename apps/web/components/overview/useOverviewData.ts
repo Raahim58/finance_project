@@ -41,7 +41,8 @@ export function useOverviewData() {
     void read(getMarketOverview, setMarket);
     void read(getMarketFreshness, setFreshness);
     void read(() => getIndexHistory("KSE-100", 120), setIndexHistory);
-    void read(async () => (await getEventFeed(undefined, 0, 20)).events, setEvents);
+    // Servers that predate the 50-event limit reject it with 422; fall back to their 20 maximum.
+    void read(async () => (await getEventFeed(undefined, 0, 50).catch(() => getEventFeed(undefined, 0, 20))).events, setEvents);
     void read(getMacroRegime, setRegime);
     void read(() => request<OverviewUser>("/auth/me"), setUser);
     void read(async () => {

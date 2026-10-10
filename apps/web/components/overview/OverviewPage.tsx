@@ -127,7 +127,7 @@ function PortfolioPulse({ data }: { data: OverviewData }) {
 function MaterialEvents({ data }: { data: OverviewData }) {
   return <section className={`${styles.surface} ${styles.events}`} aria-labelledby="material-events-heading">
     <div className={styles.sectionHead}><h2 id="material-events-heading">Material events</h2><Link href="/research">View all research <Arrow /></Link></div>
-    {data.events.data?.length ? data.events.data.filter(event => !isMarketEvent(event)).slice(0, 4).map(event => <article className={styles.event} key={event.event_key}>
+    {data.events.data?.length ? data.events.data.filter(event => !isMarketEvent(event)).slice(0, 6).map(event => <article className={styles.event} key={event.event_key}>
       <time dateTime={event.occurred_at}>{formatDate(event.occurred_at)}</time><div><strong>{event.subjects.map(subject => subject.subject_key).join(", ") || humanize(event.event_type)}</strong><p>{event.title}</p><small>{humanize(event.event_type)} · {humanize(event.freshness_status)}</small></div>
       <span className={`${styles.materiality} ${event.materiality === "high" ? styles.high : event.materiality === "medium" ? styles.medium : ""}`}>{humanize(event.materiality || "Not rated")}</span>
       <details className={styles.eventEvidence}><summary>View evidence <Arrow /></summary><EvidenceDrawer evidence={event.evidence} /></details>

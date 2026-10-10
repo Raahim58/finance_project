@@ -100,7 +100,7 @@ export function investigationSignals({ market, events, exposure, regime }: {
     }));
   }
   const sourceOf = (event: ResearchEventView) => [...new Set(event.evidence.map(item => item.source_name))].join(" · ") || "Source unavailable";
-  events.filter(event => !isMarketEvent(event)).slice(0, 3).forEach(event => signals.push({
+  events.filter(event => !isMarketEvent(event)).slice(0, 8).forEach(event => signals.push({
     id: `event:${event.event_key}`, category: "Events", title: event.subjects.map(subject => subject.subject_key).join(", ") || humanize(event.event_type),
     value: humanize(event.event_type), reason: event.title,
     source: [...new Set(event.evidence.map(item => item.source_name))].join(" · ") || "Source unavailable",
@@ -113,7 +113,7 @@ export function investigationSignals({ market, events, exposure, regime }: {
       reason: row.event.title, source: row.companies.some(company => company.relationship_kind === "ai_proposed_indirect") ? "Includes AI-proposed indirect relevance" : "Event linked to holdings",
       date: row.event.occurred_at, href: `/portfolios/${encodeURIComponent(exposure.portfolio_id)}/research` });
   });
-  events.filter(isMarketEvent).slice(0, 3).forEach(event => signals.push({
+  events.filter(isMarketEvent).slice(0, 5).forEach(event => signals.push({
     id: `macro-event:${event.event_key}`, category: "Macro", title: humanize(event.event_type), value: "Market news",
     reason: event.title, source: sourceOf(event), date: event.occurred_at, href: "/research",
   }));

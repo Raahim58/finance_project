@@ -20,7 +20,7 @@ router = APIRouter()
 @router.get("/research/event-feed")
 def event_feed(
     symbol: str | None = None,
-    limit: int = Query(5, ge=1, le=20),
+    limit: int = Query(5, ge=1, le=50),
     window_days: int = Query(90, ge=1, le=365),
     cursor: int = Query(0, ge=0),
     db: Session = Depends(get_db),

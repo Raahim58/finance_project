@@ -95,6 +95,18 @@ Cached content retains its source/as-of information. A cache is not a replacemen
 - Quantitative estimates are modeled outputs, not promised returns. Missing required inputs remain unavailable.
 - Provider availability, source coverage, extraction quality and observed freshness constrain the analysis.
 
+## Future improvements
+
+### Scenario AI (not implemented)
+
+Scenarios are fully deterministic today: templates and saved definitions in `scenario_service.py` carry `sector_shocks` and `factor_shocks`, and the engine applies them to stored holdings and prices. The planned AI layer keeps that split and never produces portfolio numbers itself.
+
+- **Propose a scenario:** the user describes it in words ("oil up 30%, rupee weaker"). The model returns a structured `ScenarioDefinition` (sector and factor shocks plus a short rationale), validated against the existing schema and the known sector and factor keys. The user reviews and edits the shocks before anything runs, and the shocks are stored and labelled as user-approved assumptions.
+- **Run:** the existing deterministic engine computes impact from stored holdings and prices. The model does not see or alter the results.
+- **Explain:** after the run, the model drafts a short explanation from the computed output only, citing the run and the stored events behind each shock, or stating what is missing.
+- **Gaps to close first:** wire the templates' `fallback_security_shock` for holdings with no sector or factor mapping, and decide whether proposals reuse the Assistant's retrieval contracts or get a dedicated route.
+- **Guardrails:** the user's own LLM key (BYOK), no shock applied without review, and the same "no invented figures" rule as the rest of the product.
+
 ## Run locally
 
 Use Python 3.13+ and Node.js 20.9+. The production images use Python 3.13 and Node.js 22.
